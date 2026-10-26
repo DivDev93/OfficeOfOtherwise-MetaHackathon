@@ -50,8 +50,11 @@ export function outputText(response) {
  */
 export function createMetaClient(opts = {}) {
   const env = opts.env ?? process.env;
-  const apiKey = opts.apiKey ?? env.META_API_KEY ?? env.MODEL_API_KEY;
-  const baseUrl = (opts.baseUrl ?? env.META_API_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+  const apiKey = (opts.apiKey ?? env.META_API_KEY ?? env.MODEL_API_KEY ?? '').trim() || undefined;
+  const baseUrl = ((opts.baseUrl ?? env.META_API_BASE_URL ?? '').trim() || DEFAULT_BASE_URL).replace(/\/$/, '');
+  if (!/^https?:\/\//.test(baseUrl)) {
+    throw new Error('META_API_BASE_URL must be an http(s) URL or left empty (default https://api.meta.ai/v1). Did the API key end up there?');
+  }
   const spendCapUsd = Number(opts.spendCapUsd ?? env.META_SPEND_CAP_USD ?? 100);
   const ledger = opts.ledger ?? memoryLedger();
   const fetchImpl = opts.fetch ?? globalThis.fetch;

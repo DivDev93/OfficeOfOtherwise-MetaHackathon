@@ -96,3 +96,12 @@ test('outputText walks output[] when output_text is absent', () => {
   assert.equal(outputText(RESPONSE_FIXTURE), 'Paris.');
   assert.equal(outputText({ output_text: 'direct' }), 'direct');
 });
+
+test('rejects a non-URL base (e.g. key pasted into META_API_BASE_URL) and trims whitespace', async () => {
+  assert.throws(() => createMetaClient({ env: { META_API_KEY: 'k', META_API_BASE_URL: 'LLM_abc' } }), /META_API_BASE_URL/);
+  const fetch = fakeFetch([{ status: 200, body: RESPONSE_FIXTURE }]);
+  const client = createMetaClient({ env: { META_API_KEY: '  k3 ', META_API_BASE_URL: ' ' }, fetch, sleep: async () => {} });
+  await client.respond({ model: 'muse-spark-1.3', input: 'x' });
+  assert.equal(fetch.calls[0].url, 'https://api.meta.ai/v1/responses');
+  assert.equal(fetch.calls[0].init.headers.Authorization, 'Bearer k3');
+});
