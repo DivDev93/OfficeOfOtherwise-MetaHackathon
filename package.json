@@ -1,17 +1,21 @@
 {
   "name": "office-of-otherwise",
   "version": "0.0.0",
-  "description": "Office of Otherwise — Meta-model-powered alternate-history branching for Chronos. Meta Global AI Developer Hackathon 2026.",
+  "description": "Office of Otherwise \u2014 Meta-model-powered alternate-history branching for Chronos. Meta Global AI Developer Hackathon 2026.",
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=22"
+  },
   "exports": {
     "./providers/*": "./src/providers/*.js",
     "./agents/*": "./src/agents/*.js",
-    "./guardrails/*": "./src/guardrails/*.js"
+    "./guardrails/*": "./src/guardrails/*.js",
+    "./lib/*": "./src/lib/*.js"
   },
   "scripts": {
     "test": "node --test",
-    "harness": "node harness/run.js"
+    "harness": "node --env-file-if-exists=.env harness/run.js",
+    "models": "node --env-file-if-exists=.env scripts/models.js"
   }
 }

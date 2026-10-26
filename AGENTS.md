@@ -8,4 +8,4 @@ This is a **public** repo submitted to the Meta Global AI Developer Hackathon. E
 4. **Meta models do the core work.** Use the Meta Model API (Muse Wonder, Muse Spark, Muse Image, SAM 3.1). Don't add non-Meta models to the core loop.
 5. **Cost.** Every Meta call goes through the shared client, which enforces `META_SPEND_CAP_USD`. Tests use recorded fixtures, never live calls.
 6. **Log the work.** Add a line to `docs/HACKATHON.md` for each meaningful change, so judges can see what was built and when.
-7. Node ≥ 20, ESM, no build step. Tests use `node --test`.
+7. Node ≥ 22, ESM, no build step. Tests use `node --test`.
