@@ -1,0 +1,20 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+dist/
+coverage/
+# credentials — never commit
+*service-account*.json
+*-sa.json
+gcp-*.json
+credentials*.json
+# generated outputs (cached demo assets live in Supabase / GCS, not git)
+out/
+*.glb
+*.ply
+*.splat
+*.mp4
+.DS_Store
+Thumbs.db

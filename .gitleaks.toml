@@ -1,0 +1,24 @@
+title = "office-of-otherwise secret scan"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "gcp-service-account"
+description = "GCP service account key material"
+regex = '''"type"\s*:\s*"service_account"'''
+
+[[rules]]
+id = "cloud-run-url"
+description = "Private Cloud Run service URL (Tattva services must not be published)"
+regex = '''https://[a-z0-9-]+\.a\.run\.app'''
+
+[[rules]]
+id = "tattva-env"
+description = "Tattva / Chronos private infrastructure variables with values"
+regex = '''(TATTVA_[A-Z_]+|GCP_SERVICE_ACCOUNT_JSON|SUPABASE_SERVICE_ROLE_KEY)\s*=\s*\S+'''
+
+[[rules]]
+id = "meta-api-key"
+description = "Meta Model API key with a value"
+regex = '''META_API_KEY\s*=\s*\S+'''
