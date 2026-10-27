@@ -59,13 +59,19 @@ async function parseMasks(text, width, height) {
   return records.map(record => {
     const box = record.bounds;
     const local = decodeMaskToRaster(record.mask);
-    if (box.left < 0 || box.top < 0 || box.right > width || box.bottom > height ||
-        box.right - box.left !== record.mask.width || box.bottom - box.top !== record.mask.height) {
+    if (box.left < 0 || box.top < 0 || box.right > width || box.bottom > height || box.right <= box.left || box.bottom <= box.top) {
       throw new Error('SAM mask bounds do not fit the input image');
     }
     const raster = new Uint8Array(width * height);
-    for (let y = 0; y < record.mask.height; y++) {
-      raster.set(local.subarray(y * record.mask.width, (y + 1) * record.mask.width), (box.top + y) * width + box.left);
+    const boxWidth = box.right - box.left, boxHeight = box.bottom - box.top;
+    // The mask raster may be lower resolution than the source-pixel box.
+    // Map pixel centers with nearest-neighbor sampling to preserve a binary mask.
+    for (let y = 0; y < boxHeight; y++) {
+      const sourceY = Math.min(record.mask.height - 1, Math.floor((y + 0.5) * record.mask.height / boxHeight));
+      for (let x = 0; x < boxWidth; x++) {
+        const sourceX = Math.min(record.mask.width - 1, Math.floor((x + 0.5) * record.mask.width / boxWidth));
+        raster[(box.top + y) * width + box.left + x] = local[sourceY * record.mask.width + sourceX];
+      }
     }
     const boxRecord = boxes.find(item => item.objectId === record.objectId);
     return { objectId: record.objectId, box, confidence: record.confidence ?? boxRecord?.confidence, raster, width, height };

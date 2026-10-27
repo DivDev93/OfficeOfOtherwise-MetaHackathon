@@ -140,14 +140,16 @@ test('offline saved branch runs real metered image and SAM providers through PNG
       if (url.endsWith('/responses')) return { ok: true, json: async () => ({ output_text: samText }) };
       throw new Error('unexpected endpoint');
     } });
-    const result = await runHarness({ from: source, client, image: createMetaImage({ client, env: {} }), sam: createSamMask({ client, env: {} }), policy: { checkPrompt: async () => ({ allowed: true, layer: 'keyword' }) }, outputRoot: dir, timestamp: 7, log() {} });
+    const result = await runHarness({ from: source, subjectOverride: 'book', client, image: createMetaImage({ client, env: {} }), sam: createSamMask({ client, env: {} }), policy: { checkPrompt: async text => { assert.match(text, /book/); return { allowed: true, layer: 'keyword' }; } }, outputRoot: dir, timestamp: 7, log() {} });
     assert.equal(calls.length, 2);
     assert.equal(calls[0].body.model, 'muse-image-1.0');
     assert.equal(calls[1].body.model, 'sam-3.1');
-    assert.equal(calls[1].body.input[0].content[0].text, 'atlas');
+    assert.equal(calls[1].body.input[0].content[0].text, 'book');
     assert.ok(Math.abs(result.costUsd - 0.06) < 1e-9);
     assert.deepEqual([...decodePng(readFileSync(join(dir, '7', 'cutout.png'))).data].filter((_, i) => i % 4 === 3), [0,0,0,0,255,255,0,255,255]);
     const trace = JSON.parse(readFileSync(join(dir, '7', 'trace.json')));
+    assert.equal(trace.subjectOverride, 'book');
+    assert.equal(JSON.parse(readFileSync(join(dir, '7', 'branch.json'))).hero.subject, 'atlas');
     assert.equal(trace.selection.confidence, 0.9);
     assert.equal(trace.selection.area, 4);
   } finally { rmSync(dir, { recursive: true, force: true }); }

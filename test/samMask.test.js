@@ -108,3 +108,15 @@ test('SAM reads nested response output-text content without the SDK helper', asy
   const result = await provider.segment(request);
   assert.equal(result.selectedMask.confidence, 0.9);
 });
+
+test('SAM places a real lower-resolution lossless mask in its source image box', async () => {
+  const live = await readFile(new URL('./fixtures/sam-live-book.txt', import.meta.url), 'utf8');
+  const hero = PNG.sync.write(new PNG({ width: 1600, height: 1600 }));
+  const provider = createSamMask({ client: { async meteredPost() { return { status: 'completed', output_text: live }; } }, env: {} });
+  const { selectedMask } = await provider.segment({ image: hero, mime: 'image/png', prompt: 'book' });
+  assert.deepEqual(selectedMask.box, { left: 91, top: 489, right: 1522, bottom: 1366 });
+  assert.ok(Math.abs(selectedMask.confidence - 0.9139785170555115) < 1e-12);
+  assert.equal(selectedMask.raster.length, 1600 * 1600);
+  assert.equal(selectedMask.raster[0], 0);
+  assert.ok(selectedMask.raster.reduce((sum, value) => sum + value, 0) > 100000);
+});

@@ -10,13 +10,14 @@ import { createSamMask } from '../src/providers/samMask.js';
 import { writeMaskPng, writeCutoutPng, decodePng } from '../src/lib/png.js';
 
 /** Run the chain with a single metered client. Dependencies may be injected for tests. */
-export async function runHarness({ divergence, from, client, agent, image, sam, policy, outputRoot = 'out', timestamp = Date.now(), log = console.log, apiCalls = [] }) {
+export async function runHarness({ divergence, from, subjectOverride, client, agent, image, sam, policy, outputRoot = 'out', timestamp = Date.now(), log = console.log, apiCalls = [] }) {
+  if (subjectOverride !== undefined && (!from || typeof subjectOverride !== 'string' || !subjectOverride.trim())) throw new Error('A nonempty subject override requires a saved branch');
   const startedSpent = client.spent();
   const directory = join(outputRoot, String(timestamp));
   mkdirSync(directory, { recursive: true });
   const trace = [];
   let selection = null;
-  const persistTrace = () => writeFileSync(join(directory, 'trace.json'), JSON.stringify({ source: from ? resolve(from) : null, steps: trace, selection, costUsd: client.spent() - startedSpent }, null, 2));
+  const persistTrace = () => writeFileSync(join(directory, 'trace.json'), JSON.stringify({ source: from ? resolve(from) : null, subjectOverride: subjectOverride?.trim() ?? null, steps: trace, selection, costUsd: client.spent() - startedSpent }, null, 2));
   let branch;
   try {
     branch = from ? JSON.parse(readFileSync(from, 'utf8')) : await agent.run({ divergence, count: 3 });
@@ -42,7 +43,7 @@ export async function runHarness({ divergence, from, client, agent, image, sam, 
   if (!branch.hero?.imagePrompt || !branch.hero?.subject) throw new Error('Branch hero requires an image prompt and subject');
   if (from) {
     if (!policy?.checkPrompt) throw new Error('Saved branches require a topic policy check');
-    const text = [branch.divergence ?? '', ...(branch.branches ?? []).flatMap(b => [b.title ?? '', b.summary ?? '', b.scene ?? '']), branch.hero.imagePrompt, branch.hero.subject].join('\n');
+    const text = [branch.divergence ?? '', ...(branch.branches ?? []).flatMap(b => [b.title ?? '', b.summary ?? '', b.scene ?? '']), branch.hero.imagePrompt, branch.hero.subject, subjectOverride ?? ''].join('\n');
     const callStart = apiCalls.length, start = performance.now(), before = client.spent();
     let gate;
     try { gate = await policy.checkPrompt(text); }
@@ -82,7 +83,7 @@ export async function runHarness({ divergence, from, client, agent, image, sam, 
   start = performance.now();
   before = client.spent();
   try {
-    segmented = await sam.segment({ image: generated.buffer, mime: generated.mime, prompt: branch.hero.subject });
+    segmented = await sam.segment({ image: generated.buffer, mime: generated.mime, prompt: subjectOverride?.trim() ?? branch.hero.subject });
   } catch (error) {
     appendSam(error);
     if (!error.trace?.length) trace.push({ step: 'segment', model: process.env.META_SEGMENT_MODEL ?? 'sam-3.1', ms: Math.round(performance.now() - start), costUsd: client.spent() - before, error: error.message });
@@ -103,7 +104,7 @@ export async function runHarness({ divergence, from, client, agent, image, sam, 
   persistTrace();
   writeFileSync(join(directory, 'mask.png'), writeMaskPng(mask.raster, mask.width, mask.height));
   writeFileSync(join(directory, 'cutout.png'), writeCutoutPng(rgba, hero.width, hero.height));
-  log(`hero subject: ${branch.hero.subject}`);
+  log(`hero subject: ${subjectOverride?.trim() ?? branch.hero.subject}`);
   log(`selected mask: confidence ${mask.confidence ?? 'unknown'}, area ${area} pixels`);
   for (const t of trace) log(`${t.step}: ${t.model ?? 'unknown'} ${t.ms ?? 0}ms $${(t.costUsd == null ? 'unknown' : Number(t.costUsd).toFixed(5))}${t.reused ? ' (reused)' : ''}`);
   const costUsd = client.spent() - startedSpent;
@@ -113,10 +114,11 @@ export async function runHarness({ divergence, from, client, agent, image, sam, 
 
 async function main() {
   const args = process.argv.slice(2);
-  let from, divergence;
+  let from, divergence, subjectOverride;
   if (args[0] === '--from') {
-    if (args.length !== 2) throw new Error('Usage: npm run harness -- --from <branch.json>');
+    if (args.length !== 2 && !(args.length === 4 && args[2] === '--subject')) throw new Error('Usage: npm run harness -- --from <branch.json> [--subject <noun phrase>]');
     from = args[1];
+    if (args.length === 4) subjectOverride = args[3];
   } else divergence = args.join(' ') || 'What if the Library of Alexandria never burned?';
   const client = createMetaClient({ ledger: fileLedger() });
   const model = process.env.META_TEXT_MODEL_PLANNER || 'muse-wonder-1.0';
@@ -135,7 +137,7 @@ async function main() {
   } };
   const policy = createTopicPolicy({ categories, classify: createModelClassifier(agentClient, { model, categories }) });
   const agent = createBranchAgent({ client: agentClient, policy, model });
-  await runHarness({ divergence, from, client, agent, image: createMetaImage({ client }), sam: createSamMask({ client }), policy, apiCalls });
+  await runHarness({ divergence, from, subjectOverride, client, agent, image: createMetaImage({ client }), sam: createSamMask({ client }), policy, apiCalls });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

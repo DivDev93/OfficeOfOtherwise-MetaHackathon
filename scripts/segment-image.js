@@ -15,7 +15,9 @@ export async function runSegmentImage({ imagePath, prompt, client, outRoot = 'ou
   const source = resolve(imagePath);
   const image = readFileSync(source);
   const decoded = decodePng(image);
-  const metered = client ?? createMetaClient({ env, ledger: fileLedger(join(outRoot, 'spend.json')) });
+  // Disable transport retries as well as provider fallback: this diagnostic is
+  // explicitly limited to one request, even when the server returns a 5xx.
+  const metered = client ?? createMetaClient({ env, ledger: fileLedger(join(outRoot, 'spend.json')), maxRetries: 0 });
   // Enforce the one-attempt limit independently of provider fallback behavior.
   let attempts = 0;
   const singleAttempt = { meteredPost(...args) {

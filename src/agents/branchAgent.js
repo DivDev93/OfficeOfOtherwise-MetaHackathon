@@ -26,7 +26,8 @@ const REVIEW_INSTRUCTIONS = `You review alternate-history branches for plausibil
 Score each branch 0-10 (10 = follows tightly and believably from the divergence, internally consistent, visually compelling).
 Pick the single best branch as the hero to render as an image and then a 3D object.
 For the hero, write an image prompt for a photorealistic scene with ONE clear central subject (an object, building, vehicle
-or machine that can be cut out and turned into a 3D model), and name that subject in a few words.
+or machine that can be cut out and turned into a 3D model). Name that subject using a common, concrete visible object noun
+that a segmentation model can recognize (for example, "book" rather than "anatomical atlas on a lectern").
 Reply with ONLY a JSON object, no prose:
 {"scores":[{"id":"b1","score":<0-10>,"note":"<under 15 words>"}],
  "hero":{"id":"<branch id>","imagePrompt":"<one paragraph>","subject":"<few words, e.g. 'brass steam orrery'>"}}`;

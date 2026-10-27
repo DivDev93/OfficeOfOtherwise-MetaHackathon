@@ -6,7 +6,7 @@ Office of Otherwise is the Meta-powered branching layer for [Chronos](#relations
 
 Built for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026). Startups track.
 
-> Status: local branch → image → subject cutout harness, validated with fixtures. The latest live check generated a hero image, but both SAM calls produced empty extracted output; live mask/cutout validation remains incomplete. See [Built during the hackathon](#built-during-the-hackathon).
+> Status: local branch → image → subject cutout harness, validated with fixtures and live fresh-agent and saved-branch runs. Segmentation quality depends on the image and subject prompt. See [Built during the hackathon](#built-during-the-hackathon).
 
 ## How it works
 
@@ -30,9 +30,11 @@ npm test
 npm run harness -- "What if the Library of Alexandria never burned?"
 # Reuse a saved branch run without paying for the agent again:
 npm run harness -- --from out/branch-<timestamp>.json
+# If the subject is not found, retry a saved branch using a concrete noun:
+npm run harness -- --from out/branch-<timestamp>.json --subject book
 ```
 
-The harness uses one metered Meta client and writes `branch.json`, `hero.png`, `mask.png`, `cutout.png`, and `trace.json` to `out/<timestamp>/`. It prints each step's timing and cost, and the selected mask's confidence. Saved branch traces remain available as provenance but are excluded from the new run's cost. Reused content gets one fresh policy check before generation, billed separately. Blocked or empty branches stop before image generation.
+The harness uses one metered Meta client and writes `branch.json`, `hero.png`, `mask.png`, `cutout.png`, and `trace.json` to `out/<timestamp>/`. It prints each step's timing and cost, and the selected mask's confidence. Saved branch traces remain available as provenance but are excluded from the new run's cost. An optional subject override is recorded in the trace and does not alter the saved branch. Reused content and any override get one fresh policy check before generation, billed separately. Blocked or empty branches stop before image generation.
 
 Muse Image defaults to $0.01 per image. SAM defaults to a conservative estimated $0.05 per call; Meta now lists $2.50 per 1,000 images on its [SAM model page](https://dev.meta.ai/models/sam-3-1). The ledger records the configured estimate, not an invoice. An empty segmentation gets at most one retry with the subject's head noun. All calls use the persistent spend ledger and respect `META_SPEND_CAP_USD`; tests use fixtures and do not call Meta.
 
