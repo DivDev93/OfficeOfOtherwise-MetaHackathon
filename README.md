@@ -27,16 +27,20 @@ Divergence points are drawn from science, technology, culture and geography. War
 npm ci --ignore-scripts  # Node >=22.9.0 (CI uses Node 22)
 cp .env.example .env   # add META_API_KEY
 npm test
-npm run harness -- "What if the Library of Alexandria never burned?"
+npm run init-demo-budget  # once, before the first live task call
+npm run harness -- "What if the Library of Alexandria never burned?" --no-3d
 # Reuse a saved branch run without paying for the agent again:
-npm run harness -- --from out/branch-<timestamp>.json
+npm run harness -- --from out/branch-<timestamp>.json --no-3d
 # If the subject is not found, retry a saved branch using a concrete noun:
-npm run harness -- --from out/branch-<timestamp>.json --subject book
+npm run harness -- --from out/branch-<timestamp>.json --subject book --no-3d
+npm run demo           # local replay, http://localhost:3000
 ```
 
 The harness uses one metered Meta client and writes `branch.json`, `hero.png`, `mask.png`, `cutout.png`, and `trace.json` to `out/<timestamp>/`. It prints each step's timing and cost, and the selected mask's confidence. Saved branch traces remain available as provenance but are excluded from the new run's cost. An optional subject override is recorded in the trace and does not alter the saved branch. Reused content and any override get one fresh policy check before generation, billed separately. Blocked or empty branches stop before image generation.
 
-Muse Image defaults to $0.01 per image. SAM defaults to a conservative estimated $0.05 per call; Meta now lists $2.50 per 1,000 images on its [SAM model page](https://dev.meta.ai/models/sam-3-1). The ledger records the configured estimate, not an invoice. An empty segmentation gets at most one retry with the subject's head noun. All calls use the persistent spend ledger and respect `META_SPEND_CAP_USD`; tests use fixtures and do not call Meta.
+The harness defaults to a 3D handoff and fails before Meta calls if verified Chronos configuration is unavailable; use `--no-3d` for local 2D-only runs. The demo server defaults to replay; it requires a configured access code, budget checkpoint and verified Chronos TRELLIS configuration for live generation. The included Alexandria replay is a clearly labeled 2D preview; its 3D model has not been generated. The guardrail replay is a labeled simulation of an unavailable classifier, not a recorded model verdict. See [deployment notes](docs/DEPLOY.md).
+
+Muse Image defaults to $0.01 per image. SAM defaults to a conservative estimated $0.05 per call; Meta now lists $2.50 per 1,000 images on its [SAM model page](https://dev.meta.ai/models/sam-3-1). The ledger records the configured estimate, not an invoice. Token estimates use Meta's published Wonder and Spark rates, but cannot guarantee that provider charges never exceed a reservation. An empty segmentation gets at most one retry with the subject's head noun. All calls use the persistent spend ledger and respect `META_SPEND_CAP_USD`; tests use fixtures and do not call Meta.
 
 PNG encoding uses Node's built-in zlib; decoding uses MIT-licensed `pngjs`. SAM output decoding uses the unmodified `@meta-sam/parser` npm dependency under Meta's separate **SAM License**, including its use and redistribution restrictions. It is not covered by this repository's MIT license. See [third-party notices](THIRD_PARTY_NOTICES.md).
 

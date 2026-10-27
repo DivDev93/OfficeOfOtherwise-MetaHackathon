@@ -1,0 +1,106 @@
+{
+  "steps": [
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 7247,
+      "costUsd": 0.00171725
+    },
+    {
+      "step": "branch-agent:propose",
+      "model": "muse-wonder-1.0",
+      "ms": 24199,
+      "costUsd": 0.0151625
+    },
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 3766,
+      "costUsd": 0.002559
+    },
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 4789,
+      "costUsd": 0.0023474
+    },
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 4919,
+      "costUsd": 0.0022964
+    },
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 5037,
+      "costUsd": 0.0016704
+    },
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 6372,
+      "costUsd": 0.0037184
+    },
+    {
+      "step": "branch-agent:review",
+      "model": "muse-wonder-1.0",
+      "ms": 28384,
+      "costUsd": 0.0192955
+    },
+    {
+      "step": "policy:prompt",
+      "model": "muse-wonder-1.0",
+      "ms": 7248,
+      "costUsd": 0,
+      "summary": true,
+      "allowed": true
+    },
+    {
+      "step": "propose",
+      "model": "muse-wonder-1.0",
+      "ms": 24199,
+      "costUsd": 0,
+      "originalCostUsd": 0.0151625,
+      "summary": true,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "policy:branches",
+      "model": "muse-wonder-1.0",
+      "ms": 6375,
+      "costUsd": 0,
+      "summary": true
+    },
+    {
+      "step": "review",
+      "model": "muse-wonder-1.0",
+      "ms": 28385,
+      "costUsd": 0,
+      "originalCostUsd": 0.0192955,
+      "summary": true,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "image",
+      "model": "muse-image-1.0",
+      "ms": 10400,
+      "costUsd": 0.01
+    },
+    {
+      "step": "segment",
+      "model": "sam-3.1",
+      "ms": 6012,
+      "costUsd": 0.05,
+      "prompt": "brass orrery"
+    }
+  ],
+  "selection": {
+    "confidence": 0.5631399154663086,
+    "area": 303143,
+    "prompt": "brass orrery"
+  },
+  "costUsd": 0.10876685000000003
+}

@@ -1,0 +1,83 @@
+{
+  "status": "ok",
+  "divergence": "What if the Library of Alexandria never burned?",
+  "branches": [
+    {
+      "id": "b1",
+      "title": "Heliocentric Astronomy Taught Early",
+      "year": 350,
+      "place": {
+        "name": "Alexandria, Egypt",
+        "lat": 31.2001,
+        "lon": 29.9187
+      },
+      "summary": "Preserved writings of Aristarchus let astronomers teach a Sun-centered system with supporting observations. Continuous copying and debate in the Library turned a fringe idea into standard teaching for navigators.",
+      "scene": "Students watch a brass Sun-centered orrery cast moving planetary shadows across the Library courtyard.",
+      "score": 8,
+      "reviewNote": "Direct Aristarchus preservation; acceptance overstated but Antikythera-style orrery mechanically credible."
+    },
+    {
+      "id": "b5",
+      "title": "Calculus Emerges From Archimedes",
+      "year": 950,
+      "place": {
+        "name": "Samarkand, Uzbekistan",
+        "lat": 39.6542,
+        "lon": 66.9597
+      },
+      "summary": "Complete copies of Archimedes' method of exhaustion survived, giving mathematicians tools for infinitesimals. Scholars in Samarkand built on them to develop early calculus for astronomy and architecture.",
+      "scene": "Mathematicians draw ever-finer polygons inside a circle on a sunlit observatory wall covered in chalk.",
+      "score": 7,
+      "reviewNote": "Archimedean exhaustion to Islamic proto-calculus plausible; full calculus needs algebra notation."
+    },
+    {
+      "id": "b2",
+      "title": "Anatomy Advances Circulation Knowledge",
+      "year": 1050,
+      "place": {
+        "name": "Salerno, Italy",
+        "lat": 40.6824,
+        "lon": 14.7681
+      },
+      "summary": "Surviving anatomical treatises from Herophilus and Erasistratus gave Salerno physicians detailed maps of nerves and blood vessels. Their translations spurred careful dissections and pulse studies centuries ahead of schedule.",
+      "scene": "A physician demonstrates blood flow using a glass model while students sketch its branching vessels.",
+      "score": 6,
+      "reviewNote": "Alexandrian anatomy reaching Salerno plausible; glass model and circulation leap anachronistic."
+    }
+  ],
+  "hero": {
+    "branchId": "b1",
+    "imagePrompt": "Photorealistic scene in the sunlit courtyard of the ancient Library of Alexandria, centered on one large brass orrery on a stone pedestal, with a polished golden sphere for the Sun at its center and small planets on rotating brass arms above detailed gears, casting crisp planetary shadows across pale stone paving, marble columns and scroll-lined walls softly blurred in the background, warm Mediterranean daylight, sharp focus on the orrery, no people.",
+    "subject": "brass orrery"
+  },
+  "trace": [
+    {
+      "step": "policy:prompt",
+      "model": "muse-wonder-1.0",
+      "ms": 7248,
+      "allowed": true
+    },
+    {
+      "step": "propose",
+      "model": "muse-wonder-1.0",
+      "ms": 24199,
+      "costUsd": 0.0151625,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "policy:branches",
+      "model": "muse-wonder-1.0",
+      "ms": 6375
+    },
+    {
+      "step": "review",
+      "model": "muse-wonder-1.0",
+      "ms": 28385,
+      "costUsd": 0.0192955,
+      "attempt": 1,
+      "ok": true
+    }
+  ],
+  "costUsd": 0.04876685000000003
+}

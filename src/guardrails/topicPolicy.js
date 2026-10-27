@@ -19,7 +19,7 @@ const REFRAME = {
   war: 'This app explores science, technology, culture and geography rather than conflict. Try a divergence like "What if the Library of Alexandria never burned?" or "What if the Bering land bridge never flooded?"',
   politics: 'This app explores science, technology, culture and geography rather than politics. Try "What if the printing press had been invented in 800 CE?" or "What if the Sahara had stayed green?"',
   other: 'Try a divergence from science, technology, culture or geography, like "What if the Tunguska event had hit a city?"',
-  unverifiable: 'That prompt could not be verified against the topic policy, so it was not run. Try rephrasing around science, technology, culture or geography.',
+  unverifiable: 'That prompt could not be verified against the topic policy, so it was not run. Try "What if the Library of Alexandria never burned?"',
 };
 
 export function reframeFor(category) {

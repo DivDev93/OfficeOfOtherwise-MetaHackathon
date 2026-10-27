@@ -1,0 +1,11 @@
+{
+  "status": "blocked",
+  "divergence": "What if an ancient library survived?",
+  "branches": [],
+  "rejected": [],
+  "hero": null,
+  "reason": "classifier returned no usable verdict",
+  "reframe": "That prompt could not be verified against the topic policy, so it was not run. Try \"What if the Library of Alexandria never burned?\"",
+  "trace": [],
+  "costUsd": 0
+}
