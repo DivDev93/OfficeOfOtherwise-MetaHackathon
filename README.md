@@ -34,7 +34,7 @@ npm run harness -- --from out/branch-<timestamp>.json
 
 The harness uses one metered Meta client and writes `branch.json`, `hero.png`, `mask.png`, `cutout.png`, and `trace.json` to `out/<timestamp>/`. It prints each step's timing and cost, and the selected mask's confidence. Saved branch traces remain available as provenance but are excluded from the new run's cost. Reused content gets one fresh policy check before generation, billed separately. Blocked or empty branches stop before image generation.
 
-Muse Image defaults to $0.01 per image. SAM defaults to an estimated $0.05 per call because its image price is unpublished. An empty segmentation gets at most one retry with the subject's head noun. All calls use the persistent spend ledger and respect `META_SPEND_CAP_USD`; tests use fixtures and do not call Meta.
+Muse Image defaults to $0.01 per image. SAM defaults to a conservative estimated $0.05 per call; Meta now lists $2.50 per 1,000 images on its [SAM model page](https://dev.meta.ai/models/sam-3-1). The ledger records the configured estimate, not an invoice. An empty segmentation gets at most one retry with the subject's head noun. All calls use the persistent spend ledger and respect `META_SPEND_CAP_USD`; tests use fixtures and do not call Meta.
 
 PNG encoding uses Node's built-in zlib; decoding uses MIT-licensed `pngjs`. SAM output decoding uses the unmodified `@meta-sam/parser` npm dependency under Meta's separate **SAM License**, including its use and redistribution restrictions. It is not covered by this repository's MIT license. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
