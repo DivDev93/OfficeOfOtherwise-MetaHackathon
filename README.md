@@ -6,7 +6,7 @@ Office of Otherwise is the Meta-powered branching layer for [Chronos](#relations
 
 Built for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026). Startups track.
 
-> Status: scaffold. Functional code starts after kickoff (2026-10-26 12:00 PM ET). See [Built during the hackathon](#built-during-the-hackathon).
+> Status: local branch → image → subject cutout harness, validated with fixtures. The first live check exposed a large-image decoding bug (fixed); live mask/cutout validation is pending a further authorized run. See [Built during the hackathon](#built-during-the-hackathon).
 
 ## How it works
 
@@ -24,12 +24,19 @@ Divergence points are drawn from science, technology, culture and geography. War
 ## Run it
 
 ```bash
+npm ci --ignore-scripts  # Node >=22.9.0 (CI uses Node 22)
 cp .env.example .env   # add META_API_KEY
 npm test
 npm run harness -- "What if the Library of Alexandria never burned?"
+# Reuse a saved branch run without paying for the agent again:
+npm run harness -- --from out/branch-<timestamp>.json
 ```
 
-The harness runs the full Meta chain with no Chronos dependency and writes branches, images and masks to `out/`.
+The harness uses one metered Meta client and writes `branch.json`, `hero.png`, `mask.png`, `cutout.png`, and `trace.json` to `out/<timestamp>/`. It prints each step's timing and cost, and the selected mask's confidence. Saved branch traces remain available as provenance but are excluded from the new run's cost. Reused content gets one fresh policy check before generation, billed separately. Blocked or empty branches stop before image generation.
+
+Muse Image defaults to $0.01 per image. SAM defaults to an estimated $0.05 per call because its image price is unpublished. An empty segmentation gets at most one retry with the subject's head noun. All calls use the persistent spend ledger and respect `META_SPEND_CAP_USD`; tests use fixtures and do not call Meta.
+
+PNG encoding uses Node's built-in zlib; decoding uses MIT-licensed `pngjs`. SAM output decoding uses the unmodified `@meta-sam/parser` npm dependency under Meta's separate **SAM License**, including its use and redistribution restrictions. It is not covered by this repository's MIT license. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
 ## Relationship to Chronos
 
@@ -41,4 +48,4 @@ Everything in this repository was written during the event window (first functio
 
 ## License
 
-MIT
+Application code: MIT. Dependencies retain their own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).
