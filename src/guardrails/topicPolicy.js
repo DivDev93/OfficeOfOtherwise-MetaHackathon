@@ -57,15 +57,19 @@ export function parseVerdict(text) {
 }
 
 /** Layer 2 classifier backed by a Meta model through the shared (metered) client. */
-export function createModelClassifier(client, { model = 'muse-wonder-1.0', maxOutputTokens = 600 } = {}) {
+// Muse Wonder reasons before answering and reasoning tokens count against max_output_tokens.
+// 600 was not enough (smoke test 2026-10-27: verdict truncated), so the budget is generous;
+// worst case is still under a cent per check.
+export function createModelClassifier(client, { model = 'muse-wonder-1.0', maxOutputTokens = 2500, onResponse } = {}) {
   return async function classify(text) {
-    const { text: out } = await client.respond({
+    const { text: out, response } = await client.respond({
       model,
       instructions: CLASSIFIER_INSTRUCTIONS,
       input: `<text>${text}</text>`,
       maxOutputTokens,
       label: 'topic-policy',
     });
+    onResponse?.(response, out);
     return parseVerdict(out);
   };
 }

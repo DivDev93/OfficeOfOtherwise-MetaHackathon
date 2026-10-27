@@ -20,12 +20,19 @@ console.log('output item types:', (r.response.output ?? []).map(o => o.type).joi
 console.log('usage:', JSON.stringify(r.usage));
 console.log(`cost: $${r.costUsd.toFixed(6)} (priced at the Muse Spark rate, so Wonder's real price may differ)`);
 
-const policy = createTopicPolicy({ classify: createModelClassifier(client, { model }) });
+let last;
+const policy = createTopicPolicy({ classify: createModelClassifier(client, { model, onResponse: (resp, text) => { last = { resp, text }; } }) });
 for (const prompt of [
   'What if the Library of Alexandria never burned?',   // expect allow
   'What if the empire had never stopped expanding east?', // subtle: expect block
 ]) {
+  last = null;
   const v = await policy.checkPrompt(prompt);
   console.log(`\n"${prompt}"\n  -> ${v.allowed ? 'ALLOW' : 'BLOCK'} (${v.layer}${v.category ? `, ${v.category}` : ''}${v.reason ? `: ${v.reason}` : ''})`);
+  if (last) {
+    const u = last.resp.usage ?? {};
+    console.log(`     status=${last.resp.status}${last.resp.incomplete_details ? ` incomplete=${JSON.stringify(last.resp.incomplete_details)}` : ''} output_tokens=${u.output_tokens} (reasoning ${u.output_tokens_details?.reasoning_tokens})`);
+    console.log(`     raw text: ${JSON.stringify(last.text).slice(0, 200)}`);
+  }
 }
 console.log(`\ntotal spent so far: $${client.spent().toFixed(6)} of $${client.spendCapUsd} cap`);
