@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { PNG } from 'pngjs';
 import { runSegmentImage } from '../scripts/segment-image.js';
 
@@ -53,4 +55,16 @@ test('no match and paid parse errors retain diagnostics and make only one attemp
   await assert.rejects(runSegmentImage({ imagePath: hero, prompt: 'war', client, outRoot: root }), /blocked/);
   await assert.rejects(runSegmentImage({ imagePath: hero, prompt: 'red book', client, outRoot: root }), /one alphabetic word/);
   assert.equal(calls, 2);
+});
+
+test('standalone segment diagnostic requires the task checkpoint', t => {
+  const root = mkdtempSync(join(tmpdir(), 'sam-budget-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const hero = join(root, 'hero.png');
+  writeFileSync(hero, PNG.sync.write(new PNG({ width: 2, height: 2 })));
+  const script = fileURLToPath(new URL('../scripts/segment-image.js', import.meta.url));
+  const result = spawnSync(process.execPath, [script, hero, 'book'], { cwd: root, env: { ...process.env, META_API_KEY: 'fixture-sentinel' }, encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /checkpoint/i);
+  assert.doesNotMatch(result.stderr, /fixture-sentinel/);
 });

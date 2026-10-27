@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -90,18 +90,33 @@ test('forged saved hero is blocked by topic policy before generation', async () 
 test('CLI reports missing credentials and preserves failure trace', () => {
   const dir = temp();
   try {
+    mkdirSync(join(dir, 'out'));
+    writeFileSync(join(dir, 'out', 'spend.json'), JSON.stringify({ totalUsd: 0, entries: [], reservations: {} }));
+    writeFileSync(join(dir, 'out', 'demo-task-budget.json'), JSON.stringify({ startingMetaSpendUsd: 0, taskBudgetUsd: 2 }));
     const env = { ...process.env };
     delete env.META_API_KEY;
     delete env.MODEL_API_KEY;
     const script = fileURLToPath(new URL('../harness/run.js', import.meta.url));
-    const result = spawnSync(process.execPath, [script, 'What if an ancient library survived?'], { cwd: dir, env, encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [script, '--no-3d', 'What if an ancient library survived?'], { cwd: dir, env, encoding: 'utf8' });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /META_API_KEY is not set/);
     assert.doesNotMatch(result.stderr, /ReferenceError|before is not defined/);
-    const output = join(dir, 'out', readdirSync(join(dir, 'out'))[0], 'trace.json');
+    const run = readdirSync(join(dir, 'out'), { withFileTypes: true }).find(entry => entry.isDirectory()).name;
+    const output = join(dir, 'out', run, 'trace.json');
     const trace = JSON.parse(readFileSync(output));
     assert.match(trace.steps.find(t => t.step === 'topic-policy').error, /META_API_KEY is not set/);
     assert.equal(trace.costUsd, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('CLI fails before any live work without the task budget checkpoint', () => {
+  const dir = temp();
+  try {
+    const script = fileURLToPath(new URL('../harness/run.js', import.meta.url));
+    const result = spawnSync(process.execPath, [script, '--no-3d', 'What if a library survived?'], { cwd: dir, env: { ...process.env, META_API_KEY: 'sentinel' }, encoding: 'utf8' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /budget checkpoint/i);
+    assert.doesNotMatch(result.stderr, /sentinel/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -153,4 +168,67 @@ test('offline saved branch runs real metered image and SAM providers through PNG
     assert.equal(trace.selection.confidence, 0.9);
     assert.equal(trace.selection.area, 4);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('3D receives original image and mask, persists model and streams ordered events', async () => {
+  const dir = temp();
+  try {
+    const png = writeCutoutPng(Uint8Array.from([3,4,5,255,6,7,8,255]),2,1);
+    const hero = { branchId:'b1', imagePrompt:'an atlas', subject:'atlas' };
+    const mask = { raster:Uint8Array.from([1,0]), width:2, height:1, confidence:.9 };
+    let seen; const events = [];
+    const args = { timestamp: 'abc', outputRoot:dir, log(){}, client:{spent:()=>0}, no3d:false,
+      agent:{run:async ({onStep})=>{ for (const step of ['policy','propose','review']) onStep({step}); return {status:'ok',hero,trace:[]}; }},
+      image:{generate:async()=>({buffer:png,mime:'image/png',costUsd:.01})},
+      sam:{segment:async()=>({selectedMask:mask,masks:[mask],trace:[{ms:2,costUsd:.05}]})},
+      chronos3d:{generate:async input=>{seen=input;return {glb:Buffer.from('fixture glb'),ms:42};}}, onStep:e=>events.push(e) };
+    await runHarness(args);
+    assert.deepEqual(events.map(e=>e.step), ['policy','propose','review','image','cutout','3d']);
+    assert.ok(events.every(e=>e.runId==='abc'));
+    assert.equal(events.at(-1).url, '/runs/abc/model.glb');
+    assert.deepEqual(seen.imagePng,png);
+    assert.deepEqual(seen.maskPng,readFileSync(join(dir,'abc','mask.png')));
+    assert.match(seen.idempotencyKey,/^relic:[a-f0-9]{64}$/);
+    const key=seen.idempotencyKey; await runHarness(args); assert.equal(seen.idempotencyKey,key);
+    assert.equal(readFileSync(join(dir,'abc','model.glb'),'utf8'),'fixture glb');
+    assert.deepEqual(JSON.parse(readFileSync(join(dir,'abc','trace.json'))).steps.at(-1),{step:'3d',model:'Tattva TRELLIS',ms:42,costUsd:0});
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('3D is opt-in for injected harness calls and missing client fails before agent', async () => {
+  let called=false;
+  await assert.rejects(runHarness({client:{spent:()=>0},agent:{run(){called=true;}},no3d:false}), /Chronos 3D client is required/);
+  assert.equal(called,false);
+});
+
+test('CLI refuses unconfirmed 3D before Meta work', () => {
+  const dir=temp();
+  try { const env={...process.env,CHRONOS_3D_CAPABILITY_CONFIRMED:'false'}; const script=fileURLToPath(new URL('../harness/run.js',import.meta.url));
+    const result=spawnSync(process.execPath,[script,'What if a library survived?'],{cwd:dir,env,encoding:'utf8'});
+    assert.equal(result.status,1); assert.match(result.stderr,/capability must be confirmed/); assert.deepEqual(readdirSync(join(dir,'out')),[]);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+test('disconnect after proposal waits for review and prevents image and 3D work', async () => {
+  const dir=temp();
+  try {
+    const {createBranchAgent}=await import('../src/agents/branchAgent.js');
+    const controller=new AbortController(), branch={id:'b1',title:'Observatory',year:500,place:{name:'Alexandria',lat:31,lon:29},summary:'Astronomers study the sky.',scene:'An orrery.'};
+    let release, reviewSettled=false, idle=false, imageCalls=0, jobs=0;
+    const client={spent:()=>0,waitForIdle:async()=>{idle=true;},respond:async ({label})=>{
+      if(label.endsWith(':review')) {await new Promise(resolve=>{release=resolve;});reviewSettled=true;return {text:JSON.stringify({scores:[{id:'b1',score:9}],hero:{id:'b1',imagePrompt:'An orrery',subject:'orrery'}}),costUsd:0};}
+      return {text:JSON.stringify([branch]),costUsd:0};
+    }};
+    const policy={checkPrompt:async()=>({allowed:true,layer:'keyword'}),checkBranches:async()=>({kept:[branch],rejected:[]})};
+    const agent=createBranchAgent({client,policy});
+    let finished=false;
+    const pending=runHarness({divergence:'What if an ancient library survived?',agent,client,signal:controller.signal,outputRoot:dir,timestamp:9,log(){},no3d:false,
+      image:{generate(){imageCalls++;}},sam:{segment(){throw new Error('unexpected SAM');}},chronos3d:{generate(){jobs++;}},
+      onStep:event=>{if(event.step==='propose') controller.abort();}}).finally(()=>{finished=true;});
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(finished,false); assert.equal(reviewSettled,false);
+    release(); await assert.rejects(pending,/Run aborted/);
+    assert.equal(reviewSettled,true);assert.equal(idle,true);assert.equal(imageCalls,0);assert.equal(jobs,0);
+    assert.match(JSON.parse(readFileSync(join(dir,'9','trace.json'))).steps.at(-1).error,/aborted/);
+  } finally {rmSync(dir,{recursive:true,force:true});}
 });

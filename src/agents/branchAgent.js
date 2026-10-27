@@ -33,6 +33,7 @@ Reply with ONLY a JSON object, no prose:
  "hero":{"id":"<branch id>","imagePrompt":"<one paragraph>","subject":"<few words, e.g. 'brass steam orrery'>"}}`;
 
 function now() { return Number(process.hrtime.bigint() / 1000000n); }
+function throwIfAborted(signal) { if (signal?.aborted) throw new Error('Run aborted'); }
 
 function validBranch(b) {
   return b && typeof b.id === 'string' && typeof b.title === 'string' && Number.isFinite(b.year)
@@ -48,10 +49,11 @@ function validBranch(b) {
  * @param {string} [deps.model]  planner model (Muse Wonder)
  */
 export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' }) {
-  async function step(trace, name, args) {
+  async function step(trace, name, args, signal) {
     const t0 = now();
     // one retry when the model's JSON doesn't parse
     for (let attempt = 1; attempt <= 2; attempt++) {
+      throwIfAborted(signal);
       const r = await client.respond({ model, label: `branch-agent:${name}`, ...args });
       const json = extractJson(r.text);
       trace.push({ step: name, model, attempt, ms: now() - t0, costUsd: r.costUsd, outputTokens: r.usage?.output_tokens, ok: json !== undefined });
@@ -64,23 +66,27 @@ export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' })
    * @param {{ divergence: string, count?: number }} input
    * @returns {Promise<{ status:'ok'|'blocked'|'empty', divergence, branches, rejected, hero, reframe?, trace, costUsd }>}
    */
-  async function run({ divergence, count = 3 }) {
+  async function run({ divergence, count = 3, onStep, signal }) {
     const trace = [];
     const startSpent = client.spent();
     const done = extra => ({ divergence, branches: [], rejected: [], hero: null, ...extra, trace, costUsd: client.spent() - startSpent });
 
     // 1. policy on the prompt
     const t0 = now();
+    const policyStartSpent = client.spent();
     const gate = await policy.checkPrompt(divergence);
     trace.push({ step: 'policy:prompt', model: gate.layer === 'model' ? model : 'keyword', ms: now() - t0, allowed: gate.allowed });
+    onStep?.({ step: 'policy', allowed: gate.allowed, reason: gate.reason ?? gate.matched, reframe: gate.reframe, model: trace.at(-1).model, ms: trace.at(-1).ms, costUsd: client.spent() - policyStartSpent });
     if (!gate.allowed) return done({ status: 'blocked', reframe: gate.reframe, reason: gate.reason ?? gate.matched, category: gate.category });
+    throwIfAborted(signal);
 
     // 2. propose (over-generate so policy + review have room to drop some)
     const proposed = await step(trace, 'propose', {
       instructions: PROPOSE_INSTRUCTIONS,
       input: `Point of divergence: ${divergence}\nPropose ${count + 2} branches.`,
       maxOutputTokens: 6000,
-    });
+    }, signal);
+    throwIfAborted(signal);
     const candidates = (Array.isArray(proposed) ? proposed : proposed?.branches ?? []).filter(validBranch);
 
     // 3 + 4 in parallel: the per-branch policy check and the review are independent,
@@ -90,17 +96,19 @@ export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' })
     const t1 = now();
     const policyRun = policy.checkBranches(candidates).then(r => {
       trace.push({ step: 'policy:branches', model, ms: now() - t1, kept: r.kept.length, rejected: r.rejected.length });
+      onStep?.({ step: 'propose', branches: r.kept, model, ms: trace.findLast(t => t.step === 'propose')?.ms, costUsd: trace.filter(t => t.step === 'propose').reduce((n, t) => n + (t.costUsd ?? 0), 0) });
       return r;
     });
     const reviewRun = step(trace, 'review', {
       instructions: REVIEW_INSTRUCTIONS,
       input: `Point of divergence: ${divergence}\nBranches:\n${JSON.stringify(candidates, null, 1)}`,
       maxOutputTokens: 5000,
-    });
+    }, signal);
     // Both calls are already in flight; settle them before reporting cost or errors.
     const [policyResult, reviewResult] = await Promise.allSettled([policyRun, reviewRun]);
     // A failed Promise.all inside policy can leave other classifier calls in flight.
     await client.waitForIdle?.();
+    throwIfAborted(signal);
     if (policyResult.status === 'rejected') throw policyResult.reason;
     const { kept, rejected } = policyResult.value;
     if (!kept.length) return done({ status: 'empty', rejected });
@@ -119,6 +127,7 @@ export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' })
       subject: review?.hero?.id === heroId ? review.hero.subject ?? null : null,
     };
 
+    onStep?.({ step: 'review', hero, branches: ranked, model, ms: trace.findLast(t => t.step === 'review')?.ms, costUsd: trace.filter(t => t.step === 'review').reduce((n, t) => n + (t.costUsd ?? 0), 0) });
     return done({ status: 'ok', branches: ranked, rejected, hero });
   }
 

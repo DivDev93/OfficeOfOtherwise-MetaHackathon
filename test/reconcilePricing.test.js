@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+test('historical pricing adjustment preserves entries, task budget and refuses a second adjustment', t => {
+  const root = mkdtempSync(join(tmpdir(), 'pricing-adjustment-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'out'));
+  const old = { label: 'responses', model: 'muse-wonder-1.0', usd: 0.0055, at: '2026-10-27T00:00:00.000Z', usage: { input_tokens: 1000, output_tokens: 1000 } };
+  writeFileSync(join(root, 'out', 'spend.json'), JSON.stringify({ totalUsd: old.usd, entries: [old] }));
+  writeFileSync(join(root, 'out', 'demo-task-budget.json'), JSON.stringify({ startingMetaSpendUsd: old.usd, taskBudgetUsd: 2 }));
+  const script = fileURLToPath(new URL('../scripts/reconcile-demo-pricing.js', import.meta.url));
+  const first = spawnSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+  assert.equal(first.status, 0, first.stderr);
+  const ledger = JSON.parse(readFileSync(join(root, 'out', 'spend.json')));
+  const budget = JSON.parse(readFileSync(join(root, 'out', 'demo-task-budget.json')));
+  assert.deepEqual(ledger.entries[0], old);
+  assert.equal(ledger.entries[1].label, 'historic-wonder-pricing-adjustment');
+  assert.ok(Math.abs(ledger.totalUsd - 0.024) < 1e-10);
+  assert.equal(budget.originalStartingMetaSpendUsd, old.usd);
+  assert.equal(budget.taskBudgetUsd, 2);
+  assert.equal(budget.startingMetaSpendUsd, ledger.totalUsd);
+  const second = spawnSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+  assert.notEqual(second.status, 0);
+  assert.equal(JSON.parse(readFileSync(join(root, 'out', 'spend.json'))).entries.length, 2);
+});

@@ -18,10 +18,10 @@ export class SpendCapError extends Error {
 }
 
 export class MetaApiError extends Error {
-  constructor(status, body, path) {
-    super(`Meta API ${status} on ${path}: ${typeof body === 'string' ? body : JSON.stringify(body)}`.slice(0, 500));
+  constructor(status, _body, path) {
+    super(`Meta API ${status} on ${path}`);
     this.name = 'MetaApiError';
-    Object.assign(this, { status, body, path });
+    Object.assign(this, { status, path });
   }
 }
 
@@ -52,28 +52,31 @@ export function createMetaClient(opts = {}) {
   const env = opts.env ?? process.env;
   const apiKey = (opts.apiKey ?? env.META_API_KEY ?? env.MODEL_API_KEY ?? '').trim() || undefined;
   const baseUrl = ((opts.baseUrl ?? env.META_API_BASE_URL ?? '').trim() || DEFAULT_BASE_URL).replace(/\/$/, '');
-  if (!/^https?:\/\//.test(baseUrl)) {
-    throw new Error('META_API_BASE_URL must be an http(s) URL or left empty (default https://api.meta.ai/v1). Did the API key end up there?');
-  }
+  let parsedBase;
+  try { parsedBase = new URL(baseUrl); } catch { throw new Error('Invalid META_API_BASE_URL'); }
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(parsedBase.hostname);
+  if ((parsedBase.protocol !== 'https:' && !(parsedBase.protocol === 'http:' && loopback)) || parsedBase.username || parsedBase.password || parsedBase.search || parsedBase.hash) throw new Error('Invalid META_API_BASE_URL');
   const spendCapUsd = Number(opts.spendCapUsd ?? env.META_SPEND_CAP_USD ?? 100);
   if (!Number.isFinite(spendCapUsd) || spendCapUsd < 0) throw new Error('META_SPEND_CAP_USD must be finite and nonnegative');
+  const dailyCapUsd = opts.dailyCapUsd === undefined ? undefined : Number(opts.dailyCapUsd);
+  if (dailyCapUsd !== undefined && (!Number.isFinite(dailyCapUsd) || dailyCapUsd < 0)) throw new Error('Daily cap must be finite and nonnegative');
   const ledger = opts.ledger ?? memoryLedger();
+  if (typeof ledger.reserveMeta !== 'function' || typeof ledger.settleMeta !== 'function' || typeof ledger.markMetaUncertain !== 'function') throw new Error('Atomic Meta ledger required');
   const fetchImpl = opts.fetch ?? globalThis.fetch;
   const maxRetries = opts.maxRetries ?? 3;
   const sleep = opts.sleep ?? (ms => new Promise(r => setTimeout(r, ms)));
 
-  let reserved = 0;
   let active = 0;
   const idleWaiters = [];
   function reserve(estimateUsd) {
+    if (!apiKey) throw new Error('META_API_KEY is not set (see .env.example)');
     if (!Number.isFinite(estimateUsd) || estimateUsd < 0) throw new Error('Call cost must be finite and nonnegative');
-    const spent = ledger.total() + reserved;
-    if (spent + estimateUsd > spendCapUsd) throw new SpendCapError(spent, estimateUsd, spendCapUsd);
-    reserved += estimateUsd;
+    const result = ledger.reserveMeta({ estimateUsd, capUsd: spendCapUsd, dailyCapUsd });
+    if (result.refused) throw new SpendCapError(result.spent, estimateUsd, result.cap);
     active++;
+    return result.id;
   }
-  function release(estimateUsd) {
-    reserved -= estimateUsd;
+  function finish() {
     active--;
     if (!active) for (const resolve of idleWaiters.splice(0)) resolve();
   }
@@ -81,16 +84,16 @@ export function createMetaClient(opts = {}) {
   async function http(method, path, body) {
     if (!apiKey) throw new Error('META_API_KEY is not set (see .env.example)');
     for (let attempt = 0; ; attempt++) {
-      const res = await fetchImpl(`${baseUrl}${path}`, {
+      let res;
+      try { res = await fetchImpl(`${baseUrl}${path}`, {
         method,
         headers: { Authorization: `Bearer ${apiKey}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
         body: body ? JSON.stringify(body) : undefined,
-      });
-      if (res.ok) return res.json();
-      const text = await res.text().catch(() => '');
-      if (!RETRYABLE.has(res.status) || attempt >= maxRetries) {
-        let parsed = text; try { parsed = JSON.parse(text); } catch { /* keep text */ }
-        throw new MetaApiError(res.status, parsed, path);
+        redirect: 'error',
+      }); } catch { throw new Error('Meta request failed'); }
+      if (res.ok) { try { return await res.json(); } catch { throw new Error('Invalid Meta response'); } }
+      if (method === 'POST' || !RETRYABLE.has(res.status) || attempt >= maxRetries) {
+        throw new MetaApiError(res.status, undefined, path);
       }
       const retryAfter = Number(res.headers?.get?.('retry-after'));
       const backoff = Number.isFinite(retryAfter) && retryAfter > 0
@@ -105,28 +108,32 @@ export function createMetaClient(opts = {}) {
    * The caller supplies the per-call cost, since Meta hasn't published those prices yet.
    */
   async function meteredPost(path, body, { costUsd, label }) {
-    reserve(costUsd);
+    const reservation = reserve(costUsd);
+    let settled = false;
     try {
       const json = await http('POST', path, body);
-      ledger.add({ label: label ?? path, model: body?.model, usd: costUsd, estimated: true });
+      ledger.settleMeta(reservation, { label: label ?? path, model: body?.model, usd: costUsd, estimated: true });
+      settled = true;
       return json;
-    } finally { release(costUsd); }
+    } catch (error) { if (!settled) ledger.markMetaUncertain(reservation); throw error; } finally { finish(); }
   }
 
   /** POST /responses (non-streaming). Returns { text, response, usage, costUsd }. */
   async function respond({ model, input, instructions, maxOutputTokens = 4096, label, ...rest }) {
     if (!model) throw new Error('respond() needs a model id');
-    const inputChars = (typeof input === 'string' ? input : JSON.stringify(input ?? '')).length + (instructions?.length ?? 0);
-    const estimate = estimateTextCost(model, { inputChars, maxOutputTokens });
-    reserve(estimate);
+    if (Object.hasOwn(rest, 'max_output_tokens') || Object.hasOwn(rest, 'tools') || Object.hasOwn(rest, 'tool_choice')) throw new Error('Unsupported metered response options');
+    const body = { model, input, ...(instructions ? { instructions } : {}), ...rest, max_output_tokens: maxOutputTokens };
+    const inputBytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
+    const estimate = estimateTextCost(model, { inputBytes, maxOutputTokens });
+    const reservation = reserve(estimate);
+    let settled = false;
     try {
-      const response = await http('POST', '/responses', {
-        model, input, ...(instructions ? { instructions } : {}), max_output_tokens: maxOutputTokens, ...rest,
-      });
+      const response = await http('POST', '/responses', body);
       const { usd, estimated } = costFromUsage(model, response.usage);
-      ledger.add({ label: label ?? 'responses', model, usd, estimated, usage: response.usage });
+      ledger.settleMeta(reservation, { label: label ?? 'responses', model, usd, estimated, usage: response.usage });
+      settled = true;
       return { text: outputText(response), response, usage: response.usage, costUsd: usd };
-    } finally { release(estimate); }
+    } catch (error) { if (!settled) ledger.markMetaUncertain(reservation); throw error; } finally { finish(); }
   }
 
   return {
@@ -134,7 +141,7 @@ export function createMetaClient(opts = {}) {
     meteredPost,
     listModels: () => http('GET', '/models'),
     spent: () => ledger.total(),
-    remaining: () => Math.max(0, spendCapUsd - ledger.total() - reserved),
+    remaining: () => Math.max(0, spendCapUsd - ledger.total() - ledger.reserved()),
     waitForIdle: () => active ? new Promise(resolve => idleWaiters.push(resolve)) : Promise.resolve(),
     spendCapUsd,
     ledger,

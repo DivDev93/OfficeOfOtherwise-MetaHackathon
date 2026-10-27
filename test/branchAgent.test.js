@@ -119,3 +119,19 @@ test('a hero the reviewer picked from a policy-rejected branch is never used', a
   assert.notEqual(out.hero.branchId, 'b4');
   assert.notEqual(out.hero.subject, 'siege tower');
 });
+
+test('policy-approved proposals stream while review is still in flight', async () => {
+  let releaseReview;
+  const events = [];
+  const client = { spent: () => 0, async respond(args) {
+    if (args.label.endsWith(':review')) await new Promise(resolve => { releaseReview = resolve; });
+    return { text: JSON.stringify(args.label.endsWith(':propose') ? BRANCHES : REVIEW), costUsd: 0.01 };
+  } };
+  const pending = createBranchAgent({ client, policy: allowAll }).run({ divergence: 'What if the Library of Alexandria never burned?', onStep: event => events.push(event) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(events.map(e => e.step), ['policy', 'propose']);
+  assert.ok(events[1].branches.every(b => b.id !== 'b4' && b.id !== 'bad'));
+  releaseReview(); await pending;
+  assert.deepEqual(events.map(e => e.step), ['policy', 'propose', 'review']);
+  assert.equal(events[2].hero.branchId, 'b1');
+});
