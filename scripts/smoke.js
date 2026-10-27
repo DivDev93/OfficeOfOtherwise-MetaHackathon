@@ -5,7 +5,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createMetaClient } from '../src/lib/metaClient.js';
 import { fileLedger } from '../src/lib/spendLedger.js';
-import { createTopicPolicy, createModelClassifier } from '../src/guardrails/topicPolicy.js';
+import { createTopicPolicy, createModelClassifier, categoriesFromEnv } from '../src/guardrails/topicPolicy.js';
 
 const model = process.env.META_TEXT_MODEL_PLANNER || 'muse-wonder-1.0';
 const client = createMetaClient({ ledger: fileLedger() });
@@ -21,7 +21,7 @@ console.log('usage:', JSON.stringify(r.usage));
 console.log(`cost: $${r.costUsd.toFixed(6)} (priced at the Muse Spark rate, so Wonder's real price may differ)`);
 
 let last;
-const policy = createTopicPolicy({ classify: createModelClassifier(client, { model, onResponse: (resp, text) => { last = { resp, text }; } }) });
+const policy = createTopicPolicy({ categories: categoriesFromEnv(), classify: createModelClassifier(client, { model, categories: categoriesFromEnv(), onResponse: (resp, text) => { last = { resp, text }; } }) });
 for (const prompt of [
   'What if the Library of Alexandria never burned?',   // expect allow
   'What if the empire had never stopped expanding east?', // subtle: expect block

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { keywordCheck, parseVerdict, createTopicPolicy, createModelClassifier } from '../src/guardrails/topicPolicy.js';
+import { keywordCheck, parseVerdict, createTopicPolicy, createModelClassifier, categoriesFromEnv, classifierInstructions } from '../src/guardrails/topicPolicy.js';
 import { SpendCapError } from '../src/lib/metaClient.js';
 
 const ALLOWED = [
@@ -102,4 +102,27 @@ test('createModelClassifier sends the text as data to the planner model through 
   assert.equal(seen[0].model, 'muse-wonder-1.0');
   assert.match(seen[0].input, /^<text>.*<\/text>$/s);
   assert.equal(seen[0].label, 'topic-policy');
+});
+
+test('categories are configurable per deployment', async () => {
+  assert.deepEqual(categoriesFromEnv({}), ['war', 'politics']);
+  assert.deepEqual(categoriesFromEnv({ TOPIC_POLICY_BLOCK: 'war' }), ['war']);
+  assert.deepEqual(categoriesFromEnv({ TOPIC_POLICY_BLOCK: 'none' }), []);
+  assert.throws(() => categoriesFromEnv({ TOPIC_POLICY_BLOCK: 'war,gore' }), /unknown categories: gore/);
+
+  const warOnly = createTopicPolicy({ categories: ['war'] });
+  assert.equal((await warOnly.checkPrompt('What if the 1960 election went the other way?')).allowed, true);
+  assert.equal((await warOnly.checkPrompt('What if the battle went the other way?')).allowed, false);
+
+  let calls = 0;
+  const off = createTopicPolicy({ categories: [], classify: async () => { calls++; return null; } });
+  const r = await off.checkPrompt('What if the Nazis won World War II?');
+  assert.equal(r.allowed, true);
+  assert.equal(r.layer, 'off');
+  assert.equal(calls, 0);
+});
+
+test('classifier instructions only name the configured categories', () => {
+  assert.match(classifierInstructions(['war']), /military conflict/);
+  assert.doesNotMatch(classifierInstructions(['war']), /elections/);
 });
