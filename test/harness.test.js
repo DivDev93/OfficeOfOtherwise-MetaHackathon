@@ -58,7 +58,7 @@ test('SAM failure persists paid calls and raw output', async () => {
   const dir = temp();
   try {
     let spent = 0;
-    const failure = Object.assign(new Error('bad SAM payload'), { trace: [{ model: 'sam', ms: 12, costUsd: 0.05, prompt: 'atlas' }], rawOutputs: ['malformed output'] });
+    const failure = Object.assign(new Error('bad SAM payload'), { trace: [{ model: 'sam', ms: 12, costUsd: 0.05, prompt: 'atlas' }], rawOutputs: ['malformed output'], rawResponses: [{ status: 'completed', output_text: 'malformed output' }] });
     const image = { generate: async () => { spent += 0.01; return { buffer: writeCutoutPng(Uint8Array.from([0, 0, 0, 255]), 1, 1), mime: 'image/png', costUsd: 0.01 }; } };
     const sam = { segment: async () => { spent += 0.05; throw failure; } };
     await assert.rejects(runHarness({ client: { spent: () => spent }, agent: { run: async () => ({ status: 'ok', hero: { imagePrompt: 'atlas', subject: 'atlas' }, trace: [] }) }, image, sam, outputRoot: dir, timestamp: 4, log() {} }), /bad SAM payload/);
@@ -66,6 +66,7 @@ test('SAM failure persists paid calls and raw output', async () => {
     assert.ok(Math.abs(trace.costUsd - 0.06) < 1e-9);
     assert.equal(trace.steps.find(t => t.step === 'segment').costUsd, 0.05);
     assert.equal(readFileSync(join(dir, '4', 'sam-raw-1.txt'), 'utf8'), 'malformed output');
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, '4', 'sam-response-1.json'), 'utf8')), { status: 'completed', output_text: 'malformed output' });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

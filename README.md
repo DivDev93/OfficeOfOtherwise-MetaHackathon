@@ -6,7 +6,7 @@ Office of Otherwise is the Meta-powered branching layer for [Chronos](#relations
 
 Built for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026). Startups track.
 
-> Status: local branch → image → subject cutout harness, validated with fixtures. The first live check exposed a large-image decoding bug (fixed); live mask/cutout validation is pending a further authorized run. See [Built during the hackathon](#built-during-the-hackathon).
+> Status: local branch → image → subject cutout harness, validated with fixtures. The latest live check generated a hero image, but both SAM calls produced empty extracted output; live mask/cutout validation remains incomplete. See [Built during the hackathon](#built-during-the-hackathon).
 
 ## How it works
 

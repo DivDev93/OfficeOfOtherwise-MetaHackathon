@@ -29,12 +29,15 @@ test('SAM uses documented request fields, decodes and places masks, and selects 
 
 test('SAM falls back once to head noun only when no matches', async () => {
   const calls = [];
-  const client = { async meteredPost(path, body) { calls.push(body); return { output_text: '' }; } };
+  const observed = await Promise.all([1, 2].map(i => readFile(new URL(`./fixtures/sam-live-empty-${i}.txt`, import.meta.url), 'utf8')));
+  const client = { async meteredPost(path, body) { calls.push(body); return { output_text: observed[calls.length - 1] }; } };
   const result = await createSamMask({ client, env: { META_SEGMENT_COST_USD: '0.02' } }).segment(request);
   assert.deepEqual(calls.map(x => x.input[0].content[0].text), [request.prompt, 'atlas']);
   assert.equal(result.costUsd, 0.04);
   assert.equal(result.selectedMask, null);
   assert.equal(result.rawOutputs.length, 2);
+  assert.deepEqual(result.rawOutputs, observed);
+  assert.deepEqual(result.rawResponses, observed.map(output_text => ({ output_text })));
 });
 
 test('confidence ties use foreground area and unknown confidence stays unknown', () => {

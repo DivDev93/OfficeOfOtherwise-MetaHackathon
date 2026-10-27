@@ -60,7 +60,7 @@ export function createSamMask({ client, model, env = process.env } = {}) {
       const fullPrompt = prompt.trim();
       const fallback = headNoun(fullPrompt);
       const prompts = fallback && fallback.toLowerCase() !== fullPrompt.toLowerCase() ? [fullPrompt, fallback] : [fullPrompt];
-      const trace = [], rawOutputs = [];
+      const trace = [], rawOutputs = [], rawResponses = [];
       let masks = [];
       for (const text of prompts) {
         const start = Date.now();
@@ -75,6 +75,7 @@ export function createSamMask({ client, model, env = process.env } = {}) {
           metadata: { include_confidence: 'true' },
         }, { costUsd: price, label: 'sam-segmentation' });
         paid = true;
+        rawResponses.push(response);
         trace.push({ model, ms: Date.now() - start, costUsd: price, prompt: text });
         const raw = outputText(response);
         rawOutputs.push(raw);
@@ -87,11 +88,12 @@ export function createSamMask({ client, model, env = process.env } = {}) {
           if (!paid) trace.push({ model, ms: Date.now() - start, costUsd: 0, prompt: text, status: 'failed' });
           error.trace = trace;
           error.rawOutputs = rawOutputs;
+          error.rawResponses = rawResponses;
           error.costUsd = trace.reduce((sum, step) => sum + step.costUsd, 0);
           throw error;
         }
       }
-      return { masks, selectedMask: selectMask(masks), costUsd: trace.reduce((sum, step) => sum + step.costUsd, 0), trace, rawOutputs };
+      return { masks, selectedMask: selectMask(masks), costUsd: trace.reduce((sum, step) => sum + step.costUsd, 0), trace, rawOutputs, rawResponses };
     },
   };
 }

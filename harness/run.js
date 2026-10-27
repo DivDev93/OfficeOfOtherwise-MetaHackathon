@@ -76,6 +76,7 @@ export async function runHarness({ divergence, from, client, agent, image, sam, 
   const appendSam = result => {
     for (const step of result.trace ?? []) trace.push({ step: 'segment', ...step });
     for (const [index, raw] of (result.rawOutputs ?? []).entries()) writeFileSync(join(directory, `sam-raw-${index + 1}.txt`), typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2));
+    for (const [index, raw] of (result.rawResponses ?? []).entries()) writeFileSync(join(directory, `sam-response-${index + 1}.json`), JSON.stringify(raw, null, 2));
   };
   let segmented;
   start = performance.now();
