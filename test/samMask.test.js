@@ -77,3 +77,34 @@ test('fallback refusal retains first paid response and a zero-cost failed attemp
     return true;
   });
 });
+
+test('SAM rejects ambiguous, contradictory or refused responses without a paid fallback', async () => {
+  const responses = [
+    {},
+    { output: [] },
+    { output_text: null },
+    { output_text: 12 },
+    { output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'refused' }] }] },
+    { output: [{ type: 'message', content: [{ type: 'output_text', text: null }] }] },
+    { output_text: '', output: [{ type: 'message', content: [{ type: 'output_text', text: fixture }] }] },
+    { output_text: 'unstructured response' },
+  ];
+  for (const response of responses) {
+    let calls = 0;
+    const provider = createSamMask({ client: { async meteredPost() { calls++; return response; } }, env: {} });
+    await assert.rejects(provider.segment(request), error => {
+      assert.deepEqual(error.rawResponses, [response]);
+      assert.equal(error.costUsd, 0.05);
+      return true;
+    });
+    assert.equal(calls, 1);
+  }
+});
+
+test('SAM reads nested response output-text content without the SDK helper', async () => {
+  const provider = createSamMask({ client: { async meteredPost() {
+    return { output: [{ type: 'message', content: [{ type: 'output_text', text: fixture }] }] };
+  } }, env: {} });
+  const result = await provider.segment(request);
+  assert.equal(result.selectedMask.confidence, 0.9);
+});

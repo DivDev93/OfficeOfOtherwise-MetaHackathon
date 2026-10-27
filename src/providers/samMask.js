@@ -1,6 +1,30 @@
 import { parseImageStream, recordsOfKind, decodeMaskToRaster } from '@meta-sam/parser';
 import { PNG } from 'pngjs';
-import { outputText } from '../lib/metaClient.js';
+
+// An explicitly empty output-text lane is a valid no-match. Missing, malformed,
+// refused or contradictory content is not evidence that no object was found.
+function samOutputText(response) {
+  if (!response || typeof response !== 'object') throw new Error('SAM response is not an object');
+  const hasHelper = response.output_text !== undefined && response.output_text !== null;
+  if (hasHelper && typeof response.output_text !== 'string') throw new Error('SAM response output_text is not a string');
+  if (response.output != null && !Array.isArray(response.output)) throw new Error('SAM response output is not an array');
+  const parts = [];
+  for (const item of response.output ?? []) {
+    if (item?.type !== 'message') continue;
+    if (!Array.isArray(item.content)) throw new Error('SAM message content is not an array');
+    for (const part of item.content) {
+      if (part?.type === 'refusal') throw new Error('SAM response was refused');
+      if (part?.type !== 'output_text') continue;
+      if (typeof part.text !== 'string') throw new Error('SAM output text is not a string');
+      parts.push(part.text);
+    }
+  }
+  const nested = parts.join('');
+  if (hasHelper && parts.length && response.output_text !== nested) throw new Error('SAM output_text conflicts with message content');
+  if (hasHelper) return response.output_text;
+  if (parts.length) return nested;
+  throw new Error('SAM response has no recognizable output-text lane');
+}
 
 // A missing confidence is unknown, not zero; known confidence sorts first.
 export function selectMask(masks) {
@@ -30,7 +54,9 @@ async function parseMasks(text, width, height) {
     throw new Error(`SAM output could not be parsed: ${result.diagnostics.map(d => d.code).join(', ') || result.outcome.status}`);
   }
   const boxes = recordsOfKind(result.records, 'box');
-  return recordsOfKind(result.records, 'mask').map(record => {
+  const records = recordsOfKind(result.records, 'mask');
+  if (text.trim() && !records.length) throw new Error('SAM output has text but no recognizable mask records');
+  return records.map(record => {
     const box = record.bounds;
     const local = decodeMaskToRaster(record.mask);
     if (box.left < 0 || box.top < 0 || box.right > width || box.bottom > height ||
@@ -77,7 +103,7 @@ export function createSamMask({ client, model, env = process.env } = {}) {
         paid = true;
         rawResponses.push(response);
         trace.push({ model, ms: Date.now() - start, costUsd: price, prompt: text });
-        const raw = outputText(response);
+        const raw = samOutputText(response);
         rawOutputs.push(raw);
         if (response?.status && response.status !== 'completed') {
           throw new Error(`SAM response did not complete: ${response.status}`);
