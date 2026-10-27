@@ -16,6 +16,7 @@
   "scripts": {
     "test": "node --test",
     "harness": "node --env-file-if-exists=.env harness/run.js",
-    "models": "node --env-file-if-exists=.env scripts/models.js"
+    "models": "node --env-file-if-exists=.env scripts/models.js",
+    "smoke": "node --env-file-if-exists=.env scripts/smoke.js"
   }
 }
