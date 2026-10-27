@@ -63,6 +63,34 @@ test('meteredPost charges the supplied per-call cost and respects the cap', asyn
   assert.equal(fetch.calls.length, 1);
 });
 
+test('concurrent calls reserve the budget and release reservations on failure', async () => {
+  let finish;
+  let calls = 0;
+  const fetch = async () => {
+    calls++;
+    await new Promise(resolve => { finish = resolve; });
+    return { ok: false, status: 400, text: async () => 'fixture failure' };
+  };
+  const client = createMetaClient({ ...base, fetch, spendCapUsd: 0.1 });
+  const first = client.meteredPost('/images/generations', {}, { costUsd: 0.06 });
+  await assert.rejects(client.meteredPost('/responses', {}, { costUsd: 0.05 }), SpendCapError);
+  assert.equal(calls, 1);
+  assert.ok(Math.abs(client.remaining() - 0.04) < 1e-9);
+  let idle = false;
+  const settled = client.waitForIdle().then(() => { idle = true; });
+  assert.equal(idle, false);
+  finish();
+  await assert.rejects(first, MetaApiError);
+  await settled;
+  assert.equal(client.remaining(), 0.1);
+});
+
+test('rejects invalid caps and call costs', async () => {
+  for (const spendCapUsd of [-1, NaN, Infinity]) assert.throws(() => createMetaClient({ ...base, spendCapUsd }), /finite and nonnegative/);
+  const client = createMetaClient(base);
+  for (const costUsd of [-1, NaN, Infinity]) await assert.rejects(client.meteredPost('/x', {}, { costUsd }), /finite and nonnegative/);
+});
+
 test('retries 429 then succeeds; gives up with MetaApiError on 400', async () => {
   const fetch = fakeFetch([{ status: 429, body: 'slow down' }, { status: 200, body: RESPONSE_FIXTURE }]);
   const client = createMetaClient({ ...base, fetch });

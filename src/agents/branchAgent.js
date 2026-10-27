@@ -96,10 +96,15 @@ export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' })
       input: `Point of divergence: ${divergence}\nBranches:\n${JSON.stringify(candidates, null, 1)}`,
       maxOutputTokens: 5000,
     });
-    // if policy rejects everything, don't wait on (or fail because of) the review
-    const { kept, rejected } = await policyRun;
-    if (!kept.length) { reviewRun.catch(() => {}); return done({ status: 'empty', rejected }); }
-    const review = await reviewRun;
+    // Both calls are already in flight; settle them before reporting cost or errors.
+    const [policyResult, reviewResult] = await Promise.allSettled([policyRun, reviewRun]);
+    // A failed Promise.all inside policy can leave other classifier calls in flight.
+    await client.waitForIdle?.();
+    if (policyResult.status === 'rejected') throw policyResult.reason;
+    const { kept, rejected } = policyResult.value;
+    if (!kept.length) return done({ status: 'empty', rejected });
+    if (reviewResult.status === 'rejected') throw reviewResult.reason;
+    const review = reviewResult.value;
     const scoreOf = new Map((review?.scores ?? []).map(s => [s.id, s]));
     const ranked = kept
       .map(b => ({ ...b, score: Number(scoreOf.get(b.id)?.score ?? 0), reviewNote: scoreOf.get(b.id)?.note ?? '' }))

@@ -79,6 +79,33 @@ test('empty when every branch is off-policy', async () => {
   assert.equal(out.rejected.length, 1);
 });
 
+test('waits for an in-flight review before returning empty or a policy error', async () => {
+  for (const shouldReject of [false, true]) {
+    let releaseReview;
+    let spent = 0;
+    const client = {
+      spent: () => spent,
+      async respond(args) {
+        if (args.label.endsWith(':review')) await new Promise(resolve => { releaseReview = resolve; });
+        spent += 0.01;
+        return { text: JSON.stringify(args.label.endsWith(':propose') ? [BRANCHES[0]] : REVIEW), costUsd: 0.01 };
+      },
+    };
+    const policy = {
+      checkPrompt: async () => ({ allowed: true, layer: 'keyword' }),
+      checkBranches: async () => { if (shouldReject) throw new Error('policy failed'); return { kept: [], rejected: [BRANCHES[0]] }; },
+    };
+    let done = false;
+    const result = createBranchAgent({ client, policy }).run({ divergence: 'science' }).finally(() => { done = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(done, false);
+    releaseReview();
+    if (shouldReject) await assert.rejects(result, /policy failed/);
+    else assert.equal((await result).costUsd, 0.02);
+    assert.equal(spent, 0.02);
+  }
+});
+
 test('extractJson handles fences, prose and braces inside strings', () => {
   assert.deepEqual(extractJson('Here:\n```json\n{"a":"}{"}\n```'), { a: '}{' });
   assert.deepEqual(extractJson('pre [1,2,{"b":[3]}] post'), [1, 2, { b: [3] }]);

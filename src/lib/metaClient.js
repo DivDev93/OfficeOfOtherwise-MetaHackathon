@@ -56,14 +56,26 @@ export function createMetaClient(opts = {}) {
     throw new Error('META_API_BASE_URL must be an http(s) URL or left empty (default https://api.meta.ai/v1). Did the API key end up there?');
   }
   const spendCapUsd = Number(opts.spendCapUsd ?? env.META_SPEND_CAP_USD ?? 100);
+  if (!Number.isFinite(spendCapUsd) || spendCapUsd < 0) throw new Error('META_SPEND_CAP_USD must be finite and nonnegative');
   const ledger = opts.ledger ?? memoryLedger();
   const fetchImpl = opts.fetch ?? globalThis.fetch;
   const maxRetries = opts.maxRetries ?? 3;
   const sleep = opts.sleep ?? (ms => new Promise(r => setTimeout(r, ms)));
 
-  function assertBudget(estimateUsd) {
-    const spent = ledger.total();
+  let reserved = 0;
+  let active = 0;
+  const idleWaiters = [];
+  function reserve(estimateUsd) {
+    if (!Number.isFinite(estimateUsd) || estimateUsd < 0) throw new Error('Call cost must be finite and nonnegative');
+    const spent = ledger.total() + reserved;
     if (spent + estimateUsd > spendCapUsd) throw new SpendCapError(spent, estimateUsd, spendCapUsd);
+    reserved += estimateUsd;
+    active++;
+  }
+  function release(estimateUsd) {
+    reserved -= estimateUsd;
+    active--;
+    if (!active) for (const resolve of idleWaiters.splice(0)) resolve();
   }
 
   async function http(method, path, body) {
@@ -93,24 +105,28 @@ export function createMetaClient(opts = {}) {
    * The caller supplies the per-call cost, since Meta hasn't published those prices yet.
    */
   async function meteredPost(path, body, { costUsd, label }) {
-    if (!Number.isFinite(costUsd)) throw new Error(`meteredPost(${path}) needs a costUsd estimate`);
-    assertBudget(costUsd);
-    const json = await http('POST', path, body);
-    ledger.add({ label: label ?? path, model: body?.model, usd: costUsd, estimated: true });
-    return json;
+    reserve(costUsd);
+    try {
+      const json = await http('POST', path, body);
+      ledger.add({ label: label ?? path, model: body?.model, usd: costUsd, estimated: true });
+      return json;
+    } finally { release(costUsd); }
   }
 
   /** POST /responses (non-streaming). Returns { text, response, usage, costUsd }. */
   async function respond({ model, input, instructions, maxOutputTokens = 4096, label, ...rest }) {
     if (!model) throw new Error('respond() needs a model id');
     const inputChars = (typeof input === 'string' ? input : JSON.stringify(input ?? '')).length + (instructions?.length ?? 0);
-    assertBudget(estimateTextCost(model, { inputChars, maxOutputTokens }));
-    const response = await http('POST', '/responses', {
-      model, input, ...(instructions ? { instructions } : {}), max_output_tokens: maxOutputTokens, ...rest,
-    });
-    const { usd, estimated } = costFromUsage(model, response.usage);
-    ledger.add({ label: label ?? 'responses', model, usd, estimated, usage: response.usage });
-    return { text: outputText(response), response, usage: response.usage, costUsd: usd };
+    const estimate = estimateTextCost(model, { inputChars, maxOutputTokens });
+    reserve(estimate);
+    try {
+      const response = await http('POST', '/responses', {
+        model, input, ...(instructions ? { instructions } : {}), max_output_tokens: maxOutputTokens, ...rest,
+      });
+      const { usd, estimated } = costFromUsage(model, response.usage);
+      ledger.add({ label: label ?? 'responses', model, usd, estimated, usage: response.usage });
+      return { text: outputText(response), response, usage: response.usage, costUsd: usd };
+    } finally { release(estimate); }
   }
 
   return {
@@ -118,7 +134,8 @@ export function createMetaClient(opts = {}) {
     meteredPost,
     listModels: () => http('GET', '/models'),
     spent: () => ledger.total(),
-    remaining: () => Math.max(0, spendCapUsd - ledger.total()),
+    remaining: () => Math.max(0, spendCapUsd - ledger.total() - reserved),
+    waitForIdle: () => active ? new Promise(resolve => idleWaiters.push(resolve)) : Promise.resolve(),
     spendCapUsd,
     ledger,
   };
