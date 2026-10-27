@@ -40,7 +40,7 @@ test('happy path: proposes, filters, reviews, ranks and picks the hero with a fu
   assert.deepEqual(out.rejected.map(r => r.branch.id), ['b4']);       // keyword layer caught the siege
   assert.equal(out.hero.branchId, 'b1');
   assert.equal(out.hero.subject, 'brass steam engine');
-  assert.deepEqual(out.trace.map(t => t.step), ['policy:prompt', 'propose', 'policy:branches', 'review']);
+  assert.deepEqual(out.trace.map(t => t.step).sort(), ['policy:branches', 'policy:prompt', 'propose', 'review']);
   assert.equal(client.calls[0].model, 'muse-wonder-1.0');
   assert.ok(out.costUsd > 0);
 });
@@ -73,7 +73,7 @@ test('falls back to the top-ranked branch when the reviewer names an unknown her
 });
 
 test('empty when every branch is off-policy', async () => {
-  const client = fakeClient({ propose: JSON.stringify([BRANCHES[3]]) });
+  const client = fakeClient({ propose: JSON.stringify([BRANCHES[3]]), review: REVIEW });
   const out = await createBranchAgent({ client, policy: allowAll }).run({ divergence: 'What if the Library of Alexandria never burned?' });
   assert.equal(out.status, 'empty');
   assert.equal(out.rejected.length, 1);
@@ -83,4 +83,12 @@ test('extractJson handles fences, prose and braces inside strings', () => {
   assert.deepEqual(extractJson('Here:\n```json\n{"a":"}{"}\n```'), { a: '}{' });
   assert.deepEqual(extractJson('pre [1,2,{"b":[3]}] post'), [1, 2, { b: [3] }]);
   assert.equal(extractJson('nothing'), undefined);
+});
+
+test('a hero the reviewer picked from a policy-rejected branch is never used', async () => {
+  const client = fakeClient({ propose: JSON.stringify(BRANCHES), review: { scores: [{ id: 'b4', score: 10 }, { id: 'b2', score: 5 }], hero: { id: 'b4', imagePrompt: 'soldiers', subject: 'siege tower' } } });
+  const out = await createBranchAgent({ client, policy: allowAll }).run({ divergence: 'What if the Library of Alexandria never burned?' });
+  assert.ok(!out.branches.some(b => b.id === 'b4'));
+  assert.notEqual(out.hero.branchId, 'b4');
+  assert.notEqual(out.hero.subject, 'siege tower');
 });

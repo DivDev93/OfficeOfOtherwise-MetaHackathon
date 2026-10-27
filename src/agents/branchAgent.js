@@ -3,9 +3,9 @@
 //
 //   1. policy   check the divergence prompt              (keyword + Wonder)
 //   2. propose  N+2 candidate branches as structured JSON (Wonder)
-//   3. policy   drop any branch that drifted into war/politics
+//   3. policy   drop any branch that drifted into war/politics      } run in
 //   4. review   score plausibility & causal consistency, rank, pick the hero,
-//               write the image prompt and the subject to cut out   (Wonder)
+//               write the image prompt and the subject to cut out   } parallel
 //
 // Every step is recorded in `trace` (model, tokens, cost, ms) so the UI can show
 // which Meta model did what (provenance badges) and so judges can see the agent work.
@@ -82,18 +82,24 @@ export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' })
     });
     const candidates = (Array.isArray(proposed) ? proposed : proposed?.branches ?? []).filter(validBranch);
 
-    // 3. policy on each branch
+    // 3 + 4 in parallel: the per-branch policy check and the review are independent,
+    // so run them together and drop rejected branches from the ranking afterwards.
+    // (Saves the policy step's wall time, ~8s on the 2026-10-27 live run.)
+    if (!candidates.length) return done({ status: 'empty', rejected: [] });
     const t1 = now();
-    const { kept, rejected } = await policy.checkBranches(candidates);
-    trace.push({ step: 'policy:branches', model, ms: now() - t1, kept: kept.length, rejected: rejected.length });
-    if (!kept.length) return done({ status: 'empty', rejected });
-
-    // 4. review, rank, pick hero
-    const review = await step(trace, 'review', {
+    const policyRun = policy.checkBranches(candidates).then(r => {
+      trace.push({ step: 'policy:branches', model, ms: now() - t1, kept: r.kept.length, rejected: r.rejected.length });
+      return r;
+    });
+    const reviewRun = step(trace, 'review', {
       instructions: REVIEW_INSTRUCTIONS,
-      input: `Point of divergence: ${divergence}\nBranches:\n${JSON.stringify(kept, null, 1)}`,
+      input: `Point of divergence: ${divergence}\nBranches:\n${JSON.stringify(candidates, null, 1)}`,
       maxOutputTokens: 5000,
     });
+    // if policy rejects everything, don't wait on (or fail because of) the review
+    const { kept, rejected } = await policyRun;
+    if (!kept.length) { reviewRun.catch(() => {}); return done({ status: 'empty', rejected }); }
+    const review = await reviewRun;
     const scoreOf = new Map((review?.scores ?? []).map(s => [s.id, s]));
     const ranked = kept
       .map(b => ({ ...b, score: Number(scoreOf.get(b.id)?.score ?? 0), reviewNote: scoreOf.get(b.id)?.note ?? '' }))
