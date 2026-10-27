@@ -103,3 +103,21 @@ test('live order continues after a topic-policy blocked curated prompt',async()=
   assert.equal(calls,2); assert.ok(result.skipped.some(x=>x.id==='beringia' && /blocked/.test(x.reason))); assert.ok(result.errors.some(x=>x.id==='green-sahara'));
  } finally {await rm(dir,{recursive:true,force:true});}
 });
+
+test('upgrading a repriced provisional cache retains correction or fails without changing it',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'cache-reprice-')); try {
+  const source=await fixture(dir,CURATED[0],{model:false}); const tracePath=join(source,'trace.json'); const original=JSON.parse(await readFile(tracePath,'utf8')); original.steps=[{step:'topic-policy',model:'muse-wonder-1.0',ms:3,costUsd:.01}]; await writeFile(tracePath,JSON.stringify(original));
+  const root=join(dir,'runs'); await cacheDemo({outputRoot:root,orrerySource:source,provisional2d:true}); const dest=join(root,'alexandria'); const stagedTrace=join(dest,'trace.json'); const current=JSON.parse(await readFile(stagedTrace,'utf8')); current.steps[0].recordedCostUsd=.01; current.steps[0].costUsd=.004324; current.recordedCostUsd=.01; current.costUsd=.004324; current.pricingNote={method:'Test prices',sourceRunTimestamp:'1793139066427',windowMs:600000}; await writeFile(stagedTrace,JSON.stringify(current)); const before=await readFile(stagedTrace,'utf8');
+  const glb=Buffer.alloc(20); glb.write('glTF'); glb.writeUInt32LE(2,4); glb.writeUInt32LE(20,8); await writeFile(join(source,'model.glb'),glb); original.steps.push({step:'3d',model:'Tattva TRELLIS',ms:5,costUsd:0}); await writeFile(tracePath,JSON.stringify(original));
+  const ledger=join(dir,'ledger.json'); await writeFile(ledger,JSON.stringify({entries:[]})); let result=await cacheDemo({outputRoot:root,orrerySource:source,ledgerPath:ledger}); assert.ok(result.errors.some(x=>x.id==='alexandria')); assert.equal(await readFile(stagedTrace,'utf8'),before); assert.ok((await readdir(dest)).includes('manifest.json'));
+  await writeFile(ledger,JSON.stringify({entries:[{label:'topic-policy',model:'muse-wonder-1.0',usd:.01,at:new Date(1793139066427+1000).toISOString(),usage:{input_tokens:100,input_tokens_details:{cached_tokens:20},output_tokens:200}}]})); result=await cacheDemo({outputRoot:root,orrerySource:source,ledgerPath:ledger}); assert.ok(result.published.includes('alexandria')); const final=JSON.parse(await readFile(stagedTrace,'utf8')); assert.ok(Math.abs(final.steps[0].costUsd-.004324)<1e-12); assert.equal(final.steps[0].recordedCostUsd,.01); assert.ok(final.pricingNote); assert.ok(!(await readdir(dest)).includes('manifest.json'));
+ } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('upgrade preserves an already repriced source without applying charges twice',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'cache-reprice-')); try {
+  const source=await fixture(dir,CURATED[0],{model:false}); const path=join(source,'trace.json'); const t=JSON.parse(await readFile(path,'utf8')); t.steps=t.steps.filter(x=>x.step!=='3d'); t.pricingNote={method:'Test prices',sourceRunTimestamp:'1793139066427',windowMs:600000}; t.recordedCostUsd=.1; t.costUsd=.2; await writeFile(path,JSON.stringify(t)); const root=join(dir,'runs'); await cacheDemo({outputRoot:root,orrerySource:source,provisional2d:true});
+  const glb=Buffer.alloc(20); glb.write('glTF'); glb.writeUInt32LE(2,4); glb.writeUInt32LE(20,8); await writeFile(join(source,'model.glb'),glb); t.steps.push({step:'3d',model:'Tattva TRELLIS',ms:5,costUsd:0}); await writeFile(path,JSON.stringify(t));
+  const result=await cacheDemo({outputRoot:root,orrerySource:source,ledgerPath:join(dir,'missing.json')}); assert.ok(result.published.includes('alexandria')); const final=JSON.parse(await readFile(join(root,'alexandria','trace.json'),'utf8')); assert.equal(final.costUsd,.2); assert.deepEqual(final.pricingNote,t.pricingNote);
+ } finally {await rm(dir,{recursive:true,force:true});}
+});

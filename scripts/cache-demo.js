@@ -3,6 +3,7 @@ import { join, resolve, basename, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PNG } from 'pngjs';
 import { keywordCheck } from '../src/guardrails/topicPolicy.js';
+import { repriceCachedRun } from './reprice-cached-run.js';
 
 export const CURATED = Object.freeze([
   { id:'alexandria', divergence:'What if the Library of Alexandria never burned?', reuse:true },
@@ -24,13 +25,14 @@ function pickBranch(b) {
   return {id:b.id,title:safeText(b.title),year:b.year,place:{name:safeText(b.place.name),lat:b.place.lat,lon:b.place.lon},summary:safeText(b.summary),scene:safeText(b.scene),score:number(b.score),reviewNote:safeText(b.reviewNote)};
 }
 function cleanStep(t) {
-  return { step:safeText(t.step), model:safeText(t.model), ms:number(t.ms), costUsd:number(t.costUsd), originalCostUsd:number(t.originalCostUsd), reused:t.reused === true || undefined, summary:t.summary === true || undefined, allowed:typeof t.allowed === 'boolean' ? t.allowed : undefined, prompt:safeText(t.prompt), attempt:number(t.attempt), ok:typeof t.ok === 'boolean' ? t.ok : undefined };
+  return { step:safeText(t.step), model:safeText(t.model), ms:number(t.ms), costUsd:number(t.costUsd), originalCostUsd:number(t.originalCostUsd), recordedCostUsd:number(t.recordedCostUsd), reused:t.reused === true || undefined, summary:t.summary === true || undefined, allowed:typeof t.allowed === 'boolean' ? t.allowed : undefined, prompt:safeText(t.prompt), attempt:number(t.attempt), ok:typeof t.ok === 'boolean' ? t.ok : undefined };
 }
 function sanitize(branch, trace) {
   if (!branch || !['ok','blocked'].includes(branch.status)) throw new Error('Run did not complete');
   const clean = {status:branch.status,divergence:safeText(branch.divergence),branches:(branch.branches ?? []).map(pickBranch),hero:branch.hero ? {branchId:safeText(branch.hero.branchId),imagePrompt:safeText(branch.hero.imagePrompt),subject:safeText(branch.hero.subject)} : null,reframe:safeText(branch.reframe),reason:safeText(branch.reason),trace:(branch.trace ?? []).map(cleanStep),costUsd:number(branch.costUsd)};
   const selection = trace.selection ? {confidence:number(trace.selection.confidence),area:number(trace.selection.area),prompt:safeText(trace.selection.prompt)} : null;
-  return {branch:clean,trace:{steps:(trace.steps ?? []).map(cleanStep),selection,costUsd:number(trace.costUsd)}};
+  const pricingNote=trace.pricingNote ? {method:safeText(trace.pricingNote.method),sourceRunTimestamp:safeText(trace.pricingNote.sourceRunTimestamp),windowMs:number(trace.pricingNote.windowMs)} : undefined;
+  return {branch:clean,trace:{steps:(trace.steps ?? []).map(cleanStep),selection,costUsd:number(trace.costUsd),recordedCostUsd:number(trace.recordedCostUsd),pricingNote}};
 }
 async function treeSize(path) {
   let sum=0;
@@ -84,7 +86,7 @@ function publicError(error) {
   return known.has(error?.message) ? error.message : 'Cache operation failed';
 }
 /** Publish completed outputs once; run is an injected async function and is never called for Alexandria. */
-export async function cacheDemo({ outputRoot='demo/runs', orrerySource, run, retrySubject={}, visiblyBroken=[], blockedPrompt, provisional2d=false, enforceLiveOrder=false, maxBytes=MAX_BYTES }={}) {
+export async function cacheDemo({ outputRoot='demo/runs', orrerySource, run, retrySubject={}, visiblyBroken=[], blockedPrompt, provisional2d=false, enforceLiveOrder=false, ledgerPath, maxBytes=MAX_BYTES }={}) {
   if (!Number.isInteger(maxBytes) || maxBytes<0 || maxBytes>MAX_BYTES) throw new Error('Invalid cache size cap');
   const retries=Object.entries(retrySubject); if (retries.some(([id,subject])=>!CURATED.some(x=>x.id===id && !x.reuse) || typeof subject!=='string' || !subject.trim() || subject.length>200)) throw new Error('Invalid retry subject');
   for (const [,subject] of retries) safeText(subject);
@@ -108,8 +110,9 @@ export async function cacheDemo({ outputRoot='demo/runs', orrerySource, run, ret
     if (enforceLiveOrder && item.blocked && alexandriaMissing) { report.skipped.push({id:item.id,reason:'Live generation stopped'}); continue; }
     const destination=join(outputRoot,item.id);
     try {
-      let upgrading=false;
+      let upgrading=false, previousPricingNote;
       try { await lstat(destination); if (item.reuse) { try { const manifest=JSON.parse(await readRegular(join(destination,'manifest.json'))); upgrading=manifest.status==='provisional' && manifest.reason==='3D model not generated'; } catch {} } if (!upgrading) {report.skipped.push({id:item.id,reason:'Already cached'}); continue;} } catch(e) { if(e.code!=='ENOENT') throw e; }
+      if (upgrading) { const priorTrace=JSON.parse(await readRegular(join(destination,'trace.json'))); previousPricingNote=priorTrace.pricingNote; }
       if (!upgrading && (await treeSize(outputRoot)) >= maxBytes) throw new Error('Cache size cap reached before generation');
       let directory;
       if(item.reuse) { if(!orrerySource) {report.skipped.push({id:item.id,reason:'Existing complete orrery source required'});continue;} directory=orrerySource; }
@@ -129,6 +132,13 @@ export async function cacheDemo({ outputRoot='demo/runs', orrerySource, run, ret
       try {
         await writeFile(join(stage,'branch.json'),JSON.stringify(data.branch,null,2)+'\n'); await writeFile(join(stage,'trace.json'),JSON.stringify(data.trace,null,2)+'\n');
         for (const [name,bytes] of Object.entries(data.files)) await writeFile(join(stage,name),bytes);
+        if (upgrading && previousPricingNote) {
+          if (data.trace.pricingNote) {
+            if (JSON.stringify(data.trace.pricingNote)!==JSON.stringify(previousPricingNote)) throw new Error('Conflicting pricing note');
+          } else {
+            await repriceCachedRun({cacheDirectory:stage,sourceTimestamp:previousPricingNote.sourceRunTimestamp,ledgerPath});
+          }
+        }
         if (data.provisional) await writeFile(join(stage,'manifest.json'),JSON.stringify({status:'provisional',reason:'3D model not generated'},null,2)+'\n');
         if ((await treeSize(outputRoot))-(upgrading ? await treeSize(destination) : 0)>=maxBytes) throw new Error('Cache size cap exceeded');
         if (upgrading) {
