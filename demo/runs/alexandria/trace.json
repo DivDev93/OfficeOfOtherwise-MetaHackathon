@@ -4,49 +4,57 @@
       "step": "topic-policy",
       "model": "muse-wonder-1.0",
       "ms": 7247,
-      "costUsd": 0.00171725
+      "costUsd": 0.00778,
+      "recordedCostUsd": 0.00171725
     },
     {
       "step": "branch-agent:propose",
       "model": "muse-wonder-1.0",
       "ms": 24199,
-      "costUsd": 0.0151625
+      "costUsd": 0.070952,
+      "recordedCostUsd": 0.0151625
     },
     {
       "step": "topic-policy",
       "model": "muse-wonder-1.0",
       "ms": 3766,
-      "costUsd": 0.002559
+      "costUsd": 0.011664,
+      "recordedCostUsd": 0.002559
     },
     {
       "step": "topic-policy",
       "model": "muse-wonder-1.0",
       "ms": 4789,
-      "costUsd": 0.0023474
+      "costUsd": 0.0108392,
+      "recordedCostUsd": 0.0023474
     },
     {
       "step": "topic-policy",
       "model": "muse-wonder-1.0",
       "ms": 4919,
-      "costUsd": 0.0022964
+      "costUsd": 0.010599200000000001,
+      "recordedCostUsd": 0.0022964
     },
     {
       "step": "topic-policy",
       "model": "muse-wonder-1.0",
       "ms": 5037,
-      "costUsd": 0.0016704
+      "costUsd": 0.0076552,
+      "recordedCostUsd": 0.0016704
     },
     {
       "step": "topic-policy",
       "model": "muse-wonder-1.0",
       "ms": 6372,
-      "costUsd": 0.0037184
+      "costUsd": 0.0172872,
+      "recordedCostUsd": 0.0037184
     },
     {
       "step": "branch-agent:review",
       "model": "muse-wonder-1.0",
       "ms": 28384,
-      "costUsd": 0.0192955
+      "costUsd": 0.08908,
+      "recordedCostUsd": 0.0192955
     },
     {
       "step": "policy:prompt",
@@ -102,5 +110,11 @@
     "area": 303143,
     "prompt": "brass orrery"
   },
-  "costUsd": 0.10876685000000003
+  "costUsd": 0.2858568,
+  "recordedCostUsd": 0.10876685000000003,
+  "pricingNote": {
+    "method": "Recomputed from recorded token usage at Muse Wonder rates of $4 input, $0.20 cached input, and $20 output per million tokens.",
+    "sourceRunTimestamp": "1793139066427",
+    "windowMs": 600000
+  }
 }
