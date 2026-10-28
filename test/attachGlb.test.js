@@ -5,6 +5,26 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { attachGlb } from '../scripts/attach-glb.js';
 
+const validDocument = {
+  asset: { version: '2.0' }, scene: 0,
+  scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+  meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+  accessors: [{ componentType: 5126, count: 3, type: 'VEC3' }],
+  buffers: [{ byteLength: 36 }],
+};
+function makeGlb(document = validDocument, { jsonType = 0x4e4f534a, jsonLengthAdjust = 0, malformedJson = false } = {}) {
+  let json = Buffer.from(JSON.stringify(document));
+  if (malformedJson) json = Buffer.from('{ broken');
+  const jsonLength = Math.ceil(json.length / 4) * 4 + jsonLengthAdjust;
+  const paddedJson = Buffer.alloc(jsonLength, 0x20); json.copy(paddedJson);
+  const binary = Buffer.alloc(36), total = 12 + 8 + jsonLength + 8 + binary.length;
+  const glb = Buffer.alloc(total, 0);
+  glb.write('glTF'); glb.writeUInt32LE(2,4); glb.writeUInt32LE(total,8);
+  glb.writeUInt32LE(jsonLength,12); glb.writeUInt32LE(jsonType,16); paddedJson.copy(glb,20);
+  const binaryHeader = 20 + jsonLength;
+  glb.writeUInt32LE(binary.length,binaryHeader); glb.writeUInt32LE(0x004e4942,binaryHeader + 4); binary.copy(glb,binaryHeader + 8);
+  return glb;
+}
 async function fixture(t, status = 'provisional') {
   const base = await mkdtemp(join(tmpdir(), 'attach-glb-')); t.after(() => rm(base, { recursive:true, force:true }));
   const root = join(base, 'runs'), run = join(root, 'demo'); await mkdir(run, {recursive:true});
@@ -12,11 +32,7 @@ async function fixture(t, status = 'provisional') {
   await writeFile(join(run, 'manifest.json'), JSON.stringify(manifest));
   await writeFile(join(run, 'branch.json'), JSON.stringify({status:'ok'}));
   await writeFile(join(run, 'trace.json'), JSON.stringify({steps:[{step:'image',costUsd:0.1}], history:['preserved']}));
-  const json = Buffer.from(JSON.stringify({ asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [] }] }));
-  const paddedLength = Math.ceil(json.length / 4) * 4;
-  const glb = Buffer.alloc(20 + paddedLength, 0x20);
-  glb.write('glTF'); glb.writeUInt32LE(2,4); glb.writeUInt32LE(glb.length,8);
-  glb.writeUInt32LE(paddedLength,12); glb.writeUInt32LE(0x4e4f534a,16); json.copy(glb,20);
+  const glb = makeGlb();
   const source = join(base, 'input.glb'); await writeFile(source, glb);
   return {root, run, source, glb};
 }
@@ -28,13 +44,40 @@ test('attaches a pre-generated model and retains trace data', async t => {
  assert.equal(JSON.parse(await readFile(join(f.run,'manifest.json'))).status,'complete');
  await assert.rejects(attachGlb({slug:'demo',glbPath:f.source,outputRoot:f.root}),/already exists/);
 });
+test('records the selected provider and measured duration', async t => {
+ for (const [provider, model] of [['sam3dobjects','Meta SAM 3D Objects (via Tattva Cloud Run)'],['triposplat','TripoSplat']]) {
+  const f=await fixture(t); await attachGlb({slug:'demo',glbPath:f.source,outputRoot:f.root,provider,ms:1234.5});
+  const trace=JSON.parse(await readFile(join(f.run,'trace.json')));
+  assert.deepEqual(trace.steps[1],{step:'3d',model,provider,ms:1234.5,costUsd:null,source:'gen3d-offline'});
+ }
+});
 test('rejects invalid GLB, traversal, simulated run, and oversize cache without changes', async t => {
  const f=await fixture(t); const original=await readFile(join(f.run,'trace.json'));
  await assert.rejects(attachGlb({slug:'../demo',glbPath:f.source,outputRoot:f.root}),/slug/);
+ await assert.rejects(attachGlb({slug:'demo',glbPath:f.source,outputRoot:f.root,maxBytes:80_000_001}),/cache size cap/);
  await writeFile(f.source,Buffer.alloc(20)); await assert.rejects(attachGlb({slug:'demo',glbPath:f.source,outputRoot:f.root}),/Invalid GLB/);
  await writeFile(f.source,f.glb); await assert.rejects(attachGlb({slug:'demo',glbPath:f.source,outputRoot:f.root,maxBytes:1}),/size cap/);
  await writeFile(join(f.run,'manifest.json'),JSON.stringify({status:'simulated'})); await assert.rejects(attachGlb({slug:'demo',glbPath:f.source,outputRoot:f.root}),/provisional/);
  assert.deepEqual(await readFile(join(f.run,'trace.json')),original);
+});
+test('rejects malformed chunks, JSON metadata, and scenes without geometry', async t => {
+ const f=await fixture(t);
+ const invalid = [
+  Buffer.from('glTF\x02\x00\x00\x00\x0c\x00\x00\x00'),
+  makeGlb(validDocument,{jsonType:0x004e4942}),
+  makeGlb(validDocument,{jsonLengthAdjust:1}),
+  makeGlb(validDocument,{malformedJson:true}),
+  makeGlb({...validDocument,asset:{version:'1.0'}}),
+  makeGlb({...validDocument,scene:2}),
+  makeGlb({...validDocument,scenes:[{nodes:[0]}],nodes:[{}]}),
+  makeGlb({...validDocument,meshes:[{primitives:[{attributes:{POSITION:9}}]}]}),
+ ];
+ for (const glb of invalid) {
+  await writeFile(f.source,glb);
+  await assert.rejects(attachGlb({slug:'demo',glbPath:f.source,outputRoot:f.root}),/Invalid GLB|GLB /);
+ }
+ assert.equal(JSON.parse(await readFile(join(f.run,'manifest.json'))).status,'provisional');
+ await assert.rejects(readFile(join(f.run,'model.glb')),{code:'ENOENT'});
 });
 test('refuses to replace prior 3D provenance', async t => {
  const f=await fixture(t); await writeFile(join(f.run,'trace.json'),JSON.stringify({steps:[{step:'3d',model:'Chronos'}]}));

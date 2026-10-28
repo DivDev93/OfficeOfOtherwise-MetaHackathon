@@ -95,6 +95,14 @@
       "ms": 7024,
       "costUsd": 0.05,
       "prompt": "sailboat"
+    },
+    {
+      "step": "3d",
+      "model": "Meta SAM 3D Objects (via Tattva Cloud Run)",
+      "provider": "sam3dobjects",
+      "ms": 22000,
+      "costUsd": null,
+      "source": "gen3d-offline"
     }
   ],
   "selection": {

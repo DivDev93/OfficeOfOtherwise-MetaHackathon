@@ -15,7 +15,12 @@ export function provenance(trace = []) {
   return groups.map(([label, model, matches]) => {
     const items = trace.filter(s => !s.summary && matches(s));
     const sum = key => items.length && items.every(s => typeof s[key] === 'number' && Number.isFinite(s[key])) ? items.reduce((n, s) => n + s[key], 0) : null;
-    if (label === '3D' && items.some(s => s.source === 'gen3d-offline')) model = 'Tattva TRELLIS (existing infrastructure, pre-generated)';
+    if (label === '3D' && items.some(s => s.source === 'gen3d-offline')) {
+      const providers = new Set(items.map(s => s.provider ?? 'trellis'));
+      if (providers.size === 1 && providers.has('sam3dobjects')) model = 'Meta SAM 3D Objects (via Tattva Cloud Run)';
+      else if (providers.size === 1 && providers.has('trellis')) model = 'Tattva TRELLIS (existing infrastructure, pre-generated)';
+      else if (providers.size === 1 && providers.has('triposplat')) model = 'TripoSplat';
+    }
     return { label, model, ms: sum('ms'), costUsd: sum('costUsd'), available: items.length > 0 };
   });
 }

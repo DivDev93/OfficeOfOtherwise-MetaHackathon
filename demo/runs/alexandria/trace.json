@@ -103,6 +103,14 @@
       "ms": 6012,
       "costUsd": 0.05,
       "prompt": "brass orrery"
+    },
+    {
+      "step": "3d",
+      "model": "Meta SAM 3D Objects (via Tattva Cloud Run)",
+      "provider": "sam3dobjects",
+      "ms": 26693,
+      "costUsd": null,
+      "source": "gen3d-offline"
     }
   ],
   "selection": {

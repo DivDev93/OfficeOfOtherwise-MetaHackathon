@@ -30,4 +30,6 @@ test('offline 3D provenance identifies pre-generation and unknown cost and durat
  assert.equal(item.model,'Tattva TRELLIS (existing infrastructure, pre-generated)');
  assert.equal(item.ms,null); assert.equal(item.costUsd,null);
  assert.equal(provenance([{step:'chronos',ms:20,costUsd:0}])[5].model,'Tattva TRELLIS (existing infrastructure)');
+ assert.equal(`3D: ${provenance([{step:'3d',source:'gen3d-offline',provider:'sam3dobjects',ms:12,costUsd:null}])[5].model}`,'3D: Meta SAM 3D Objects (via Tattva Cloud Run)');
+ assert.equal(provenance([{step:'3d',source:'gen3d-offline',provider:'trellis',ms:12,costUsd:null}])[5].model,'Tattva TRELLIS (existing infrastructure, pre-generated)');
 });

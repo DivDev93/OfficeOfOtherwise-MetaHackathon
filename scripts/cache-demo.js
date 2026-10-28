@@ -11,7 +11,7 @@ export const CURATED = Object.freeze([
   { id:'green-sahara', divergence:'What if the Sahara had stayed green?' },
   { id:'mechanisms', divergence:'What if Antikythera-style mechanisms had scaled into industry?' },
 ]);
-const MAX_BYTES = 40_000_000;
+const MAX_BYTES = 80_000_000;
 const safeText = value => {
   if (typeof value !== 'string') return undefined;
   // Generated free text is public only if it passes both the topic keyword layer and a basic secret/URL screen.

@@ -2,7 +2,12 @@ import { lstat, readFile, readdir, mkdtemp, cp, writeFile, rename, rm, rmdir } f
 import { resolve, join, basename, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const MAX_BYTES = 40_000_000;
+const MAX_BYTES = 80_000_000;
+const PROVIDER_MODELS = {
+  trellis: 'Tattva TRELLIS (existing infrastructure)',
+  sam3dobjects: 'Meta SAM 3D Objects (via Tattva Cloud Run)',
+  triposplat: 'TripoSplat',
+};
 async function noSymlinks(path) {
   let current = resolve(path);
   while (true) {
@@ -34,16 +39,54 @@ async function removeStaging(path, root) {
   await rm(absolute, { recursive: true, force: true });
 }
 
+function validateGlb(bytes) {
+  if (bytes.length < 20 || bytes.toString('ascii', 0, 4) !== 'glTF' || bytes.readUInt32LE(4) !== 2 || bytes.readUInt32LE(8) !== bytes.length) throw new Error('Invalid GLB asset');
+  let offset = 12, json;
+  while (offset < bytes.length) {
+    if (offset + 8 > bytes.length) throw new Error('Invalid GLB chunk boundary');
+    const length = bytes.readUInt32LE(offset), type = bytes.readUInt32LE(offset + 4), start = offset + 8, end = start + length;
+    if (length % 4 !== 0 || end > bytes.length) throw new Error('Invalid GLB chunk boundary');
+    if (offset === 12) {
+      if (type !== 0x4e4f534a) throw new Error('GLB must begin with a JSON chunk');
+      try { json = JSON.parse(bytes.toString('utf8', start, end)); } catch { throw new Error('Invalid GLB JSON chunk'); }
+    } else if (type === 0x4e4f534a) throw new Error('GLB contains multiple JSON chunks');
+    offset = end;
+  }
+  if (offset !== bytes.length || !json || json.asset?.version !== '2.0') throw new Error('Invalid GLB asset metadata');
+  const scenes = json.scenes, nodes = json.nodes, meshes = json.meshes, accessors = json.accessors ?? [];
+  const sceneIndex = json.scene;
+  if (!Array.isArray(scenes) || !Number.isInteger(sceneIndex) || sceneIndex < 0 || sceneIndex >= scenes.length || !Array.isArray(nodes) || !Array.isArray(meshes) || !Array.isArray(scenes[sceneIndex]?.nodes) || !scenes[sceneIndex].nodes.length) throw new Error('GLB must contain a selected scene');
+  const visited = new Set(), pending = [...scenes[sceneIndex].nodes]; let hasMesh = false;
+  while (pending.length) {
+    const index = pending.pop();
+    if (!Number.isInteger(index) || index < 0 || index >= nodes.length) throw new Error('GLB scene references an invalid node');
+    if (visited.has(index)) continue;
+    visited.add(index);
+    const node = nodes[index];
+    if (node.mesh !== undefined) {
+      if (!Number.isInteger(node.mesh) || node.mesh < 0 || node.mesh >= meshes.length) throw new Error('GLB scene references an invalid mesh');
+      const primitives = meshes[node.mesh]?.primitives;
+      if (!Array.isArray(primitives) || !primitives.length || primitives.some(primitive => !Number.isInteger(primitive.attributes?.POSITION) || primitive.attributes.POSITION < 0 || primitive.attributes.POSITION >= accessors.length)) throw new Error('GLB mesh has no valid position geometry');
+      hasMesh = true;
+    }
+    if (node.children !== undefined) {
+      if (!Array.isArray(node.children)) throw new Error('Invalid GLB node children');
+      pending.push(...node.children);
+    }
+  }
+  if (!hasMesh) throw new Error('GLB selected scene contains no mesh');
+}
+
 export async function attachGlb({ slug, glbPath, provider = 'trellis', ms = null, outputRoot = 'demo/runs', maxBytes = MAX_BYTES }) {
   if (typeof slug !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) throw new Error('Invalid run slug');
-  if (provider !== 'trellis') throw new Error('Unsupported provider');
+  if (!Object.hasOwn(PROVIDER_MODELS, provider)) throw new Error('Unsupported provider');
   if (ms !== null && (!Number.isFinite(ms) || ms < 0)) throw new Error('Invalid duration');
   if (!Number.isInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_BYTES) throw new Error('Invalid cache size cap');
   const root = resolve(outputRoot), run = join(root, slug), source = resolve(glbPath);
   await noSymlinks(root); await noSymlinks(run); await noSymlinks(source);
   const total = await size(root);
   const bytes = await regular(source);
-  if (bytes.length < 20 || bytes.toString('ascii', 0, 4) !== 'glTF' || bytes.readUInt32LE(4) !== 2 || bytes.readUInt32LE(8) !== bytes.length) throw new Error('Invalid GLB asset');
+  validateGlb(bytes);
   try { await lstat(join(run, 'model.glb')); throw new Error('Model already exists'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const manifest = JSON.parse(await regular(join(run, 'manifest.json')));
   if (manifest.status !== 'provisional' || manifest.reason !== '3D model not generated') throw new Error('Run is not an eligible provisional cache');
@@ -51,7 +94,7 @@ export async function attachGlb({ slug, glbPath, provider = 'trellis', ms = null
   if (branch.status !== 'ok') throw new Error('Run is not eligible');
   const trace = JSON.parse(await regular(join(run, 'trace.json')));
   if (!Array.isArray(trace.steps) || trace.steps.some(step => /3d|chronos/i.test(step.step ?? ''))) throw new Error('Existing 3D provenance cannot be replaced');
-  trace.steps.push({ step: '3d', model: 'Tattva TRELLIS (existing infrastructure)', provider: 'trellis', ms, costUsd: null, source: 'gen3d-offline' });
+  trace.steps.push({ step: '3d', model: PROVIDER_MODELS[provider], provider, ms, costUsd: null, source: 'gen3d-offline' });
   manifest.status = 'complete'; delete manifest.reason;
   const stage = await mkdtemp(join(root, '.attach-stage-'));
   let backup;
@@ -69,7 +112,7 @@ export async function attachGlb({ slug, glbPath, provider = 'trellis', ms = null
 }
 async function main() {
   const [slug, glbPath, ...args] = process.argv.slice(2);
-  if (!slug || !glbPath) throw new Error('Usage: npm run attach-glb -- <slug> <path.glb> [--provider trellis] [--ms <ms>]');
+  if (!slug || !glbPath) throw new Error('Usage: npm run attach-glb -- <slug> <path.glb> [--provider sam3dobjects|trellis|triposplat] [--ms <actual-ms>]');
   const options = { slug, glbPath }; const seen = new Set();
   while (args.length) {
     const flag = args.shift(), value = args.shift();
@@ -78,6 +121,6 @@ async function main() {
     if (flag === '--provider') options.provider = value;
     else { if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) throw new Error('Invalid duration'); options.ms = Number(value); }
   }
-  await attachGlb(options); console.log(`Attached pre-generated TRELLIS model to ${slug}`);
+  await attachGlb(options); console.log(`Attached pre-generated ${PROVIDER_MODELS[options.provider ?? 'trellis']} model to ${slug}`);
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { console.error(error.message); process.exitCode = 1; });

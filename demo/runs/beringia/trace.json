@@ -70,6 +70,14 @@
       "ms": 4299,
       "costUsd": 0.05,
       "prompt": "sled"
+    },
+    {
+      "step": "3d",
+      "model": "Meta SAM 3D Objects (via Tattva Cloud Run)",
+      "provider": "sam3dobjects",
+      "ms": 20429,
+      "costUsd": null,
+      "source": "gen3d-offline"
     }
   ],
   "selection": {

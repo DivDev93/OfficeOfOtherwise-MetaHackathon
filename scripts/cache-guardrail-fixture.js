@@ -24,7 +24,7 @@ export async function cacheGuardrailFixture(root = 'demo/runs') {
   }
   await mkdir(root, { recursive: true });
   const projected = (await size(root)) + Object.values(files).reduce((sum, value) => sum + Buffer.byteLength(JSON.stringify(value, null, 2) + '\n'), 0);
-  if (projected >= 40_000_000) throw new Error('Cache size cap exceeded');
+  if (projected >= 80_000_000) throw new Error('Cache size cap exceeded');
   const destination = join(root, 'guardrail');
   try { await lstat(destination); throw new Error('Guardrail replay already exists'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const stage = await mkdtemp(join(resolve(root), '.guardrail-stage-'));
