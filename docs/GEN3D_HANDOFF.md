@@ -2,6 +2,8 @@
 
 The gen3d MCP was exposed in this session, but the Alexandria and Green Sahara generation calls returned errors without GLBs. Both were submitted around 2026-10-28 02:57:21 UTC; their observed elapsed times were approximately 300 and 600 seconds. The captured results did not retain diagnostic details. Check the service's job history or operator logs for the two object IDs before retrying: either job might have run and incurred charges. Two of the six allowed generation attempts have been used, leaving at most four. Do not run the MCP server directly or move its credentials into this repository.
 
+A later read-only search of accessible Cloud Run logs found failure markers mentioning `alexandria` at 03:05:41 UTC and `green-sahara` at 03:09:38 UTC on 2026-10-28. The checked fields did not supply a request identifier or a cause, so these matching object IDs are useful investigation leads rather than proof of either original call's outcome. Two accessible projects did not permit the log lookup.
+
 Pass `provider="trellis"`, `debug=false`, the full hero image and the explicit mask. These paths are on the local Windows machine; `out/` is not committed. The Beringia mask is fragmented and is **not accepted**. Antikythera has no mask. Do not generate those models until those problems are resolved and their 2D runs are staged.
 
 | object_id | hero image | mask |
