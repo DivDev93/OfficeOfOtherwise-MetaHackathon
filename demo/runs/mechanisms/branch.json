@@ -1,0 +1,83 @@
+{
+  "status": "ok",
+  "divergence": "What if Antikythera-style mechanisms had scaled into industry?",
+  "branches": [
+    {
+      "id": "b1",
+      "title": "Geared Tides Guide Ocean Sailors",
+      "year": -70,
+      "place": {
+        "name": "Rhodes, Greece",
+        "lat": 36.443,
+        "lon": 28.227
+      },
+      "summary": "Rhodes workshops produce portable geared calculators that predict tides, lunar phases, and star positions for long sea voyages. Scaling the Antikythera gear trains into standardized brass instruments makes reliable open-ocean navigation possible centuries earlier.",
+      "scene": "At dawn, a captain cranks a palm-sized brass cosmos while its pointers sweep over a painted Aegean chart.",
+      "score": 9,
+      "reviewNote": "Direct portable use of original astronomical gearing; Rhodes workshops and timing highly plausible."
+    },
+    {
+      "id": "b4",
+      "title": "Mechanical Heavens Enchant Public Theaters",
+      "year": 280,
+      "place": {
+        "name": "Athens, Greece",
+        "lat": 37.984,
+        "lon": 23.728
+      },
+      "summary": "Athenian artisans scale celestial gearwork into room-sized planetariums and self-moving mythological automata for festivals and schools. Because the original mechanisms already encoded planetary cycles in bronze, enlarging them turns calculation into immersive public art and astronomy education.",
+      "scene": "Children gasp as a bronze Helios drives his chariot around a domed ceiling, overtaking a silver moon on geared tracks.",
+      "score": 8,
+      "reviewNote": "Scaling celestial gears into automata is direct, though post-sack Athens weakens timing."
+    },
+    {
+      "id": "b2",
+      "title": "Clockwork Pumps Green The Delta",
+      "year": 45,
+      "place": {
+        "name": "Alexandria, Egypt",
+        "lat": 31.2,
+        "lon": 29.919
+      },
+      "summary": "Alexandrine engineers link waterwheels to Antikythera-style gearboxes driving Archimedes screws and timed sluices across the Nile Delta. Precise ratios from astronomical mechanisms allow reliable low-lift irrigation, expanding farms and wetlands far beyond annual floodplains.",
+      "scene": "Rows of clicking wooden gear towers lift glittering ribbons of Nile water into lotus-lined canals at sunset.",
+      "score": 7,
+      "reviewNote": "Industrial gear transfer plausible, but power pumps need torque, not astronomical precision."
+    }
+  ],
+  "hero": {
+    "branchId": "b1",
+    "imagePrompt": "Photorealistic dawn scene on an ancient Greek ship departing Rhodes, centered on one large brass orrery resting on a wooden table in sharp focus in the foreground, its interlocking gears, circular engraved dials and sweeping pointers clearly visible as a captain's hands turn its small crank over a painted Aegean chart, with softly blurred sailors, mast, rigging and calm Aegean sea in golden morning light behind it, historically authentic details and no modern elements.",
+    "subject": "mechanism"
+  },
+  "trace": [
+    {
+      "step": "policy:prompt",
+      "model": "muse-wonder-1.0",
+      "ms": 5056,
+      "allowed": true
+    },
+    {
+      "step": "propose",
+      "model": "muse-wonder-1.0",
+      "ms": 17913,
+      "costUsd": 0.056448,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "policy:branches",
+      "model": "muse-wonder-1.0",
+      "ms": 10598
+    },
+    {
+      "step": "review",
+      "model": "muse-wonder-1.0",
+      "ms": 19801,
+      "costUsd": 0.0649352,
+      "attempt": 1,
+      "ok": true
+    }
+  ],
+  "costUsd": 0.20493840000000008
+}

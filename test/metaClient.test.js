@@ -63,7 +63,7 @@ test('meteredPost charges the supplied per-call cost and respects the cap', asyn
   assert.equal(fetch.calls.length, 1);
 });
 
-test('concurrent calls reserve the budget and release reservations on failure', async () => {
+test('concurrent calls retain the reservation after a failed request', async () => {
   let finish;
   let calls = 0;
   const fetch = async () => {
@@ -82,7 +82,7 @@ test('concurrent calls reserve the budget and release reservations on failure', 
   finish();
   await assert.rejects(first, MetaApiError);
   await settled;
-  assert.equal(client.remaining(), 0.1);
+  assert.ok(Math.abs(client.remaining() - 0.04) < 1e-9);
 });
 
 test('rejects invalid caps and call costs', async () => {
@@ -91,12 +91,11 @@ test('rejects invalid caps and call costs', async () => {
   for (const costUsd of [-1, NaN, Infinity]) await assert.rejects(client.meteredPost('/x', {}, { costUsd }), /finite and nonnegative/);
 });
 
-test('retries 429 then succeeds; gives up with MetaApiError on 400', async () => {
+test('does not retry paid POST failures and gives up with MetaApiError', async () => {
   const fetch = fakeFetch([{ status: 429, body: 'slow down' }, { status: 200, body: RESPONSE_FIXTURE }]);
   const client = createMetaClient({ ...base, fetch });
-  const out = await client.respond({ model: 'muse-spark-1.3', input: 'x' });
-  assert.equal(out.text, 'Paris.');
-  assert.equal(fetch.calls.length, 2);
+  await assert.rejects(client.respond({ model: 'muse-spark-1.3', input: 'x' }), MetaApiError);
+  assert.equal(fetch.calls.length, 1);
 
   const bad = createMetaClient({ ...base, fetch: fakeFetch([{ status: 400, body: { error: 'bad model' } }]) });
   await assert.rejects(bad.respond({ model: 'nope', input: 'x' }), MetaApiError);
@@ -114,10 +113,10 @@ test('accepts MODEL_API_KEY (the name Meta docs use)', async () => {
   assert.equal(fetch.calls[0].init.headers.Authorization, 'Bearer k2');
 });
 
-test('unknown models are priced conservatively and flagged estimated', () => {
-  const { estimated } = costFromUsage('muse-wonder-1.0', { input_tokens: 10, output_tokens: 10 });
+test('unknown models are priced at the highest known rates and flagged estimated', () => {
+  const { estimated } = costFromUsage('future-model', { input_tokens: 10, output_tokens: 10 });
   assert.equal(estimated, true);
-  assert.equal(costFromUsage('muse-spark-1.1', {}).estimated, false);
+  assert.equal(costFromUsage('muse-spark-1.1', { input_tokens: 0, output_tokens: 0 }).estimated, false);
 });
 
 test('outputText walks output[] when output_text is absent', () => {
@@ -132,4 +131,65 @@ test('rejects a non-URL base (e.g. key pasted into META_API_BASE_URL) and trims 
   await client.respond({ model: 'muse-spark-1.3', input: 'x' });
   assert.equal(fetch.calls[0].url, 'https://api.meta.ai/v1/responses');
   assert.equal(fetch.calls[0].init.headers.Authorization, 'Bearer k3');
+});
+
+test('daily cap is shared between clients using the same ledger', async () => {
+  const ledger = memoryLedger();
+  let resolveFirst;
+  const first = createMetaClient({ ...base, ledger, dailyCapUsd: 0.1, fetch: async () => { await new Promise(r => { resolveFirst = r; }); return { ok: true, json: async () => ({}) }; } });
+  let secondCalls = 0;
+  const second = createMetaClient({ ...base, ledger, dailyCapUsd: 0.1, fetch: async () => { secondCalls++; return { ok: true, json: async () => ({}) }; } });
+  const running = first.meteredPost('/images', {}, { costUsd: 0.06 });
+  await assert.rejects(second.meteredPost('/images', {}, { costUsd: 0.06 }), SpendCapError);
+  assert.equal(secondCalls, 0);
+  resolveFirst(); await running;
+  await assert.rejects(second.meteredPost('/images', {}, { costUsd: 0.06 }), SpendCapError);
+});
+
+test('missing usage retains its reservation and blocks future calls', async () => {
+  const ledger = memoryLedger();
+  const fetch = fakeFetch([{ status: 200, body: { output_text: 'fixture' } }]);
+  const client = createMetaClient({ ...base, ledger, fetch });
+  await assert.rejects(client.respond({ model: 'muse-spark', input: 'x' }), /usage unavailable/);
+  assert.equal(ledger.total(), 0);
+  assert.ok(ledger.reserved() > 0);
+  await assert.rejects(client.respond({ model: 'muse-spark', input: 'x' }), SpendCapError);
+  assert.equal(fetch.calls.length, 1);
+});
+
+test('actual cost above reservation is retained and blocks future calls', async () => {
+  const ledger = memoryLedger();
+  const fetch = fakeFetch([{ status: 200, body: { output_text: 'fixture', usage: { input_tokens: 1, output_tokens: 10000 } } }]);
+  const client = createMetaClient({ ...base, ledger, fetch });
+  const result = await client.respond({ model: 'muse-spark', input: 'x', maxOutputTokens: 1 });
+  assert.equal(ledger.total(), result.costUsd);
+  await assert.rejects(client.respond({ model: 'muse-spark', input: 'x' }), SpendCapError);
+});
+
+test('rejects unsafe transport and never exposes upstream error content', async () => {
+  assert.throws(() => createMetaClient({ ...base, baseUrl: 'http://example.com' }), /META_API_BASE_URL/);
+  assert.throws(() => createMetaClient({ ...base, baseUrl: 'https://user:password@example.com' }), /META_API_BASE_URL/);
+  assert.doesNotThrow(() => createMetaClient({ ...base, baseUrl: 'http://localhost:1234' }));
+  const fetch = fakeFetch([{ status: 503, body: 'sentinel-secret' }]);
+  const client = createMetaClient({ ...base, fetch });
+  await assert.rejects(client.respond({ model: 'muse-spark', input: 'x' }), e => { assert.doesNotMatch(JSON.stringify(e) + e.message, /sentinel-secret/); return e instanceof MetaApiError; });
+  assert.equal(fetch.calls[0].init.redirect, 'error');
+  assert.equal(fetch.calls.length, 1);
+});
+
+test('rejects unmetered tools and output limit overrides before making a request', async () => {
+  const fetch = fakeFetch([]);
+  const client = createMetaClient({ ...base, fetch });
+  await assert.rejects(client.respond({ model: 'muse-wonder-1.0', input: 'x', max_output_tokens: 999999 }), /Unsupported/);
+  await assert.rejects(client.respond({ model: 'muse-wonder-1.0', input: 'x', tools: [{ type: 'web_search' }] }), /Unsupported/);
+  assert.equal(fetch.calls.length, 0);
+});
+
+test('invalid usage retains the reservation and stops further calls', async () => {
+  const ledger = memoryLedger();
+  const fetch = fakeFetch([{ status: 200, body: { usage: { input_tokens: 2, output_tokens: 1, input_tokens_details: { cached_tokens: 3 } } } }]);
+  const client = createMetaClient({ ...base, fetch, ledger });
+  await assert.rejects(client.respond({ model: 'muse-wonder-1.0', input: 'x' }), /usage unavailable or invalid/);
+  assert.ok(ledger.reserved() > 0);
+  await assert.rejects(client.respond({ model: 'muse-wonder-1.0', input: 'x' }), SpendCapError);
 });

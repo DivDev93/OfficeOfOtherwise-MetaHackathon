@@ -13,6 +13,7 @@ credentials*.json
 # generated outputs (cached demo assets live in Supabase / GCS, not git)
 out/
 *.glb
+!demo/runs/**/model.glb
 *.ply
 *.splat
 *.mp4

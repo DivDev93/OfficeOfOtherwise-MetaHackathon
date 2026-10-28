@@ -1,0 +1,89 @@
+{
+  "steps": [
+    {
+      "step": "policy:prompt",
+      "model": "muse-wonder-1.0",
+      "ms": 5093,
+      "costUsd": 0,
+      "reused": true,
+      "allowed": true
+    },
+    {
+      "step": "propose",
+      "model": "muse-wonder-1.0",
+      "ms": 20937,
+      "costUsd": 0,
+      "originalCostUsd": 0.071076,
+      "reused": true,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "policy:branches",
+      "model": "muse-wonder-1.0",
+      "ms": 11554,
+      "costUsd": 0,
+      "reused": true
+    },
+    {
+      "step": "review",
+      "model": "muse-wonder-1.0",
+      "ms": 20707,
+      "costUsd": 0,
+      "originalCostUsd": 0.06692,
+      "reused": true,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "image-prompt-override",
+      "model": "operator-authored",
+      "costUsd": 0,
+      "originalCostUsd": 0,
+      "prompt": "Isolated complete empty traditional wooden sled with curved runners, fully visible on snow in Beringia, simple uncluttered background, no cargo or people; photorealistic."
+    },
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 6071,
+      "costUsd": 0.015984
+    },
+    {
+      "step": "policy:reuse",
+      "model": "muse-wonder-1.0",
+      "ms": 6073,
+      "costUsd": 0,
+      "originalCostUsd": 0.015983999999999998,
+      "summary": true,
+      "allowed": true
+    },
+    {
+      "step": "image",
+      "model": "muse-image-1.0",
+      "ms": 16978,
+      "costUsd": 0.1,
+      "prompt": "Isolated complete empty traditional wooden sled with curved runners, fully visible on snow in Beringia, simple uncluttered background, no cargo or people; photorealistic."
+    },
+    {
+      "step": "segment",
+      "model": "sam-3.1",
+      "ms": 4299,
+      "costUsd": 0.05,
+      "prompt": "sled"
+    },
+    {
+      "step": "3d",
+      "model": "Meta SAM 3D Objects (via Tattva Cloud Run)",
+      "provider": "sam3dobjects",
+      "ms": 20429,
+      "costUsd": null,
+      "source": "gen3d-offline"
+    }
+  ],
+  "selection": {
+    "confidence": 0.7037037014961243,
+    "area": 354013,
+    "prompt": "sled"
+  },
+  "costUsd": 0.1659839999999999
+}
