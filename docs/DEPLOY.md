@@ -2,6 +2,8 @@
 
 This guide prepares a replay-first Cloud Run service. It does not deploy anything by itself. The image defaults `DEMO_REPLAY_ONLY=true`; the server returns 503 for live-run requests before reading credentials or invoking the pipeline. The container listens on `0.0.0.0:$PORT`; Cloud Run supplies `PORT` (8080 by default). `/health` is a lightweight GET/HEAD probe. Replay data comes from the reviewed `demo/runs/` manifests and assets.
 
+The current public deployment is the [Office of Otherwise replay demo](https://office-otherwise-875096283797.northamerica-northeast2.run.app), revision `office-otherwise-00001-84n`. It is configured for replay only; live model generation is disabled.
+
 ## Build and publish
 
 Run these Bash commands from the repository root. Set `PROJECT_ID` to the intended Google Cloud project first. The Artifact Registry repository is created once; image tags use the current Git revision.
@@ -64,4 +66,4 @@ Treat this Cloud Run setup as **replay-only** until live spending is redesigned 
 
 The current live pipeline additionally fails closed without the pre-established task budget checkpoint and ledger under `out/`. The image intentionally excludes `out/`, so simply supplying secrets does not enable a valid live run. The deployment command wires both requested secrets but keeps `DEMO_REPLAY_ONLY=true`; the server gate prevents the access code from enabling live requests. `DEMO_3D_ENABLED=false` also keeps the optional 3D provider disabled. Do not remove the replay-only setting or initialize/reset a budget to bypass these checks.
 
-After a replay-only deployment, check `/health`, `/`, `/runs`, and a listed run's assets from an independent client. The pipeline supports Meta-only live generation when `DEMO_3D_ENABLED=false`; 3D remains opt-in and requires the separate confirmed Chronos configuration. Before enabling any live generation, use an approved durable shared ledger/checkpoint with cross-instance atomic reservations, retain the access code privately, and verify that failed/uncertain requests remain accounted for. Do not add deployment URLs, secret values, or provider endpoints to this repository.
+After a replay-only deployment, check `/health`, `/`, `/runs`, and a listed run's assets from an independent client. The pipeline supports Meta-only live generation when `DEMO_3D_ENABLED=false`; 3D remains opt-in and requires the separate confirmed Chronos configuration. Before enabling any live generation, use an approved durable shared ledger/checkpoint with cross-instance atomic reservations, retain the access code privately, and verify that failed/uncertain requests remain accounted for. Do not add credentials, private provider endpoints, or other deployment URLs to this repository. The public replay URL above is intentionally published for the hackathon submission.

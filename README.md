@@ -8,6 +8,10 @@ Built for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026). S
 
 > Status: local branch → image → subject cutout harness, validated with fixtures and live fresh-agent and saved-branch runs. Alexandria, Beringia, Green Sahara and Mechanisms now have separately generated SAM 3D Objects models; all four show `3D: Meta SAM 3D Objects (via Tattva Cloud Run)`. See [Built during the hackathon](#built-during-the-hackathon).
 
+## Public demo
+
+[Open the Office of Otherwise replay demo](https://office-otherwise-875096283797.northamerica-northeast2.run.app). The deployed revision, `office-otherwise-00001-84n`, is replay-only: live model generation is disabled. Explore the four cached 3D runs for Alexandria, Beringia, Green Sahara and Mechanisms; they do not make live Meta or 3D provider calls.
+
 ## How it works
 
 | Step | Meta model | Module |
@@ -39,7 +43,7 @@ npm run demo           # local replay, http://localhost:3000
 
 The harness uses one metered Meta client and writes `branch.json`, `hero.png`, `mask.png`, `cutout.png`, and `trace.json` to `out/<timestamp>/`. It prints each step's timing and cost, and the selected mask's confidence. Saved branch traces remain available as provenance but are excluded from the new run's cost. An optional subject override is recorded in the trace and does not alter the saved branch. Reused content and any override get one fresh policy check before generation, billed separately. Blocked or empty branches stop before image generation.
 
-The harness defaults to a 3D handoff and fails before Meta calls if verified Chronos configuration is unavailable; use `--no-3d` for local 2D-only runs. The demo server defaults to replay; it requires a configured access code, budget checkpoint and verified Chronos TRELLIS configuration for live generation. Alexandria, Beringia, Green Sahara and Mechanisms are completed 3D replays. The guardrail replay is a labeled simulation of an unavailable classifier, not a recorded model verdict. The four model files bring the cached demo archive to 46,343,279 bytes; the cache cap is 80 MB. See [deployment notes](docs/DEPLOY.md).
+The harness defaults to a 3D handoff and fails before Meta calls if verified Chronos configuration is unavailable; use `--no-3d` for local 2D-only runs. The deployed public demo is replay-only, with live model generation disabled. For local live generation, the demo server requires a configured access code, budget checkpoint and verified Chronos TRELLIS configuration. Alexandria, Beringia, Green Sahara and Mechanisms are completed 3D replays. The guardrail replay is a labeled simulation of an unavailable classifier, not a recorded model verdict. The four model files bring the cached demo archive to 46,343,279 bytes; the cache cap is 80 MB. See [deployment notes](docs/DEPLOY.md).
 
 For a separately generated GLB, attach it to a provisional cached run with `npm run attach-glb -- <slug> <path-to-model.glb> --provider sam3dobjects --ms <actual-elapsed-ms>`. The command validates the GLB structure and records it as pre-generated, without claiming a live Chronos job. `sam3dobjects` displays the `3D: Meta SAM 3D Objects (via Tattva Cloud Run)` provenance badge; use it only when that provider produced the attached model. Omit `--ms` if the actual duration is unknown. The local demo cache is capped at 80 MB.
 

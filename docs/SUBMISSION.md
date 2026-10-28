@@ -1,6 +1,6 @@
 # Submission draft
 
-**Live demo:** [link pending deployment and verification]
+**Public replay demo:** [Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app) (deployed revision `office-otherwise-00001-84n`; replay-only, live generation disabled)
 
 ## Project description
 
@@ -19,5 +19,5 @@ Muse Wonder handles topic classification, branch proposal and review; Muse Image
 ## Judge setup
 
 1. Install Node 22 (at least 22.9.0), clone the public repository and run `npm ci --ignore-scripts` and `npm test`.
-2. Run `npm run demo` for local replay. Alexandria, Beringia, Green Sahara and Mechanisms are completed 3D replays. The public link requires verification.
-3. For live work, copy `.env.example` to `.env`, provide credentials privately, initialize the task checkpoint once using `npm run init-demo-budget`, and configure verified Chronos capability. For 2D-only generation use `npm run harness -- "What if the Library of Alexandria never burned?" --no-3d`. These commands make metered calls. Do not put credentials in the repository or submission.
+2. Open the public replay demo above or run `npm run demo` for local replay. Alexandria, Beringia, Green Sahara and Mechanisms are completed 3D replays. The hosted deployment does not enable live model generation.
+3. For optional local live work, copy `.env.example` to `.env`, provide credentials privately, initialize the task checkpoint once using `npm run init-demo-budget`, and configure verified Chronos capability. For 2D-only generation use `npm run harness -- "What if the Library of Alexandria never burned?" --no-3d`. These commands make metered calls. Do not put credentials in the repository or submission.
