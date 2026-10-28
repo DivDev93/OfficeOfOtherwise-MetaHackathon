@@ -13,3 +13,5 @@ The public deployment is replay-only. Use a cached story throughout; do not trig
 | 2:22–2:52 | Show the public repository, then end on the Earth and hero. “The technical core is a shared metered Meta client, fail-closed topic policy, reviewed geo-anchored branches, saved image and cutout artifacts, replayable provenance, and a full-width interactive 3D viewer. The impact is a way for people to explore how places and ideas might have changed.” |
 
 **Timing target:** 2:52, with an 8-second trim margin. The cutout-to-orbit sequence stays full width for 50 seconds. The orrery cutout misses Saturn and some thin components; the source scene and saved 3D model remain available.
+
+**Measured dry run:** 2:52 (172.0 seconds) on 2026-10-28 against the local replay, including browser action time. No live generation was invoked.
