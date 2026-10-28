@@ -70,6 +70,7 @@ async function sourceData(directory, { provisional2d = false } = {}) {
   const files={};
   for (const name of ['hero.png','mask.png','cutout.png']) files[name]=await readRegular(join(directory,name));
   try { files['model.glb']=await readRegular(join(directory,'model.glb')); } catch (error) { if (!provisional2d || error.code !== 'ENOENT') throw error; }
+  try { files['model.meshopt.glb']=await readRegular(join(directory,'model.meshopt.glb')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const png=Buffer.from([137,80,78,71,13,10,26,10]);
   for (const name of ['hero.png','mask.png','cutout.png']) if (!files[name].subarray(0,8).equals(png)) throw new Error('Invalid PNG asset');
   for (const name of ['hero.png','mask.png','cutout.png']) files[name]=displayPng(files[name]);
@@ -78,7 +79,9 @@ async function sourceData(directory, { provisional2d = false } = {}) {
     return {...cleaned,files,provisional:true};
   }
   if (!(trace.steps ?? []).some(t => t.step === '3d' && t.model === 'Tattva TRELLIS' && Number.isFinite(t.ms) && t.ms >= 0 && !t.error && t.ok !== false)) throw new Error('Completed run requires a successful 3D trace');
-  const glb=files['model.glb']; if (glb.length<20 || glb.toString('ascii',0,4)!=='glTF' || glb.readUInt32LE(4)!==2 || glb.readUInt32LE(8)!==glb.length) throw new Error('Invalid GLB asset');
+  for (const name of ['model.glb','model.meshopt.glb']) {
+    const glb=files[name]; if (glb && (glb.length<20 || glb.toString('ascii',0,4)!=='glTF' || glb.readUInt32LE(4)!==2 || glb.readUInt32LE(8)!==glb.length)) throw new Error('Invalid GLB asset');
+  }
   return {...cleaned,files};
 }
 /** Stage an already generated Meta 2D run without generating or claiming a 3D model. */

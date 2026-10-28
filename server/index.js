@@ -4,7 +4,7 @@ import { resolve, join, extname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
-const assets = new Set(['branch.json', 'trace.json', 'hero.png', 'mask.png', 'cutout.png', 'model.glb']);
+const assets = new Set(['branch.json', 'trace.json', 'hero.png', 'mask.png', 'cutout.png', 'model.glb', 'model.meshopt.glb']);
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.glb': 'model/gltf-binary', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
 const safeId = s => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(s);
 const TWO_D_ONLY_REASON = 'SAM 3.1 returned no mask; cutout and 3D model were not generated';
@@ -96,7 +96,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         } catch { /* optional metadata */ }
         const assetUrls = Object.fromEntries(present.map(name => [name, `/runs/${encodeURIComponent(id)}/${name}`]));
         const rendering = renderMetadata(branch);
-        return { id, title: value(branch.hero?.title) || value(branch.title) || value(branch.divergence) || id, divergence: value(branch.divergence), ...rendering, status: provisional?.status ?? rendering.status ?? (value(branch.status) || 'unknown'), ...((provisional?.reason ?? rendering.reason) ? { reason: provisional?.reason ?? rendering.reason } : {}), hasModel: present.includes('model.glb'), assets: present, assetUrls, branch };
+        return { id, title: value(branch.hero?.title) || value(branch.title) || value(branch.divergence) || id, divergence: value(branch.divergence), ...rendering, status: provisional?.status ?? rendering.status ?? (value(branch.status) || 'unknown'), ...((provisional?.reason ?? rendering.reason) ? { reason: provisional?.reason ?? rendering.reason } : {}), hasModel: present.includes('model.glb') || present.includes('model.meshopt.glb'), assets: present, assetUrls, branch };
       } catch { /* no valid manifest in this root */ }
     }
     return null;

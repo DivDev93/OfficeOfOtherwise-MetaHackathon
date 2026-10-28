@@ -5,12 +5,12 @@ export function retryPrompt(reframe = '') {
 export function formatYear(year) { return year < 0 ? `${Math.abs(year)} BCE` : `${year} CE`; }
 export function provenance(trace = []) {
   const groups = [
-    ['Policy', 'Muse Wonder', s => /policy/.test(s.step)],
+    ['Policy', 'Muse Spark 1.3', s => /policy/.test(s.step)],
     ['Branches', 'Muse Wonder', s => /propose/.test(s.step)],
     ['Review', 'Muse Wonder', s => /review/.test(s.step)],
     ['Image', 'Muse Image', s => s.step === 'image'],
     ['Cutout', 'SAM 3.1', s => /segment|cutout/.test(s.step)],
-    ['3D', 'Tattva TRELLIS (existing infrastructure)', s => /3d|chronos/i.test(s.step)],
+    ['3D', 'Meta SAM 3D Objects', s => /3d|chronos/i.test(s.step)],
   ];
   return groups.map(([label, model, matches]) => {
     const items = trace.filter(s => !s.summary && matches(s));
@@ -21,12 +21,30 @@ export function provenance(trace = []) {
       else if (providers.size === 1 && providers.has('trellis')) model = 'Tattva TRELLIS (existing infrastructure, pre-generated)';
       else if (providers.size === 1 && providers.has('triposplat')) model = 'TripoSplat';
     }
+    if (label === '3D' && items.some(s => s.provider === 'sam3dobjects' || /Meta SAM 3D Objects/i.test(s.model ?? ''))) model = 'Meta SAM 3D Objects (via Tattva Cloud Run)';
+    if (label === '3D' && items.some(s => s.step === 'chronos')) model = 'Tattva TRELLIS (existing infrastructure)';
     if (label === 'Policy') {
       const models = [...new Set(items.map(s => s.model).filter(m => typeof m === 'string' && m))];
       model = models.length ? models.map(policyModelLabel).join(' + ') : 'Muse Spark 1.3';
     }
     return { label, model, ms: sum('ms'), costUsd: sum('costUsd'), available: items.length > 0 };
   });
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const mb = bytes / (1024 * 1024);
+  return `${mb.toFixed(mb >= 10 ? 1 : 2)} MB`;
+}
+
+export function modelLoadProgress(event = {}) {
+  if (!Number.isFinite(event.loaded) || event.loaded < 0) return { value: null, label: 'Preparing 3D model…' };
+  const loaded = event.loaded;
+  if (Number.isFinite(event.total) && event.total > 0) {
+    const value = Math.max(0, Math.min(100, Math.round((loaded / event.total) * 100)));
+    return { value, label: `${value}% · ${formatBytes(loaded)} / ${formatBytes(event.total)}` };
+  }
+  return { value: null, label: `${formatBytes(loaded)} downloaded` };
 }
 function policyModelLabel(model) {
   if (model === 'muse-spark-1.3') return 'Muse Spark 1.3';
@@ -93,8 +111,15 @@ export function cachedRetryRun(runs, suggestion) {
   return runs.find(run => run.divergence === suggestion && !['blocked', 'simulated'].includes(run.status)) ?? null;
 }
 export function replayLabel(run) {
-  const title = run.divergence || run.title || run.id;
-  if (run.status === 'simulated') return `${title} · Simulated guardrail`;
+  const shortTitles = {
+    alexandria: 'Alexandria · Library survives',
+    beringia: 'Beringia · land bridge stays',
+    'green-sahara': 'Green Sahara · stays green',
+    guardrail: 'Simulated guardrail',
+    mechanisms: 'Mechanisms · Antikythera scales',
+  };
+  const title = shortTitles[run.id] || run.divergence || run.title || run.id;
+  if (run.status === 'simulated') return title.includes('Simulated guardrail') ? title : `${title} · Simulated guardrail`;
   if (run.status === 'provisional') return `${title} · 2D preview`;
   return title;
 }
