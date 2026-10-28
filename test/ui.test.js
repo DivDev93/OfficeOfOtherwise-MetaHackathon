@@ -1,9 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { retryPrompt, formatYear, provenance, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from '../web/logic.js';
+import { retryPrompt, formatYear, provenance, replayTraceGroups, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from '../web/logic.js';
 test('guardrail retry extracts a complete suggested question', () => { assert.equal(retryPrompt('Try “What if the Sahara had stayed green?”'), 'What if the Sahara had stayed green?'); assert.equal(retryPrompt('No suggestion'), ''); });
 test('SSE parser handles named events and line endings', () => { assert.deepEqual(parseSseBlock('event: propose\r\ndata: {"branches":[]}'), {event:'propose',data:{branches:[]}}); });
 test('provenance excludes summary duplicates and reports actual measured costs', () => { const p=provenance([{step:'branch-agent:propose',ms:1000,costUsd:.02},{step:'propose',ms:1000,costUsd:0,summary:true}]); assert.equal(p[1].ms,1000); assert.equal(p[1].costUsd,.02); assert.equal(p[2].available,false); assert.equal(formatYear(-50),'50 BCE'); });
+test('saved replay provenance is revealed in policy-to-3D order without summary duplicates', () => {
+ const records=[
+  {step:'policy:prompt',model:'muse-wonder-1.0'},
+  {step:'propose',model:'muse-wonder-1.0'},
+  {step:'review',model:'muse-wonder-1.0'},
+  {step:'image',model:'muse-image-1.0'},
+  {step:'segment',model:'sam-3.1'},
+  {step:'3d',model:'Meta SAM 3D Objects'},
+  {step:'image',model:'muse-image-1.0',summary:true},
+ ];
+ assert.deepEqual(replayTraceGroups(records).map(group=>group.map(step=>step.step)),[
+  ['policy:prompt'],['propose'],['review'],['image'],['segment'],['3d'],
+ ]);
+});
 test('policy provenance follows measured models and retains historical Wonder attribution', () => {
  assert.equal(provenance([{step:'policy:prompt',model:'muse-spark-1.3',ms:10,costUsd:0}])[0].model,'Muse Spark 1.3');
  assert.equal(provenance([{step:'policy:prompt',model:'muse-wonder-1.0',ms:10,costUsd:0}])[0].model,'Muse Wonder 1.0');

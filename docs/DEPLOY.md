@@ -2,7 +2,7 @@
 
 This guide prepares a replay-first Cloud Run service. It does not deploy anything by itself. The image defaults `DEMO_REPLAY_ONLY=true`; the server returns 503 for live-run requests before reading credentials or invoking the pipeline. The container listens on `0.0.0.0:$PORT`; Cloud Run supplies `PORT` (8080 by default). `/health` is a lightweight GET/HEAD probe. Replay data comes from the reviewed `demo/runs/` manifests and assets.
 
-The current public deployment is the [Office of Otherwise replay demo](https://office-otherwise-875096283797.northamerica-northeast2.run.app), revision `office-otherwise-00001-84n`. It is configured for replay only; live model generation is disabled.
+The current public deployment is the [Office of Otherwise replay demo](https://office-otherwise-875096283797.northamerica-northeast2.run.app). It is configured for replay only; live model generation is disabled. Revision names change with releases; inspect the latest ready revision with `gcloud run services describe office-otherwise --region=northamerica-northeast2 --format='value(status.latestReadyRevisionName)'`.
 
 ## Build and publish
 

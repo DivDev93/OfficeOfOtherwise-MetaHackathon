@@ -31,6 +31,18 @@ export function provenance(trace = []) {
   });
 }
 
+export function replayTraceGroups(trace = []) {
+  const steps = trace.filter(step => !step.summary);
+  return [
+    steps.filter(step => /policy/i.test(step.step || '')),
+    steps.filter(step => /propose/i.test(step.step || '')),
+    steps.filter(step => /review/i.test(step.step || '')),
+    steps.filter(step => step.step === 'image'),
+    steps.filter(step => /segment|cutout/i.test(step.step || '')),
+    steps.filter(step => /3d|chronos/i.test(step.step || '')),
+  ];
+}
+
 function formatBytes(bytes) {
   if (bytes < 1024) return `${Math.round(bytes)} B`;
   const mb = bytes / (1024 * 1024);

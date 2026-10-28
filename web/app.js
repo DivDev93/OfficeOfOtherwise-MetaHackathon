@@ -1,14 +1,16 @@
-import { retryPrompt, formatYear, provenance, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from './logic.js';
+import { retryPrompt, formatYear, provenance, replayTraceGroups, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from './logic.js';
 const $ = id => document.getElementById(id);
-let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', globeApi = null, modelApi = null, trace = [], savedRuns = [];
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', globeApi = null, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0;
 const status = text => $('status').textContent = text;
+const setStageMessage = text => { const copy = $('stage-empty').querySelector('p'); if (copy) copy.textContent = text; };
 const asset = name => `${base}/${name}`;
 function applyServiceMode(mode) {
   serviceMode = mode;
   $('live-access').hidden = mode !== 'live-enabled';
   $('live-submit').disabled = mode !== 'live-enabled';
-  $('service-mode').textContent = mode === 'replay-only' ? '●  REPLAY-ONLY SERVICE' : mode === 'live-enabled' ? '●  REPLAY + LIVE' : '●  SERVICE MODE UNKNOWN';
-  if (mode === 'replay-only') status('Replay-only service · live generation unavailable');
+  $('service-mode').textContent = mode === 'replay-only' ? 'Showing saved runs · live generation by invite' : mode === 'live-enabled' ? 'Saved runs · live access by invite' : 'Saved runs · service mode unknown';
+  if (mode === 'replay-only') status('Showing saved runs · live generation by invite');
   else if (mode === 'unknown') status('Service mode unavailable · cached stories remain available');
 }
 async function loadServiceMode() {
@@ -28,13 +30,22 @@ function setView(view) {
   $('stage-empty').hidden = hasImage || (hasModel && view === 'model');
   for (const [id, name] of [['scene-view','scene'],['cutout-view','cutout'],['model-button','model']]) $(id).classList.toggle('active', view === name);
   const modelFocus = hasModel && !!modelApi && view === 'model';
-  $('workspace').classList.toggle('model-focus', modelFocus);
-  $('back-to-atlas').hidden = !modelFocus;
+  const heroFocus = modelFocus || hasCutout && view === 'cutout';
+  $('workspace').classList.toggle('hero-focus', heroFocus);
+  $('back-to-atlas').hidden = !heroFocus;
+  $('orbit-button').hidden = !modelFocus;
+  $('orbit-button').disabled = reducedMotion.matches || !modelLoaded;
   $('model-loading').hidden = !modelFocus || !modelLoading;
   $('model-error').hidden = !modelFocus || !modelError;
+  if (!modelFocus) {
+    modelApi?.setAutoRotate(false);
+    $('orbit-button').setAttribute('aria-pressed', 'false');
+    $('orbit-button').textContent = 'Orbit object';
+  }
   if (modelFocus && !modelLoaded && !modelLoading && !modelError) requestModelLoad();
 }
 function showGuard(data) {
+  setStageMessage('No scene is attached to this blocked prompt. Choose the reframe to continue.');
   $('guardrail').hidden = false; $('reason').textContent = data.reason || 'This question is outside the scope of this exploration.';
   $('reframe').textContent = data.reframe || 'Try a question about science, technology, culture or geography.';
   $('retry').dataset.prompt = data.suggestion || retryPrompt(data.reframe);
@@ -52,28 +63,57 @@ function renderBranches() {
     return;
   }
   for (const b of branchState.branches) {
-    const button = document.createElement('button'); button.type = 'button'; button.className = b.id === branchState.heroId ? 'hero' : '';
+    const button = document.createElement('button'); button.type = 'button'; button.dataset.branchId = b.id;
+    button.className = [b.id === branchState.heroId ? 'hero' : '', b.id === selectedBranchId ? 'selected' : ''].filter(Boolean).join(' ');
+    button.setAttribute('aria-pressed', String(b.id === selectedBranchId));
     const provisional = branchState.phase === 'provisional';
     button.textContent = `${formatYear(b.year)} · ${b.title}${provisional ? ' · pending review' : ''}`;
     button.setAttribute('aria-label', `${b.title}, ${b.place?.name || ''}, ${formatYear(b.year)}${provisional ? ', policy-cleared candidate, review in progress' : ''}`);
-    button.addEventListener('click', () => { globeApi?.focus(b); $('hero-description').textContent = b.summary || ''; }); $('branch-list').append(button);
+    button.addEventListener('click', () => selectBranch(b)); $('branch-list').append(button);
   }
   globeApi?.setBranches(branchState.branches, branchState.heroId);
 }
+function selectBranch(branch) {
+  if (!branch?.id) return;
+  selectedBranchId = branch.id;
+  globeApi?.select(branch);
+  for (const button of $('branch-list').querySelectorAll('[data-branch-id]')) {
+    const selected = button.dataset.branchId === selectedBranchId;
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  }
+}
 function renderTrace() {
   $('steps').replaceChildren();
+  const current = provenance(trace), expected = provenance(savedTrace);
   const hasRecordedSteps = trace.some(s => !s.summary);
-  for (const p of provenance(trace)) {
+  const sparkPolicy = /Muse Spark/.test(expected[0].model);
+  const rows = [];
+  if (replayLoaded && !sparkPolicy) {
+    rows.push({ label: 'Topic policy', model: 'Muse Spark 1.3', special: 'No call in this saved replay · time not recorded · cost not recorded' });
+    rows.push({ label: 'Saved policy', model: expected[0].model, progress: current[0] });
+  } else {
+    rows.push({ label: 'Topic policy', model: expected[0].model || 'Muse Spark 1.3', progress: current[0] });
+  }
+  rows.push(...current.slice(1).map(step => ({ label: step.label, model: step.model, progress: step })));
+  for (const row of rows) {
     const el = document.createElement('div'); el.className = 'step'; const name = document.createElement('strong');
-    const recordedReplay = p.label === 'Policy' && serviceMode === 'replay-only' && p.model.includes('Muse Wonder');
-    name.textContent = `${p.label}: ${p.model}${recordedReplay ? ' · saved replay' : ''}`;
-    const duration = Number.isFinite(p.ms) ? `${(p.ms / 1000).toFixed(1)}s` : 'Time not recorded';
-    const cost = Number.isFinite(p.costUsd) ? `$${p.costUsd.toFixed(4)}` : 'Cost not recorded';
-    const value = document.createElement('span'); value.textContent = p.available ? `${duration} · ${cost}` : hasRecordedSteps ? 'Not recorded in this replay' : 'No replay loaded'; el.append(name, value); $('steps').append(el);
+    name.textContent = `${row.label}: ${row.model}${row.label === 'Saved policy' ? ' · saved replay' : ''}`;
+    const progress = row.progress;
+    const value = document.createElement('span');
+    if (row.special) value.textContent = row.special;
+    else if (progress?.available) {
+      const duration = Number.isFinite(progress.ms) ? `${(progress.ms / 1000).toFixed(1)}s` : 'Time not recorded';
+      const cost = Number.isFinite(progress.costUsd) ? `$${progress.costUsd.toFixed(4)}` : 'Cost not recorded';
+      value.textContent = `${duration} · ${cost}`;
+    } else value.textContent = replayActive ? 'Pending' : hasRecordedSteps || replayLoaded ? 'Not recorded in this replay' : 'No replay loaded';
+    if (!progress?.available && replayActive && !row.special) el.dataset.state = 'pending';
+    el.append(name, value); $('steps').append(el);
   }
   renderHeroModels();
 }
-function metricText(item) {
+function metricText(item, fallback = 'Not recorded in this replay') {
+  if (!item?.available) return replayActive ? 'Pending' : replayLoaded ? fallback : 'No replay loaded';
   const duration = Number.isFinite(item?.ms) ? `${(item.ms / 1000).toFixed(1)}s` : 'Time not recorded';
   const cost = Number.isFinite(item?.costUsd) ? `$${item.costUsd.toFixed(4)}` : 'Cost not recorded';
   return `${duration} · ${cost}`;
@@ -81,21 +121,25 @@ function metricText(item) {
 function renderHeroModels() {
   const host = $('hero-models'); host.replaceChildren();
   const recorded = trace.some(s => !s.summary);
-  host.hidden = !recorded;
-  if (!recorded) return;
-  const steps = provenance(trace);
-  const sparkUsed = /Muse Spark/.test(steps[0].model);
-  const models = [
-    { role: 'Topic policy', model: 'Muse Spark 1.3', metrics: sparkUsed ? metricText(steps[0]) : 'Current live role · no call in this replay' },
-  ];
-  if (!sparkUsed && steps[0].available) models.push({ role: 'Saved policy call', model: steps[0].model, metrics: metricText(steps[0]) });
+  host.hidden = !recorded && !replayActive && !replayLoaded;
+  const steps = provenance(trace), expected = provenance(savedTrace);
+  const sparkUsed = /Muse Spark/.test(expected[0].model);
+  const models = [{
+    role: 'Topic policy', model: 'Muse Spark 1.3',
+    metrics: sparkUsed ? metricText(steps[0]) : replayLoaded ? 'No call in this saved replay · time not recorded · cost not recorded' : 'Pending',
+  }];
+  if (replayLoaded && !sparkUsed) models.push({ role: 'Saved topic-policy checks', model: expected[0].model, metrics: metricText(steps[0]) });
   const branchMs = [steps[1].ms, steps[2].ms].every(Number.isFinite) ? steps[1].ms + steps[2].ms : null;
   const branchCost = [steps[1].costUsd, steps[2].costUsd].every(Number.isFinite) ? steps[1].costUsd + steps[2].costUsd : null;
+  let branchMetrics = steps[1].available || steps[2].available
+    ? metricText({ ...steps[1], ms: branchMs, costUsd: branchCost })
+    : metricText(steps[1]);
+  if (replayActive && steps[1].available && !steps[2].available) branchMetrics = `${metricText(steps[1])} · review pending`;
   models.push(
-    { role: 'Branches + review', model: 'Muse Wonder 1.0', metrics: steps[1].available || steps[2].available ? metricText({ ms: branchMs, costUsd: branchCost }) : 'Not recorded in this replay' },
+    { role: 'Branches + review', model: 'Muse Wonder 1.0', metrics: branchMetrics },
     { role: 'Scene', model: 'Muse Image 1.0', metrics: metricText(steps[3]) },
     { role: 'Cutout', model: 'SAM 3.1', metrics: metricText(steps[4]) },
-    { role: '3D viewer', model: 'Meta SAM 3D Objects', metrics: metricText(steps[5]) },
+    { role: '3D', model: 'Meta SAM 3D Objects', metrics: metricText(steps[5]) },
   );
   for (const item of models) {
     const card = document.createElement('div'); card.className = 'hero-model-card';
@@ -105,14 +149,21 @@ function renderHeroModels() {
     card.append(model, role, metrics); host.append(card);
   }
 }
-function reset() { branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; modelRequestId++; $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG TO EXPLORE'; $('hero-title').textContent = 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = 'The strongest branch becomes a scene, then a subject to explore in three dimensions.'; renderBranches(); renderTrace(); setView('scene'); }
+function reset() { replayRequest++; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; modelRequestId++; globeApi?.select(null); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG TO EXPLORE'; $('hero-title').textContent = 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = 'The strongest branch becomes a scene, then a subject to explore in three dimensions.'; setStageMessage('A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
 function setBranch(data, event = 'complete') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchPhaseLabel(branchState.phase);
   if (branchState.phase === 'blocked') { showGuard(data); $('map-status').textContent = 'NO BRANCHES · REFRAME REQUIRED'; status('This question needs a reframe'); renderBranches(); return; }
   renderBranches();
   const hero = branchState.branches.find(b => b.id === branchState.heroId);
-  if (hero) { $('hero-title').textContent = hero.title; $('hero-description').textContent = hero.summary; globeApi?.focus(hero); }
+  if (hero) { selectedBranchId = hero.id; $('hero-title').textContent = hero.title; $('hero-description').textContent = hero.summary; if (!hasImage) setStageMessage('Preparing the selected scene…'); syncBranchSelection(); globeApi?.focus(hero); }
+}
+function syncBranchSelection() {
+  for (const button of $('branch-list').querySelectorAll('[data-branch-id]')) {
+    const selected = button.dataset.branchId === selectedBranchId;
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  }
 }
 async function exists(url) { try { const response = await fetch(url, { method:'HEAD' }); return response.ok; } catch { return false; } }
 function requestModelLoad() {
@@ -144,39 +195,89 @@ function requestModelLoad() {
     },
   });
 }
-async function replaySavedBranches(branch) {
+async function replaySavedBranches(branch, records = [], request = replayRequest) {
   const branches = Array.isArray(branch.branches) ? branch.branches : [];
-  if (!branches.length || branch.status === 'blocked' || branch.status === 'empty') { setBranch(branch); return; }
+  const liveRecords = records.filter(step => !step.summary);
+  const groups = replayTraceGroups(records);
+  const reveal = index => {
+    if (request !== replayRequest) return;
+    trace = groups.slice(0, index + 1).flat();
+    renderTrace();
+  };
+  const pause = async ms => { await new Promise(resolve => setTimeout(resolve, ms)); return request === replayRequest; };
+  if (request !== replayRequest) return;
+  replayLoaded = true;
+  savedTrace = liveRecords;
+  replayActive = true;
+  trace = [];
+  setStageMessage('Reviewing the recorded paths…');
+  renderTrace();
+  reveal(0);
+  if (!branches.length || branch.status === 'blocked' || branch.status === 'empty') {
+    setBranch(branch);
+    replayActive = false;
+    renderTrace();
+    return;
+  }
+
+  if (!await pause(220)) return;
+  reveal(1);
   for (let i = 1; i <= branches.length; i++) {
+    if (request !== replayRequest) return;
+    const arriving = branches[i - 1];
     branchState = { branches: branches.slice(0, i), heroId: null, phase: 'replay' };
+    selectedBranchId = arriving.id;
     $('hero-tag').textContent = `CACHED REPLAY · ${i}/${branches.length} PATHS`;
     $('map-status').textContent = `CACHED REPLAY · ${i} OF ${branches.length} PATHS`;
     status(`Replaying saved branches · ${i} of ${branches.length}`);
     renderBranches();
-    if (i < branches.length) await new Promise(resolve => setTimeout(resolve, 360));
+    globeApi?.focus(arriving);
+    if (i < branches.length && !await pause(2200)) return;
   }
+  if (request !== replayRequest) return;
+  reveal(2);
+  if (!await pause(300)) return;
   setBranch(branch);
   $('map-status').textContent = `CACHED REPLAY · ${branches.length} PATHS`;
+  if (!await pause(180)) return;
+  reveal(3);
+  if (!await pause(220)) return;
+  reveal(4);
+  if (!await pause(220)) return;
+  reveal(5);
+  if (request !== replayRequest) return;
+  replayActive = false;
+  renderTrace();
 }
-async function loadAssets(preferredView) {
-  if (!base) return;
-  const [image, cutout, meshoptModel, model] = await Promise.all(['hero.png','cutout.png','model.meshopt.glb','model.glb'].map(n => exists(asset(n))));
+async function loadAssets(preferredView, request = null) {
+  if (!base) return false;
+  const currentBase = base;
+  const [image, cutout, meshoptModel, model] = await Promise.all(['hero.png','cutout.png','model.meshopt.glb','model.glb'].map(n => exists(`${currentBase}/${n}`)));
+  if (request !== null && request !== replayRequest) return false;
   hasImage = image; hasCutout = cutout; hasModel = meshoptModel || model; modelAsset = meshoptModel ? 'model.meshopt.glb' : model ? 'model.glb' : '';
-  if (image) $('hero-image').src = asset('hero.png'); if (cutout) $('cutout-image').src = asset('cutout.png');
+  if (image) $('hero-image').src = `${currentBase}/hero.png`; if (cutout) $('cutout-image').src = `${currentBase}/cutout.png`;
+  if (!image) setStageMessage('No hero scene image was saved with this story.');
   setView(preferredView || (cutout ? 'cutout' : hasModel ? 'model' : 'scene'));
+  return true;
 }
 async function loadRun(id) {
-  if (!id) return; reset(); base = `/runs/${encodeURIComponent(id)}`; status('Opening saved story…');
+  if (!id) return; reset(); const request = replayRequest; base = `/runs/${encodeURIComponent(id)}`; status('Opening saved story…');
   try {
     const [branchResponse, traceResponse, manifestResponse] = await Promise.all([fetch(asset('branch.json')),fetch(asset('trace.json')),fetch(base)]);
+    if (request !== replayRequest) return;
     if (!branchResponse.ok) throw new Error('Could not load this cached story');
     const branch = await branchResponse.json(); const record = traceResponse.ok ? await traceResponse.json() : {};
     const manifest = manifestResponse.ok ? await manifestResponse.json() : {};
+    if (request !== replayRequest) return;
     $('prompt').value = branch.divergence || '';
-    await replaySavedBranches(branch);
-    trace = record.steps || branch.trace || []; renderTrace(); await loadAssets();
+    const records = record.steps || branch.trace || [];
+    const focusTarget = branch.status === 'blocked' ? $('guardrail') : $('workspace');
+    focusTarget.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+    await replaySavedBranches(branch, records, request);
+    if (request !== replayRequest) return;
+    if (!await loadAssets('scene', request) || request !== replayRequest) return;
     status(manifest.status === 'simulated' ? 'Simulated guardrail · no classifier was called' : branch.status === 'blocked' ? 'This question needs a reframe' : branch.renderStatus === '2d-only' ? completionStatus(branch) : manifest.status === 'provisional' ? '2D preview · 3D model not generated' : 'Saved story ready');
-  } catch (e) { status(e.message); }
+  } catch (e) { if (request === replayRequest) status(e.message); }
 }
 async function handleEvent(type, data) {
   if (type === 'policy') { if (data.allowed === false || data.status === 'blocked') showGuard(data); status(data.allowed === false ? 'This question needs a reframe' : 'Policy checked'); }
@@ -191,7 +292,7 @@ async function handleEvent(type, data) {
 }
 async function runPrompt(prompt) {
   if (!prompt.trim()) return; const code = $('access').value;
-  if (serviceMode === 'replay-only') { status('Replay-only service · open a cached story below'); return; }
+  if (serviceMode === 'replay-only') { status('Showing saved runs · live generation by invite'); return; }
   if (serviceMode !== 'live-enabled') { status('Service mode could not be confirmed · open a cached story below'); return; }
   if (!code) { status('Select a cached story, or enter a live access code.'); return; }
   reset(); $('prompt').value = prompt; status('Checking your question…');
@@ -216,9 +317,24 @@ $('retry').addEventListener('click', () => {
 });
 $('load-run').addEventListener('click', () => loadRun($('runs').value));
 $('scene-view').addEventListener('click', () => setView('scene')); $('cutout-view').addEventListener('click', () => setView('cutout')); $('model-button').addEventListener('click', () => setView('model'));
-$('back-to-atlas').addEventListener('click', () => setView(hasCutout ? 'cutout' : 'scene'));
+$('orbit-button').addEventListener('click', () => {
+  const enabled = $('orbit-button').getAttribute('aria-pressed') !== 'true';
+  const active = modelApi?.setAutoRotate(enabled) || false;
+  $('orbit-button').setAttribute('aria-pressed', String(active));
+  $('orbit-button').textContent = active ? 'Pause orbit' : 'Orbit object';
+});
+$('orbit-button').disabled = reducedMotion.matches;
+reducedMotion.addEventListener?.('change', () => {
+  $('orbit-button').disabled = reducedMotion.matches || !modelLoaded;
+  if (reducedMotion.matches) {
+    modelApi?.setAutoRotate(false);
+    $('orbit-button').setAttribute('aria-pressed', 'false');
+    $('orbit-button').textContent = 'Orbit object';
+  }
+});
+$('back-to-atlas').addEventListener('click', () => setView('scene'));
 $('retry-model').addEventListener('click', () => { loadedModelUrl = ''; loadingModelUrl = ''; modelError = false; requestModelLoad(); setView('model'); });
 reset();
 loadServiceMode();
 fetch('/runs').then(r => r.json()).then(data => { const runs = Array.isArray(data) ? data : data.runs || []; savedRuns = runs; $('runs').replaceChildren(); if (!runs.length) { $('runs').add(new Option('No saved stories yet', '')); return; } for (const run of runs) $('runs').add(new Option(replayLabel(run), run.id)); }).catch(() => { $('runs').replaceChildren(new Option('Archive unavailable', '')); });
-import('./visuals.js').then(({createGlobe,createModelViewer}) => { globeApi = createGlobe($('globe')); modelApi = createModelViewer($('model-view')); renderBranches(); setView(activeView); }).catch(() => { $('globe-fallback').hidden = false; });
+import('./visuals.js').then(({createGlobe,createModelViewer}) => { globeApi = createGlobe($('globe'), selectBranch); modelApi = createModelViewer($('model-view')); renderBranches(); const visibleBranch = branchState.phase === 'replay' ? branchState.branches.at(-1) : branchState.branches.find(branch => branch.id === branchState.heroId); if (visibleBranch) globeApi.focus(visibleBranch); setView(activeView); }).catch(() => { $('globe-fallback').hidden = false; });
