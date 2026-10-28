@@ -1,0 +1,79 @@
+{
+  "steps": [
+    {
+      "step": "policy:prompt",
+      "model": "muse-wonder-1.0",
+      "ms": 5056,
+      "costUsd": 0,
+      "reused": true,
+      "allowed": true
+    },
+    {
+      "step": "propose",
+      "model": "muse-wonder-1.0",
+      "ms": 17913,
+      "costUsd": 0,
+      "originalCostUsd": 0.056448,
+      "reused": true,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "policy:branches",
+      "model": "muse-wonder-1.0",
+      "ms": 10598,
+      "costUsd": 0,
+      "reused": true
+    },
+    {
+      "step": "review",
+      "model": "muse-wonder-1.0",
+      "ms": 19801,
+      "costUsd": 0,
+      "originalCostUsd": 0.0649352,
+      "reused": true,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 6444,
+      "costUsd": 0.0157
+    },
+    {
+      "step": "policy:reuse",
+      "model": "muse-wonder-1.0",
+      "ms": 6445,
+      "costUsd": 0,
+      "originalCostUsd": 0.015700000000000047,
+      "summary": true,
+      "allowed": true
+    },
+    {
+      "step": "image",
+      "model": "muse-image-1.0",
+      "ms": 13114,
+      "costUsd": 0.1
+    },
+    {
+      "step": "segment",
+      "model": "sam-3.1",
+      "ms": 3996,
+      "costUsd": 0.05,
+      "prompt": "clock"
+    },
+    {
+      "step": "segment",
+      "model": "sam-3.1",
+      "ms": 5561,
+      "costUsd": 0.05,
+      "prompt": "mechanism"
+    }
+  ],
+  "selection": {
+    "confidence": 0.7460317611694336,
+    "prompt": "mechanism"
+  },
+  "costUsd": 0.21569999999999995
+}

@@ -50,3 +50,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-10-27 | Added a gen3d handoff with local input paths, attachment commands, the remaining call limit and the unresolved mask and service-status constraints. | |
 | 2026-10-27 | A read-only Cloud Run log search found later failure markers for both attempted object IDs. Their request correlation and cause remain unconfirmed, and two projects did not permit the lookup. | |
 | 2026-10-27 | One additional permitted Alexandria gen3d attempt captured an MCP timeout after 300 seconds and returned no GLB. Remote job status and cost remain unknown; three of six attempts remain. | |
+| 2026-10-28 | Reused an Antikythera hero image and selected a coherent SAM mechanism mask (confidence 0.7460); the resulting 2D replay remains provisional until a TRELLIS model is attached. Beringia retries were inspected and remain unaccepted while the sled mask is fragmented. | |
