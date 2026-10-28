@@ -30,8 +30,10 @@ function renderBranches() {
 function renderTrace() {
   $('steps').replaceChildren();
   for (const p of provenance(trace)) {
-    const el = document.createElement('div'); el.className = 'step'; const name = document.createElement('strong'); name.textContent = `${p.label} · ${p.model}`;
-    const value = document.createElement('span'); value.textContent = p.available ? `${(p.ms / 1000).toFixed(1)}s · $${p.costUsd.toFixed(4)}` : 'Awaiting step'; el.append(name, value); $('steps').append(el);
+    const el = document.createElement('div'); el.className = 'step'; const name = document.createElement('strong'); name.textContent = `${p.label}: ${p.model}`;
+    const duration = Number.isFinite(p.ms) ? `${(p.ms / 1000).toFixed(1)}s` : 'Time not recorded';
+    const cost = Number.isFinite(p.costUsd) ? `$${p.costUsd.toFixed(4)}` : 'Cost not recorded';
+    const value = document.createElement('span'); value.textContent = p.available ? `${duration} · ${cost}` : 'Awaiting step'; el.append(name, value); $('steps').append(el);
   }
 }
 function reset() { branches = []; heroId = null; trace = []; base = ''; hasImage = hasCutout = hasModel = false; $('guardrail').hidden = true; $('generation').hidden = true; $('hero-title').textContent = 'A world to step into'; $('hero-tag').textContent = 'AWAITING A STORY'; $('hero-description').textContent = 'The strongest branch becomes a scene, then a subject to explore in three dimensions.'; renderBranches(); renderTrace(); setView('scene'); }

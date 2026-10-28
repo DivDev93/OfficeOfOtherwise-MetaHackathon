@@ -14,7 +14,9 @@ export function provenance(trace = []) {
   ];
   return groups.map(([label, model, matches]) => {
     const items = trace.filter(s => !s.summary && matches(s));
-    return { label, model, ms: items.reduce((n,s) => n + (Number(s.ms) || 0), 0), costUsd: items.reduce((n,s) => n + (Number(s.costUsd) || 0), 0), available: items.length > 0 };
+    const sum = key => items.length && items.every(s => typeof s[key] === 'number' && Number.isFinite(s[key])) ? items.reduce((n, s) => n + s[key], 0) : null;
+    if (label === '3D' && items.some(s => s.source === 'gen3d-offline')) model = 'Tattva TRELLIS (existing infrastructure, pre-generated)';
+    return { label, model, ms: sum('ms'), costUsd: sum('costUsd'), available: items.length > 0 };
   });
 }
 export function parseSseBlock(block) {

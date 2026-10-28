@@ -22,7 +22,8 @@
     "init-demo-budget": "node scripts/init-demo-budget.js",
     "models": "node --env-file-if-exists=.env scripts/models.js",
     "smoke": "node --env-file-if-exists=.env scripts/smoke.js",
-    "branch": "node --env-file-if-exists=.env scripts/branch.js"
+    "branch": "node --env-file-if-exists=.env scripts/branch.js",
+    "attach-glb": "node scripts/attach-glb.js"
   },
   "dependencies": {
     "@meta-sam/parser": "0.1.0",
