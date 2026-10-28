@@ -1,0 +1,83 @@
+{
+  "status": "ok",
+  "divergence": "What if the Sahara had stayed green?",
+  "branches": [
+    {
+      "id": "b2",
+      "title": "Sailboats Cross Megalake Chad",
+      "year": -2800,
+      "place": {
+        "name": "Lake Chad, Chad",
+        "lat": 12.8,
+        "lon": 14.7
+      },
+      "summary": "Lake Chad remains a vast inland sea rather than shrinking, connecting distant shorelines by open water. Its communities develop large reed sailboats and navigate by stars, currents, and island landmarks.",
+      "scene": "A broad reed sailboat with a curved sail glides past hippos toward a stilt village rising from bright, open water.",
+      "score": 10,
+      "reviewNote": "Megalake persistence logically drives reed sailing culture; vivid, coherent inland-sea scene."
+    },
+    {
+      "id": "b1",
+      "title": "Sorghum Farmers Of Tassili Plateau",
+      "year": -6500,
+      "place": {
+        "name": "Tassili n'Ajjer, Algeria",
+        "lat": 25.2,
+        "lon": 9
+      },
+      "summary": "Persistent monsoon rains keep seasonal lakes and grasslands on the plateau, allowing herders to settle year-round and select wild sorghum and millet for planting. This stable water supply supports an early, independent centre of farming in the central Sahara.",
+      "scene": "At dawn, families thresh golden sorghum beside a reed-fringed lake while cattle wade through green shallows below painted sandstone cliffs.",
+      "score": 9,
+      "reviewNote": "Direct, archaeologically grounded farming emergence from persistent lakes and grasslands."
+    },
+    {
+      "id": "b3",
+      "title": "River Explorers Map Hoggar Headwaters",
+      "year": 1050,
+      "place": {
+        "name": "Tamanrasset, Algeria",
+        "lat": 22.7851,
+        "lon": 5.5228
+      },
+      "summary": "The Tamanrasset River keeps flowing from the Hoggar Mountains toward the Atlantic, creating a navigable corridor of woodland and wetlands. Explorers use its channels to chart tributaries, lakes, and portages deep into a green interior.",
+      "scene": "Surveyors in wooden canoes sketch waterfalls and gallery forests where a desert canyon would otherwise hold only dry sand.",
+      "score": 8,
+      "reviewNote": "Plausible paleoriver corridor, though Atlantic navigability and mapping expedition need elaboration."
+    }
+  ],
+  "hero": {
+    "branchId": "b2",
+    "imagePrompt": "Photorealistic scene on the vast open water of Megalake Chad in 2800 BCE, centered on a single large reed sailboat with a woven golden-brown hull, wooden mast, and broad curved off-white sail catching bright morning light, sailing across blue-green water with gentle ripples and reflections, a few small crew figures aboard, distant hippos and a far stilt village softly out of focus on the horizon under a clear sky, sharp detail on the central boat.",
+    "subject": "sailboat"
+  },
+  "trace": [
+    {
+      "step": "policy:prompt",
+      "model": "muse-wonder-1.0",
+      "ms": 4966,
+      "allowed": true
+    },
+    {
+      "step": "propose",
+      "model": "muse-wonder-1.0",
+      "ms": 23647,
+      "costUsd": 0.074108,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "policy:branches",
+      "model": "muse-wonder-1.0",
+      "ms": 3546
+    },
+    {
+      "step": "review",
+      "model": "muse-wonder-1.0",
+      "ms": 10824,
+      "costUsd": 0.057168,
+      "attempt": 1,
+      "ok": true
+    }
+  ],
+  "costUsd": 0.1985448000000003
+}

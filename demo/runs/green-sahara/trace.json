@@ -1,0 +1,106 @@
+{
+  "steps": [
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 4961,
+      "costUsd": 0.018696
+    },
+    {
+      "step": "branch-agent:propose",
+      "model": "muse-wonder-1.0",
+      "ms": 23646,
+      "costUsd": 0.074108
+    },
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 2121,
+      "costUsd": 0.009932
+    },
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 2249,
+      "costUsd": 0.008571200000000001
+    },
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 2830,
+      "costUsd": 0.0092312
+    },
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 3049,
+      "costUsd": 0.0101512
+    },
+    {
+      "step": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "ms": 3528,
+      "costUsd": 0.0106872
+    },
+    {
+      "step": "branch-agent:review",
+      "model": "muse-wonder-1.0",
+      "ms": 10824,
+      "costUsd": 0.057168
+    },
+    {
+      "step": "policy:prompt",
+      "model": "muse-wonder-1.0",
+      "ms": 4966,
+      "costUsd": 0,
+      "summary": true,
+      "allowed": true
+    },
+    {
+      "step": "propose",
+      "model": "muse-wonder-1.0",
+      "ms": 23647,
+      "costUsd": 0,
+      "originalCostUsd": 0.074108,
+      "summary": true,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "policy:branches",
+      "model": "muse-wonder-1.0",
+      "ms": 3546,
+      "costUsd": 0,
+      "summary": true
+    },
+    {
+      "step": "review",
+      "model": "muse-wonder-1.0",
+      "ms": 10824,
+      "costUsd": 0,
+      "originalCostUsd": 0.057168,
+      "summary": true,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "image",
+      "model": "muse-image-1.0",
+      "ms": 11613,
+      "costUsd": 0.01
+    },
+    {
+      "step": "segment",
+      "model": "sam-3.1",
+      "ms": 7024,
+      "costUsd": 0.05,
+      "prompt": "sailboat"
+    }
+  ],
+  "selection": {
+    "confidence": 0.9336099624633789,
+    "area": 664781,
+    "prompt": "sailboat"
+  },
+  "costUsd": 0.25854480000000035
+}

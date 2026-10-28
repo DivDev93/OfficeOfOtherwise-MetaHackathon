@@ -96,11 +96,14 @@ test('run manifests expose only safe metadata for cached and registered live run
   const runner = fake(async ({ onStep }) => { onStep({ step: 'policy', runId: 'live-1' }); return { runId: 'live-1' }; });
   const url = await fixture(t, { liveRunsDir, runPipeline: runner });
   const cached = await (await fetch(`${url}/runs/orrery`)).json();
-  assert.deepEqual(cached, { id: 'orrery', title: 'Orrery', divergence: 'What if?', status: 'ok', hasModel: false, assets: ['branch.json', 'hero.png'] });
+  assert.equal(cached.id, 'orrery'); assert.equal(cached.branch.divergence, 'What if?');
+  assert.equal(cached.assetUrls['hero.png'], '/runs/orrery/hero.png');
+  assert.equal(cached.hasModel, false);
   assert.equal((await fetch(`${url}/runs/live-1`)).status, 404);
   await (await post(url)).text();
   const live = await (await fetch(`${url}/runs/live-1`)).json();
-  assert.deepEqual(live, { id: 'live-1', title: 'Live', divergence: 'Geography', status: 'ok', hasModel: false, assets: ['branch.json'] });
+  assert.equal(live.id, 'live-1'); assert.equal(live.branch.divergence, 'Geography');
+  assert.equal(live.branch.secret, undefined); assert.equal(live.assetUrls['branch.json'], '/runs/live-1/branch.json');
   assert.equal((await fetch(`${url}/runs/live-1`, { method: 'HEAD' })).status, 200);
   assert.equal((await fetch(`${url}/runs/%2e%2e%2flive-1`)).status, 404);
 });

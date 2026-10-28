@@ -81,6 +81,45 @@ async function sourceData(directory, { provisional2d = false } = {}) {
   const glb=files['model.glb']; if (glb.length<20 || glb.toString('ascii',0,4)!=='glTF' || glb.readUInt32LE(4)!==2 || glb.readUInt32LE(8)!==glb.length) throw new Error('Invalid GLB asset');
   return {...cleaned,files};
 }
+/** Stage an already generated Meta 2D run without generating or claiming a 3D model. */
+export async function stageMetaOnlyRun({slug, sourceDirectory, outputRoot='demo/runs', maxBytes=MAX_BYTES}={}) {
+  const item=CURATED.find(x=>x.id===slug && !x.reuse);
+  if (!item) throw new Error('Invalid curated slug');
+  if (!Number.isInteger(maxBytes) || maxBytes<0 || maxBytes>MAX_BYTES) throw new Error('Invalid cache size cap');
+  const branch=JSON.parse(await readRegular(join(sourceDirectory,'branch.json')));
+  const trace=JSON.parse(await readRegular(join(sourceDirectory,'trace.json')));
+  const data=sanitize(branch,trace);
+  if (data.branch.status!=='ok') throw new Error('Curated run was blocked');
+  if (data.branch.divergence!==item.divergence) throw new Error('Source divergence does not match curated prompt');
+  if (!branch.hero?.branchId || !data.branch.branches.some(b=>b.id===branch.hero.branchId) || !trace.selection || !Number.isFinite(trace.selection.confidence) || trace.selection.confidence<.5 || trace.selection.confidence>1) throw new Error('Incomplete run: hero, branches and mask confidence required');
+  if ((trace.steps ?? []).some(t=>t.step==='3d')) throw new Error('2D source contains a 3D trace');
+  const files={}; let dimensions;
+  for (const name of ['hero.png','mask.png','cutout.png']) {
+    const bytes=await readRegular(join(sourceDirectory,name));
+    let png; try { png=PNG.sync.read(bytes); } catch { throw new Error('Invalid PNG asset'); }
+    if (!png.width || !png.height || (dimensions && (png.width!==dimensions[0] || png.height!==dimensions[1]))) throw new Error('PNG dimensions do not match');
+    dimensions=[png.width,png.height];
+    if (name==='cutout.png') {
+      let visible=false, transparent=false;
+      for (let i=3;i<png.data.length;i+=4) { if(png.data[i]>0) visible=true; if(png.data[i]<255) transparent=true; }
+      if (!visible || !transparent) throw new Error('Cutout requires visible and transparent pixels');
+    }
+    files[name]=displayPng(bytes);
+  }
+  await mkdir(outputRoot,{recursive:true});
+  const destination=join(outputRoot,slug);
+  try { await lstat(destination); throw new Error('Run already staged'); } catch(e) { if(e.code!=='ENOENT') throw e; }
+  const stage=await mkdtemp(join(resolve(outputRoot),'.cache-stage-'));
+  try {
+    await writeFile(join(stage,'branch.json'),JSON.stringify(data.branch,null,2)+'\n');
+    await writeFile(join(stage,'trace.json'),JSON.stringify(data.trace,null,2)+'\n');
+    await writeFile(join(stage,'manifest.json'),JSON.stringify({status:'provisional',reason:'3D model not generated'},null,2)+'\n');
+    for (const [name,bytes] of Object.entries(files)) await writeFile(join(stage,name),bytes);
+    if ((await treeSize(outputRoot))>=maxBytes) throw new Error('Cache size cap exceeded');
+    await rename(stage,destination);
+    return {slug,directory:destination,status:'provisional'};
+  } finally { await removeStaging(stage,outputRoot); }
+}
 function publicError(error) {
   const known = new Set(['Cache size cap reached before generation', 'Cache size cap exceeded', 'Invalid provisional orrery source', 'Invalid PNG asset', 'Invalid GLB asset', 'Completed run requires a successful 3D trace', 'Incomplete run: hero, branches and mask confidence required', 'Run did not complete', 'Unsafe generated text cannot be published', 'Retry did not complete with sufficient mask confidence', 'Curated run was blocked', 'Classifier did not block the sample', 'Source divergence does not match curated prompt', 'Demo task budget checkpoint is required', 'Live caching requires confirmed TRELLIS configuration and Meta credentials', 'Invalid retry subject', 'Duplicate retry subject', 'Invalid visibly broken run', 'Blocked sample contains prohibited public content']);
   return known.has(error?.message) ? error.message : 'Cache operation failed';

@@ -40,7 +40,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     for (const entry of entries) {
       if (!entry.isDirectory() || !safeId(entry.name)) continue;
       const item = await manifest(entry.name);
-      if (item) { const { assets: _assets, ...summary } = item; result.push(summary); }
+      if (item) { const { assets: _assets, assetUrls: _assetUrls, branch: _branch, ...summary } = item; result.push(summary); }
     }
     return result.sort((a, b) => a.id.localeCompare(b.id));
   }
@@ -71,7 +71,8 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
             if (['provisional', 'simulated'].includes(metadata.status)) provisional = { status: metadata.status, reason: value(metadata.reason) };
           }
         } catch { /* optional metadata */ }
-        return { id, title: value(branch.hero?.title) || value(branch.title) || value(branch.divergence) || id, divergence: value(branch.divergence), status: provisional?.status ?? (value(branch.status) || 'unknown'), ...(provisional ? { reason: provisional.reason } : {}), hasModel: present.includes('model.glb'), assets: present };
+        const assetUrls = Object.fromEntries(present.map(name => [name, `/runs/${encodeURIComponent(id)}/${name}`]));
+        return { id, title: value(branch.hero?.title) || value(branch.title) || value(branch.divergence) || id, divergence: value(branch.divergence), status: provisional?.status ?? (value(branch.status) || 'unknown'), ...(provisional ? { reason: provisional.reason } : {}), hasModel: present.includes('model.glb'), assets: present, assetUrls, branch };
       } catch { /* no valid manifest in this root */ }
     }
     return null;

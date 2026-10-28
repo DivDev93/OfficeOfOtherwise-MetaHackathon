@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PNG } from 'pngjs';
-import { cacheDemo, CURATED } from '../scripts/cache-demo.js';
+import { cacheDemo, CURATED, stageMetaOnlyRun } from '../scripts/cache-demo.js';
 async function fixture(root,item,{model=true,confidence=.9,secret=false}={}) {
   const dir=join(root,item.id+'-source'); await mkdir(dir,{recursive:true});
   const branch={status:'ok',divergence:item.divergence,branches:[{id:'b1',title:'A new observatory',year:500,place:{name:'Alexandria',lat:31,lon:29},summary:'Astronomers explore the sky.',scene:'A bronze orrery.'}],hero:{branchId:'b1',imagePrompt:secret?'https://private.invalid':'A bronze orrery',subject:'orrery'},trace:[],privateUrl:'https://private.invalid'};
@@ -16,6 +16,23 @@ async function fixture(root,item,{model=true,confidence=.9,secret=false}={}) {
   if(model){const glb=Buffer.alloc(20);glb.write('glTF');glb.writeUInt32LE(2,4);glb.writeUInt32LE(20,8);await writeFile(join(dir,'model.glb'),glb);}
   return dir;
 }
+async function fixture2d(root,item,options={}) {
+ const dir=await fixture(root,item,{...options,model:false}); const path=join(dir,'trace.json'); const trace=JSON.parse(await readFile(path,'utf8')); trace.steps=trace.steps.filter(x=>x.step!=='3d'); await writeFile(path,JSON.stringify(trace));
+ const png=new PNG({width:2,height:1}); png.data.set([255,255,255,255,0,0,0,0]); const bytes=PNG.sync.write(png); for(const name of ['hero.png','mask.png','cutout.png']) await writeFile(join(dir,name),bytes); return dir;
+}
+test('stages curated Meta 2D runs with provisional status and no model',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'cache-2d-')); try {
+  for(const item of CURATED.slice(1)) {const source=await fixture2d(dir,item); const root=join(dir,'runs'); const result=await stageMetaOnlyRun({slug:item.id,sourceDirectory:source,outputRoot:root}); assert.equal(result.status,'provisional'); const dest=join(root,item.id); assert.deepEqual(JSON.parse(await readFile(join(dest,'manifest.json'),'utf8')),{status:'provisional',reason:'3D model not generated'}); assert.equal(JSON.parse(await readFile(join(dest,'trace.json'),'utf8')).selection.confidence,.9); assert.ok(!(await readdir(dest)).includes('model.glb')); await assert.rejects(stageMetaOnlyRun({slug:item.id,sourceDirectory:source,outputRoot:root}),/already staged/); }
+ } finally {await rm(dir,{recursive:true,force:true});}
+});
+test('rejects unsafe, low-confidence, mismatched and oversized 2D outputs atomically',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'cache-2d-')); try {
+  const root=join(dir,'runs'), item=CURATED[1]; const low=await fixture2d(join(dir,'low'),item,{confidence:.49}); await assert.rejects(stageMetaOnlyRun({slug:item.id,sourceDirectory:low,outputRoot:root}),/confidence/);
+  const unsafe=await fixture2d(join(dir,'unsafe'),item,{secret:true}); await assert.rejects(stageMetaOnlyRun({slug:item.id,sourceDirectory:unsafe,outputRoot:root}),/Unsafe/);
+  const source=await fixture2d(join(dir,'good'),item); await assert.rejects(stageMetaOnlyRun({slug:'green-sahara',sourceDirectory:source,outputRoot:root}),/divergence/); await assert.rejects(stageMetaOnlyRun({slug:item.id,sourceDirectory:source,outputRoot:root,maxBytes:10}),/cap/); assert.deepEqual(await readdir(root),[]);
+  await writeFile(join(source,'mask.png'),PNG.sync.write(new PNG({width:1,height:1}))); await assert.rejects(stageMetaOnlyRun({slug:item.id,sourceDirectory:source,outputRoot:root}),/dimensions/); assert.deepEqual(await readdir(root),[]);
+ } finally {await rm(dir,{recursive:true,force:true});}
+});
 test('reuses orrery without a runner and publishes sanitized display artifacts',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'cache-demo-')); try {const source=await fixture(dir,CURATED[0]); const root=join(dir,'runs');let calls=0;
  const result=await cacheDemo({outputRoot:root,orrerySource:source,run:async()=>{calls++;throw new Error('offline');}});
