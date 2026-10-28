@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { retryPrompt, formatYear, provenance, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode } from '../web/logic.js';
+import { retryPrompt, formatYear, provenance, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from '../web/logic.js';
 test('guardrail retry extracts a complete suggested question', () => { assert.equal(retryPrompt('Try “What if the Sahara had stayed green?”'), 'What if the Sahara had stayed green?'); assert.equal(retryPrompt('No suggestion'), ''); });
 test('SSE parser handles named events and line endings', () => { assert.deepEqual(parseSseBlock('event: propose\r\ndata: {"branches":[]}'), {event:'propose',data:{branches:[]}}); });
 test('provenance excludes summary duplicates and reports actual measured costs', () => { const p=provenance([{step:'branch-agent:propose',ms:1000,costUsd:.02},{step:'propose',ms:1000,costUsd:0,summary:true}]); assert.equal(p[1].ms,1000); assert.equal(p[1].costUsd,.02); assert.equal(p[2].available,false); assert.equal(formatYear(-50),'50 BCE'); });
@@ -8,6 +8,14 @@ test('policy provenance follows measured models and retains historical Wonder at
  assert.equal(provenance([{step:'policy:prompt',model:'muse-spark-1.3',ms:10,costUsd:0}])[0].model,'Muse Spark 1.3');
  assert.equal(provenance([{step:'policy:prompt',model:'muse-wonder-1.0',ms:10,costUsd:0}])[0].model,'Muse Wonder 1.0');
  assert.equal(provenance([{step:'policy:prompt',model:'muse-wonder-1.0',summary:true}])[0].model,'Muse Spark 1.3');
+ assert.equal(provenance([])[5].model,'Meta SAM 3D Objects');
+});
+
+test('3D model loading progress is bounded and readable with or without a content length', () => {
+ assert.deepEqual(modelLoadProgress({loaded:1024*1024,total:4*1024*1024}),{value:25,label:'25% · 1.00 MB / 4.00 MB'});
+ assert.deepEqual(modelLoadProgress({loaded:2*1024*1024}),{value:null,label:'2.00 MB downloaded'});
+ assert.deepEqual(modelLoadProgress({loaded:9,total:10_000}),{value:0,label:'0% · 9 B / 0.01 MB'});
+ assert.deepEqual(modelLoadProgress({}),{value:null,label:'Preparing 3D model…'});
 });
 
 test('unavailable views fall back to available content', () => {
@@ -64,6 +72,7 @@ test('guardrail retry finds an exact matching usable cached story', () => {
  assert.equal(cachedRetryRun(runs,'What if C?'),null);
  assert.match(replayLabel(runs[0]),/Simulated guardrail/);
  assert.match(replayLabel(runs[1]),/2D preview/);
+ assert.equal(replayLabel({id:'alexandria',divergence:'What if the Library of Alexandria never burned?'}),'Alexandria · Library survives');
 });
 
 test('offline 3D provenance identifies pre-generation and unknown cost and duration', () => {

@@ -95,9 +95,9 @@ test('provisional Alexandria is explicitly labelled and upgrades only with valid
   const dest=join(root,'alexandria'); const manifest=JSON.parse(await readFile(join(dest,'manifest.json'),'utf8')); assert.deepEqual(manifest,{status:'provisional',reason:'3D model not generated'});
   assert.equal(JSON.parse(await readFile(join(dest,'branch.json'),'utf8')).status,'ok'); assert.ok(!(await readdir(dest)).includes('model.glb'));
   result=await cacheDemo({outputRoot:root,orrerySource:source,provisional2d:true}); assert.ok(result.skipped.some(x=>x.id==='alexandria'));
-  const glb=Buffer.alloc(20); glb.write('glTF'); glb.writeUInt32LE(2,4); glb.writeUInt32LE(20,8); await writeFile(join(source,'model.glb'),glb); sourceTrace.steps.push({step:'3d',model:'Tattva TRELLIS',ms:5,costUsd:0}); await writeFile(tracePath,JSON.stringify(sourceTrace));
+  const glb=Buffer.alloc(20); glb.write('glTF'); glb.writeUInt32LE(2,4); glb.writeUInt32LE(20,8); await writeFile(join(source,'model.glb'),glb); await writeFile(join(source,'model.meshopt.glb'),glb); sourceTrace.steps.push({step:'3d',model:'Tattva TRELLIS',ms:5,costUsd:0}); await writeFile(tracePath,JSON.stringify(sourceTrace));
   result=await cacheDemo({outputRoot:root,orrerySource:source,maxBytes:10}); assert.ok(result.errors.some(x=>x.id==='alexandria')); assert.deepEqual(JSON.parse(await readFile(join(dest,'manifest.json'),'utf8')),manifest);
-  result=await cacheDemo({outputRoot:root,orrerySource:source}); assert.ok(result.published.includes('alexandria')); assert.ok((await readdir(dest)).includes('model.glb')); assert.ok(!(await readdir(dest)).includes('manifest.json'));
+  result=await cacheDemo({outputRoot:root,orrerySource:source}); assert.ok(result.published.includes('alexandria')); assert.ok((await readdir(dest)).includes('model.glb')); assert.ok((await readdir(dest)).includes('model.meshopt.glb')); assert.ok(!(await readdir(dest)).includes('manifest.json'));
   result=await cacheDemo({outputRoot:root,orrerySource:source}); assert.ok(result.skipped.some(x=>x.id==='alexandria' && x.reason==='Already cached'));
   assert.ok(!(await readdir(dir)).some(n=>n.startsWith('.cache-stage-') || n.startsWith('.cache-backup-')));
  } finally {await rm(dir,{recursive:true,force:true});}

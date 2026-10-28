@@ -12,6 +12,7 @@ async function fixture(t, options = {}) {
   await writeFile(join(webDir, 'index.html'), '<h1>Demo</h1>');
   await writeFile(join(runsDir, 'orrery', 'branch.json'), JSON.stringify(options.branch ?? { status: 'ok', divergence: 'What if?', hero: { title: 'Orrery' } }));
   await writeFile(join(runsDir, 'orrery', 'hero.png'), Buffer.from('png'));
+  if (options.meshoptModel) await writeFile(join(runsDir, 'orrery', 'model.meshopt.glb'), options.meshoptModel);
   const server = createDemoServer({ runsDir, webDir, env: { DEMO_ACCESS_CODE: 'private-code', DEMO_DAILY_CAP_USD: '1' }, ...options });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(base, { recursive: true, force: true }); });
@@ -29,6 +30,17 @@ test('lists replay and serves allowlisted assets and HEAD', async t => {
   assert.equal(img.status, 200); assert.equal(img.headers.get('content-type'), 'image/png'); assert.equal(await img.text(), '');
   assert.equal((await fetch(`${url}/runs/orrery/secret.txt`)).status, 404);
   assert.equal((await fetch(`${url}/runs/%2e%2e%2fsecret`)).status, 404);
+});
+
+test('serves meshopt-compressed replay models and advertises them as available', async t => {
+  const url = await fixture(t, { meshoptModel: Buffer.from('compressed model') });
+  const run = await (await fetch(`${url}/runs/orrery`)).json();
+  assert.equal(run.hasModel, true);
+  assert.equal(run.assetUrls['model.meshopt.glb'], '/runs/orrery/model.meshopt.glb');
+  const response = await fetch(`${url}/runs/orrery/model.meshopt.glb`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'model/gltf-binary');
+  assert.equal(await response.text(), 'compressed model');
 });
 
 test('exposes an unauthenticated health endpoint for container probes', async t => {

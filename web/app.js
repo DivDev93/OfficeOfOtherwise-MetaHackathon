@@ -1,6 +1,6 @@
-import { retryPrompt, formatYear, provenance, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode } from './logic.js';
+import { retryPrompt, formatYear, provenance, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from './logic.js';
 const $ = id => document.getElementById(id);
-let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, globeApi = null, modelApi = null, trace = [], savedRuns = [];
+let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', globeApi = null, modelApi = null, trace = [], savedRuns = [];
 const status = text => $('status').textContent = text;
 const asset = name => `${base}/${name}`;
 function applyServiceMode(mode) {
@@ -20,12 +20,19 @@ async function loadServiceMode() {
 }
 function setView(view) {
   view = availableView(view, {image:hasImage, cutout:hasCutout, model:hasModel && !!modelApi});
+  activeView = view;
   $('scene-view').disabled = !hasImage; $('cutout-view').disabled = !hasCutout; $('model-button').disabled = !hasModel || !modelApi;
   $('hero-image').hidden = !hasImage || view !== 'scene';
   $('cutout-image').hidden = !hasCutout || view !== 'cutout';
   $('model-view').hidden = !hasModel || view !== 'model';
   $('stage-empty').hidden = hasImage || (hasModel && view === 'model');
   for (const [id, name] of [['scene-view','scene'],['cutout-view','cutout'],['model-button','model']]) $(id).classList.toggle('active', view === name);
+  const modelFocus = hasModel && !!modelApi && view === 'model';
+  $('workspace').classList.toggle('model-focus', modelFocus);
+  $('back-to-atlas').hidden = !modelFocus;
+  $('model-loading').hidden = !modelFocus || !modelLoading;
+  $('model-error').hidden = !modelFocus || !modelError;
+  if (modelFocus && !modelLoaded && !modelLoading && !modelError) requestModelLoad();
 }
 function showGuard(data) {
   $('guardrail').hidden = false; $('reason').textContent = data.reason || 'This question is outside the scope of this exploration.';
@@ -55,29 +62,108 @@ function renderBranches() {
 }
 function renderTrace() {
   $('steps').replaceChildren();
+  const hasRecordedSteps = trace.some(s => !s.summary);
   for (const p of provenance(trace)) {
-    const el = document.createElement('div'); el.className = 'step'; const name = document.createElement('strong'); name.textContent = `${p.label}: ${p.model}`;
+    const el = document.createElement('div'); el.className = 'step'; const name = document.createElement('strong');
+    const recordedReplay = p.label === 'Policy' && serviceMode === 'replay-only' && p.model.includes('Muse Wonder');
+    name.textContent = `${p.label}: ${p.model}${recordedReplay ? ' · saved replay' : ''}`;
     const duration = Number.isFinite(p.ms) ? `${(p.ms / 1000).toFixed(1)}s` : 'Time not recorded';
     const cost = Number.isFinite(p.costUsd) ? `$${p.costUsd.toFixed(4)}` : 'Cost not recorded';
-    const value = document.createElement('span'); value.textContent = p.available ? `${duration} · ${cost}` : 'Awaiting step'; el.append(name, value); $('steps').append(el);
+    const value = document.createElement('span'); value.textContent = p.available ? `${duration} · ${cost}` : hasRecordedSteps ? 'Not recorded in this replay' : 'No replay loaded'; el.append(name, value); $('steps').append(el);
+  }
+  renderHeroModels();
+}
+function metricText(item) {
+  const duration = Number.isFinite(item?.ms) ? `${(item.ms / 1000).toFixed(1)}s` : 'Time not recorded';
+  const cost = Number.isFinite(item?.costUsd) ? `$${item.costUsd.toFixed(4)}` : 'Cost not recorded';
+  return `${duration} · ${cost}`;
+}
+function renderHeroModels() {
+  const host = $('hero-models'); host.replaceChildren();
+  const recorded = trace.some(s => !s.summary);
+  host.hidden = !recorded;
+  if (!recorded) return;
+  const steps = provenance(trace);
+  const sparkUsed = /Muse Spark/.test(steps[0].model);
+  const models = [
+    { role: 'Topic policy', model: 'Muse Spark 1.3', metrics: sparkUsed ? metricText(steps[0]) : 'Current live role · no call in this replay' },
+  ];
+  if (!sparkUsed && steps[0].available) models.push({ role: 'Saved policy call', model: steps[0].model, metrics: metricText(steps[0]) });
+  const branchMs = [steps[1].ms, steps[2].ms].every(Number.isFinite) ? steps[1].ms + steps[2].ms : null;
+  const branchCost = [steps[1].costUsd, steps[2].costUsd].every(Number.isFinite) ? steps[1].costUsd + steps[2].costUsd : null;
+  models.push(
+    { role: 'Branches + review', model: 'Muse Wonder 1.0', metrics: steps[1].available || steps[2].available ? metricText({ ms: branchMs, costUsd: branchCost }) : 'Not recorded in this replay' },
+    { role: 'Scene', model: 'Muse Image 1.0', metrics: metricText(steps[3]) },
+    { role: 'Cutout', model: 'SAM 3.1', metrics: metricText(steps[4]) },
+    { role: '3D viewer', model: 'Meta SAM 3D Objects', metrics: metricText(steps[5]) },
+  );
+  for (const item of models) {
+    const card = document.createElement('div'); card.className = 'hero-model-card';
+    const model = document.createElement('strong'); model.textContent = item.model;
+    const role = document.createElement('span'); role.textContent = item.role;
+    const metrics = document.createElement('small'); metrics.textContent = item.metrics;
+    card.append(model, role, metrics); host.append(card);
   }
 }
-function reset() { branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; base = ''; hasImage = hasCutout = hasModel = false; $('guardrail').hidden = true; $('generation').hidden = true; $('hero-title').textContent = 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = 'The strongest branch becomes a scene, then a subject to explore in three dimensions.'; renderBranches(); renderTrace(); setView('scene'); }
+function reset() { branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; modelRequestId++; $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG TO EXPLORE'; $('hero-title').textContent = 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = 'The strongest branch becomes a scene, then a subject to explore in three dimensions.'; renderBranches(); renderTrace(); setView('scene'); }
 function setBranch(data, event = 'complete') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchPhaseLabel(branchState.phase);
-  if (branchState.phase === 'blocked') { showGuard(data); status('This question needs a reframe'); renderBranches(); return; }
+  if (branchState.phase === 'blocked') { showGuard(data); $('map-status').textContent = 'NO BRANCHES · REFRAME REQUIRED'; status('This question needs a reframe'); renderBranches(); return; }
   renderBranches();
   const hero = branchState.branches.find(b => b.id === branchState.heroId);
   if (hero) { $('hero-title').textContent = hero.title; $('hero-description').textContent = hero.summary; globeApi?.focus(hero); }
 }
 async function exists(url) { try { const response = await fetch(url, { method:'HEAD' }); return response.ok; } catch { return false; } }
+function requestModelLoad() {
+  if (!base || !modelAsset || !modelApi) return;
+  const url = asset(modelAsset);
+  if (url === loadedModelUrl) { modelLoaded = true; modelLoading = false; setView(activeView); return; }
+  if (url === loadingModelUrl) return;
+  const requestId = ++modelRequestId;
+  loadingModelUrl = url; modelLoading = true; modelLoaded = false; modelError = false;
+  $('model-loading').hidden = activeView !== 'model'; $('model-error').hidden = true;
+  $('model-progress').value = 0; $('model-progress-text').textContent = 'Preparing 3D model…';
+  modelApi.load(url, {
+    onProgress(event) {
+      if (requestId !== modelRequestId) return;
+      const progress = modelLoadProgress(event);
+      if (progress.value === null) $('model-progress').removeAttribute('value');
+      else { $('model-progress').max = 100; $('model-progress').value = progress.value; }
+      $('model-progress-text').textContent = progress.label;
+    },
+    onLoad() {
+      if (requestId !== modelRequestId) return;
+      loadedModelUrl = url; loadingModelUrl = ''; modelLoading = false; modelLoaded = true; modelError = false;
+      setView(activeView);
+    },
+    onError() {
+      if (requestId !== modelRequestId) return;
+      loadingModelUrl = ''; modelLoading = false; modelLoaded = false; modelError = true;
+      status('3D model failed to load. Retry from the 3D view.'); setView(activeView);
+    },
+  });
+}
+async function replaySavedBranches(branch) {
+  const branches = Array.isArray(branch.branches) ? branch.branches : [];
+  if (!branches.length || branch.status === 'blocked' || branch.status === 'empty') { setBranch(branch); return; }
+  for (let i = 1; i <= branches.length; i++) {
+    branchState = { branches: branches.slice(0, i), heroId: null, phase: 'replay' };
+    $('hero-tag').textContent = `CACHED REPLAY · ${i}/${branches.length} PATHS`;
+    $('map-status').textContent = `CACHED REPLAY · ${i} OF ${branches.length} PATHS`;
+    status(`Replaying saved branches · ${i} of ${branches.length}`);
+    renderBranches();
+    if (i < branches.length) await new Promise(resolve => setTimeout(resolve, 360));
+  }
+  setBranch(branch);
+  $('map-status').textContent = `CACHED REPLAY · ${branches.length} PATHS`;
+}
 async function loadAssets(preferredView) {
   if (!base) return;
-  const [image, cutout, model] = await Promise.all(['hero.png','cutout.png','model.glb'].map(n => exists(asset(n))));
-  hasImage = image; hasCutout = cutout; hasModel = model;
+  const [image, cutout, meshoptModel, model] = await Promise.all(['hero.png','cutout.png','model.meshopt.glb','model.glb'].map(n => exists(asset(n))));
+  hasImage = image; hasCutout = cutout; hasModel = meshoptModel || model; modelAsset = meshoptModel ? 'model.meshopt.glb' : model ? 'model.glb' : '';
   if (image) $('hero-image').src = asset('hero.png'); if (cutout) $('cutout-image').src = asset('cutout.png');
-  if (model) modelApi?.load(asset('model.glb')); setView(preferredView || (cutout ? 'cutout' : model ? 'model' : 'scene'));
+  setView(preferredView || (cutout ? 'cutout' : hasModel ? 'model' : 'scene'));
 }
 async function loadRun(id) {
   if (!id) return; reset(); base = `/runs/${encodeURIComponent(id)}`; status('Opening saved story…');
@@ -86,7 +172,10 @@ async function loadRun(id) {
     if (!branchResponse.ok) throw new Error('Could not load this cached story');
     const branch = await branchResponse.json(); const record = traceResponse.ok ? await traceResponse.json() : {};
     const manifest = manifestResponse.ok ? await manifestResponse.json() : {};
-    $('prompt').value = branch.divergence || ''; setBranch(branch); trace = record.steps || branch.trace || []; renderTrace(); await loadAssets(); status(manifest.status === 'simulated' ? 'Simulated guardrail · no classifier was called' : branch.status === 'blocked' ? 'This question needs a reframe' : branch.renderStatus === '2d-only' ? completionStatus(branch) : manifest.status === 'provisional' ? '2D preview · 3D model not generated' : 'Saved story ready');
+    $('prompt').value = branch.divergence || '';
+    await replaySavedBranches(branch);
+    trace = record.steps || branch.trace || []; renderTrace(); await loadAssets();
+    status(manifest.status === 'simulated' ? 'Simulated guardrail · no classifier was called' : branch.status === 'blocked' ? 'This question needs a reframe' : branch.renderStatus === '2d-only' ? completionStatus(branch) : manifest.status === 'provisional' ? '2D preview · 3D model not generated' : 'Saved story ready');
   } catch (e) { status(e.message); }
 }
 async function handleEvent(type, data) {
@@ -127,7 +216,9 @@ $('retry').addEventListener('click', () => {
 });
 $('load-run').addEventListener('click', () => loadRun($('runs').value));
 $('scene-view').addEventListener('click', () => setView('scene')); $('cutout-view').addEventListener('click', () => setView('cutout')); $('model-button').addEventListener('click', () => setView('model'));
+$('back-to-atlas').addEventListener('click', () => setView(hasCutout ? 'cutout' : 'scene'));
+$('retry-model').addEventListener('click', () => { loadedModelUrl = ''; loadingModelUrl = ''; modelError = false; requestModelLoad(); setView('model'); });
 reset();
 loadServiceMode();
 fetch('/runs').then(r => r.json()).then(data => { const runs = Array.isArray(data) ? data : data.runs || []; savedRuns = runs; $('runs').replaceChildren(); if (!runs.length) { $('runs').add(new Option('No saved stories yet', '')); return; } for (const run of runs) $('runs').add(new Option(replayLabel(run), run.id)); }).catch(() => { $('runs').replaceChildren(new Option('Archive unavailable', '')); });
-import('./visuals.js').then(({createGlobe,createModelViewer}) => { globeApi = createGlobe($('globe')); modelApi = createModelViewer($('model-view')); renderBranches(); if (hasModel) { modelApi.load(asset('model.glb')); setView('model'); } }).catch(() => { $('globe-fallback').hidden = false; });
+import('./visuals.js').then(({createGlobe,createModelViewer}) => { globeApi = createGlobe($('globe')); modelApi = createModelViewer($('model-view')); renderBranches(); setView(activeView); }).catch(() => { $('globe-fallback').hidden = false; });
