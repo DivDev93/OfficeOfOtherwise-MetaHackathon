@@ -1,19 +1,19 @@
 # Cached demo 3D handoff
 
-The gen3d MCP was exposed in this session, but the Alexandria and Green Sahara generation calls returned errors without GLBs. Both were submitted around 2026-10-28 02:57:21 UTC; their observed elapsed times were approximately 300 and 600 seconds. The original captured results did not retain diagnostic details. A subsequent Alexandria attempt at approximately 03:20:53 UTC returned an MCP timeout after 300 seconds with no GLB. Its remote status and cost are unknown. Check the service's job history or operator logs for the object IDs and investigate the call timeout before retrying; any of the jobs might have run and incurred charges. Three of the six allowed generation attempts have been used, leaving at most three. Since all four models remain missing, finishing all four within the limit requires recovering an existing result. Do not run the MCP server directly or move its credentials into this repository.
+The gen3d MCP is available, but four generation calls have returned errors without GLBs. The latest Alexandria attempt returned `timed out awaiting tools/call after 300s` even after a project-scoped 900-second timeout override was added; a fresh Codex CLI resolves that override, but the running MCP bridge still used its 300-second deadline. Remote job status and GCP cost are unknown. Investigate the active bridge deadline and check service job history before retrying; timed-out jobs may still run and incur charges. The user has authorized additional necessary gen3d calls and asked to keep spending low. Do not run the MCP server directly or move its credentials into this repository.
 
 A later read-only search of accessible Cloud Run logs found failure markers mentioning `alexandria` at 03:05:41 UTC and `green-sahara` at 03:09:38 UTC on 2026-10-28. The checked fields did not supply a request identifier or a cause, so these matching object IDs are useful investigation leads rather than proof of either original call's outcome. Two accessible projects did not permit the log lookup.
 
-Pass `provider="trellis"`, `debug=false`, the full hero image and the explicit mask. These paths are on the local Windows machine; `out/` is not committed. The Beringia mask is fragmented and is **not accepted**. Antikythera has no mask. Do not generate those models until those problems are resolved and their 2D runs are staged.
+Pass `provider="trellis"`, `debug=false`, the full hero image and the explicit mask. These paths are on the local Windows machine; `out/` is not committed. The four 2D replays are staged provisionally; the Alexandria mask omits some thin parts, and the mechanism mask retains some background within its open frame.
 
 | object_id | hero image | mask |
 | --- | --- | --- |
 | `alexandria` | `D:\OfficeOfOtherwise-MetaHackathon\out\1793139066427\hero.png` | `D:\OfficeOfOtherwise-MetaHackathon\out\1793139066427\mask.png` |
-| `beringia` | `D:\OfficeOfOtherwise-MetaHackathon\out\1793156040577\hero.png` | `D:\OfficeOfOtherwise-MetaHackathon\out\1793156040577\mask.png` (fragmented; not accepted) |
+| `beringia` | `D:\OfficeOfOtherwise-MetaHackathon\out\1793160583959\hero.png` | `D:\OfficeOfOtherwise-MetaHackathon\out\1793160583959\mask.png` |
 | `green-sahara` | `D:\OfficeOfOtherwise-MetaHackathon\out\1793155949163\hero.png` | `D:\OfficeOfOtherwise-MetaHackathon\out\1793155949163\mask.png` |
-| `mechanisms` | `D:\OfficeOfOtherwise-MetaHackathon\out\1793156096257\hero.png` | `D:\OfficeOfOtherwise-MetaHackathon\out\1793156096257\mask.png` (missing) |
+| `mechanisms` | `D:\OfficeOfOtherwise-MetaHackathon\out\mechanisms-selected-source\hero.png` | `D:\OfficeOfOtherwise-MetaHackathon\out\mechanisms-selected-source\mask.png` |
 
-After a GLB has been produced for a staged run, substitute its actual local path in the corresponding command. The optional `--ms` should be the measured generation time; omit it if unknown. Beringia and mechanisms must first have accepted 2D outputs staged under their slugs.
+After a GLB has been produced for a staged run, substitute its actual local path in the corresponding command. The optional `--ms` should be the measured generation time; omit it if unknown.
 
 ```powershell
 npm run attach-glb -- alexandria "C:\path\to\alexandria.glb" --provider trellis
