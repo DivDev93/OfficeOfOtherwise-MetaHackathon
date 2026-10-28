@@ -1,0 +1,89 @@
+{
+  "status": "ok",
+  "divergence": "What if the Bering land bridge never flooded?",
+  "branches": [
+    {
+      "id": "b2",
+      "title": "Reindeer Herders Cross Continents",
+      "year": 900,
+      "place": {
+        "name": "Nome, Alaska",
+        "lat": 64.5011,
+        "lon": -165.4064
+      },
+      "summary": "Permanent land allows Siberian reindeer herding, sled design, and cold-climate clothing techniques to spread gradually into Alaska by foot and caravan. Northern communities on both sides develop a shared seasonal round, exchanging breeding animals and knowledge each year.",
+      "scene": "Herders in fur parkas guide hundreds of reindeer across a wind-packed plain where the sea never formed.",
+      "score": 9,
+      "reviewNote": "Livestock and sled technology require land; gradual cultural exchange follows directly."
+    },
+    {
+      "id": "b5",
+      "title": "An Arctic Ocean Sealed South",
+      "year": 1740,
+      "place": {
+        "name": "Teller, Alaska",
+        "lat": 65.2636,
+        "lon": -166.3608
+      },
+      "summary": "Because the Pacific never breaches Beringia, warm currents cannot flow north through a strait and the Arctic Ocean stays colder and fresher. Eighteenth-century naturalists mapping the region document a broad inhabited isthmus instead of open water, forcing new theories of ocean circulation and climate.",
+      "scene": "Surveyors plant measuring chains across a frozen river valley while Pacific and Arctic waters lap at opposite ends of the same land.",
+      "score": 8,
+      "reviewNote": "Closed strait correctly alters Arctic inflow and exploration, though climatic effect overstated."
+    },
+    {
+      "id": "b1",
+      "title": "Mammoth Steppe Without End",
+      "year": -4500,
+      "place": {
+        "name": "Yukon River Valley",
+        "lat": 64.06,
+        "lon": -139.43
+      },
+      "summary": "With Beringia remaining dry grassland, mammoths, bison, and horses migrate freely between Siberia and Yukon each season without a sea barrier. Their continuous grazing maintains a vast mammoth steppe that resists forest encroachment long after it vanished elsewhere.",
+      "scene": "A herd of woolly mammoths crosses frosted tundra below a low sun, breath clouding above calves walking between adults.",
+      "score": 7,
+      "reviewNote": "Continuous grazing-steppe feedback plausible, but human hunting and warming still threaten mammoths."
+    }
+  ],
+  "hero": {
+    "branchId": "b2",
+    "imagePrompt": "Isolated complete empty traditional wooden sled with curved runners, fully visible on snow in Beringia, simple uncluttered background, no cargo or people; photorealistic.",
+    "subject": "sled"
+  },
+  "trace": [
+    {
+      "step": "policy:prompt",
+      "model": "muse-wonder-1.0",
+      "ms": 5093,
+      "allowed": true
+    },
+    {
+      "step": "propose",
+      "model": "muse-wonder-1.0",
+      "ms": 20937,
+      "costUsd": 0.071076,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "policy:branches",
+      "model": "muse-wonder-1.0",
+      "ms": 11554
+    },
+    {
+      "step": "review",
+      "model": "muse-wonder-1.0",
+      "ms": 20707,
+      "costUsd": 0.06692,
+      "attempt": 1,
+      "ok": true
+    },
+    {
+      "step": "image-prompt-override",
+      "model": "operator-authored",
+      "costUsd": 0,
+      "prompt": "Isolated complete empty traditional wooden sled with curved runners, fully visible on snow in Beringia, simple uncluttered background, no cargo or people; photorealistic."
+    }
+  ],
+  "costUsd": 0.2147576000000001
+}
