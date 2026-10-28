@@ -104,6 +104,18 @@ test('createModelClassifier sends the text as data to the planner model through 
   assert.equal(seen[0].label, 'topic-policy');
 });
 
+test('prompt and branch checks can use separate metered models', async () => {
+  const seen = [];
+  const client = { respond: async args => { seen.push(args); return { text: '{"verdict":"allow","category":null,"reason":"ok"}' }; } };
+  const policy = createTopicPolicy({
+    classifyPrompt: createModelClassifier(client, { model: 'muse-wonder-1.0' }),
+    classifyBranches: createModelClassifier(client, { model: 'muse-spark-1.3' }),
+  });
+  await policy.checkPrompt('What if the Sahara had stayed green?');
+  await policy.checkBranches([{ title: 'A salt road', summary: 'Markets grow.' }]);
+  assert.deepEqual(seen.map(call => call.model), ['muse-wonder-1.0', 'muse-spark-1.3']);
+});
+
 test('categories are configurable per deployment', async () => {
   assert.deepEqual(categoriesFromEnv({}), ['war', 'politics']);
   assert.deepEqual(categoriesFromEnv({ TOPIC_POLICY_BLOCK: 'war' }), ['war']);

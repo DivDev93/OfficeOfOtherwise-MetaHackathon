@@ -7,6 +7,13 @@ import { pathToFileURL } from 'node:url';
 const assets = new Set(['branch.json', 'trace.json', 'hero.png', 'mask.png', 'cutout.png', 'model.glb']);
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.glb': 'model/gltf-binary', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
 const safeId = s => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(s);
+const TWO_D_ONLY_REASON = 'SAM 3.1 returned no mask; cutout and 3D model were not generated';
+
+function renderMetadata(branch) {
+  return branch?.renderStatus === '2d-only'
+    ? { renderStatus: '2d-only', status: 'provisional', reason: TWO_D_ONLY_REASON }
+    : {};
+}
 
 export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), runPipeline, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now } = {}) {
   let busy = false;
@@ -17,7 +24,23 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
   function clean(value) {
     if (typeof value === 'string') return secrets.reduce((s, secret) => s.split(secret).join('[redacted]'), value);
     if (Array.isArray(value)) return value.map(clean);
-    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => !/token|secret|api.?key|authorization|access.?code/i.test(key)).map(([key, v]) => [key, clean(v)]));
+    if (value && typeof value === 'object') {
+      const safe = {};
+      for (const [key, item] of Object.entries(value)) {
+        if (/token|secret|api.?key|authorization|access.?code/i.test(key)) continue;
+        if (key === 'rejected' && Array.isArray(item)) {
+          safe.rejectedCount = item.length;
+          safe.rejected = item.map(entry => ({
+            ...(safeId(entry?.branch?.id) ? { id: entry.branch.id } : {}),
+            ...(['war', 'politics', 'other', 'unverifiable'].includes(entry?.category) ? { category: entry.category } : {}),
+            ...(['keyword', 'model'].includes(entry?.layer) ? { layer: entry.layer } : {}),
+          }));
+          continue;
+        }
+        safe[key] = clean(item);
+      }
+      return safe;
+    }
     return value;
   }
   function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(clean(data))); }
@@ -72,7 +95,8 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           }
         } catch { /* optional metadata */ }
         const assetUrls = Object.fromEntries(present.map(name => [name, `/runs/${encodeURIComponent(id)}/${name}`]));
-        return { id, title: value(branch.hero?.title) || value(branch.title) || value(branch.divergence) || id, divergence: value(branch.divergence), status: provisional?.status ?? (value(branch.status) || 'unknown'), ...(provisional ? { reason: provisional.reason } : {}), hasModel: present.includes('model.glb'), assets: present, assetUrls, branch };
+        const rendering = renderMetadata(branch);
+        return { id, title: value(branch.hero?.title) || value(branch.title) || value(branch.divergence) || id, divergence: value(branch.divergence), ...rendering, status: provisional?.status ?? rendering.status ?? (value(branch.status) || 'unknown'), ...((provisional?.reason ?? rendering.reason) ? { reason: provisional?.reason ?? rendering.reason } : {}), hasModel: present.includes('model.glb'), assets: present, assetUrls, branch };
       } catch { /* no valid manifest in this root */ }
     }
     return null;
@@ -81,6 +105,11 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     try {
       const url = new URL(req.url, 'http://localhost');
       const path = url.pathname;
+      if ((req.method === 'GET' || req.method === 'HEAD') && path === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+        const replayOnly = env.DEMO_REPLAY_ONLY === 'true' || typeof env.DEMO_ACCESS_CODE !== 'string' || env.DEMO_ACCESS_CODE.length === 0;
+        return res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ status: 'ok', replayOnly }));
+      }
       if ((req.method === 'GET' || req.method === 'HEAD') && path === '/runs') return json(res, 200, { runs: await listRuns() });
       if ((req.method === 'GET' || req.method === 'HEAD') && path.startsWith('/runs/')) {
         const segments = path.split('/');
@@ -96,6 +125,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         return json(res, 404, { error: 'Not found' });
       }
       if (req.method === 'POST' && path === '/api/run') {
+        if (env.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled. Use replay mode.' });
         const configured = env.DEMO_ACCESS_CODE;
         const provided = req.headers['x-demo-access-code'];
         const a = Buffer.from(typeof configured === 'string' ? configured : '');
@@ -128,7 +158,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           try {
             const result = await runner({ divergence: input.divergence.trim(), signal: controller.signal, dailyCapUsd, onStep: event => { if (allowed.has(event?.step)) { if (safeId(event.runId ?? '')) liveRoots.set(event.runId, liveRoot); emit(event.step, event); } } });
             if (safeId(result?.runId ?? '')) liveRoots.set(result.runId, liveRoot);
-            emit('complete', { ...result, step: 'complete' });
+            emit('complete', { ...result, ...renderMetadata(result?.branch), step: 'complete' });
           } catch { emit('error', { step: 'error', error: 'Live generation failed. Check server logs and use replay mode.' }); }
           res.end();
         } finally { busy = false; }
@@ -151,6 +181,6 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const port = Number(process.env.PORT ?? 3000);
-  const host = process.env.HOST || '127.0.0.1';
+  const host = process.env.HOST || '0.0.0.0';
   createDemoServer().listen(port, host, () => console.log(`Demo server listening on port ${port}`));
 }

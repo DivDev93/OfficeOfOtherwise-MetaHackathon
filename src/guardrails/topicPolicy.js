@@ -1,7 +1,7 @@
 // Topic policy: the hackathon bans projects that are political or involve war,
 // and alternate history drifts there by default. Two layers:
 //   1. keyword layer: free, instant, deliberately over-eager (hard block)
-//   2. model layer: Muse Wonder judges what the keywords miss (fails CLOSED)
+//   2. model layer: Muse Spark judges what the keywords miss (fails CLOSED)
 // Used twice: on the user's "what if" prompt, and on every branch the agent proposes.
 
 const KEYWORD_RULES = [
@@ -84,9 +84,9 @@ export function parseVerdict(text) {
 // Muse Wonder reasons before answering and reasoning tokens count against max_output_tokens.
 // 600 was not enough (smoke test 2026-10-27: verdict truncated), so the budget is generous;
 // worst case is still under a cent per check.
-export function createModelClassifier(client, { model = 'muse-wonder-1.0', maxOutputTokens = 2500, onResponse, categories = ALL_CATEGORIES } = {}) {
+export function createModelClassifier(client, { model = 'muse-spark-1.3', maxOutputTokens = 2500, onResponse, categories = ALL_CATEGORIES } = {}) {
   const instructions = classifierInstructions(categories);
-  return async function classify(text) {
+  const classify = async function classify(text) {
     const { text: out, response } = await client.respond({
       model,
       instructions,
@@ -97,6 +97,8 @@ export function createModelClassifier(client, { model = 'muse-wonder-1.0', maxOu
     onResponse?.(response, out);
     return parseVerdict(out);
   };
+  classify.model = model;
+  return classify;
 }
 
 /**
@@ -107,31 +109,31 @@ export function createModelClassifier(client, { model = 'muse-wonder-1.0', maxOu
  *        model layer; omit for keyword-only. A null / unparseable result BLOCKS (fail closed).
  *        Errors (including SpendCapError) propagate to the caller.
  */
-export function createTopicPolicy({ classify, categories = ALL_CATEGORIES } = {}) {
+export function createTopicPolicy({ classify, classifyPrompt = classify, classifyBranches = classify, categories = ALL_CATEGORIES } = {}) {
   const off = categories.length === 0;
-  async function check(text) {
+  async function check(text, classifier) {
     if (off) return { allowed: true, layer: 'off' };
     const kw = keywordCheck(text, categories);
-    if (!kw.allowed || !classify) return kw;
-    const v = await classify(text);
-    if (!v) return { allowed: false, layer: 'model', category: 'unverifiable', reason: 'classifier returned no usable verdict', reframe: reframeFor('unverifiable') };
+    if (!kw.allowed || !classifier) return kw;
+    const v = await classifier(text);
+    if (!v) return { allowed: false, layer: 'model', model: classifier.model, category: 'unverifiable', reason: 'classifier returned no usable verdict', reframe: reframeFor('unverifiable') };
     if (v.verdict === 'block') {
       const category = v.category ?? 'other';
-      return { allowed: false, layer: 'model', category, reason: v.reason, reframe: reframeFor(category) };
+      return { allowed: false, layer: 'model', model: classifier.model, category, reason: v.reason, reframe: reframeFor(category) };
     }
-    return { allowed: true, layer: 'model' };
+    return { allowed: true, layer: 'model', model: classifier.model };
   }
 
   /** Check the user's what-if prompt before any generation is spent. */
-  const checkPrompt = prompt => check(prompt);
+  const checkPrompt = prompt => check(prompt, classifyPrompt);
 
   /** Check proposed branches. Returns { kept, rejected }. Keyword layer is free; model layer runs only on survivors. */
   async function checkBranches(branches) {
-    const results = await Promise.all(branches.map(b => check(`${b.title ?? ''}\n${b.summary ?? ''}`)));
+    const results = await Promise.all(branches.map(b => check(`${b.title ?? ''}\n${b.summary ?? ''}`, classifyBranches)));
     const kept = [], rejected = [];
     branches.forEach((branch, i) => (results[i].allowed ? kept : rejected).push(results[i].allowed ? branch : { branch, ...results[i] }));
     return { kept, rejected };
   }
 
-  return { checkPrompt, checkBranches, categories: [...categories] };
+  return { checkPrompt, checkBranches, categories: [...categories], promptModel: classifyPrompt?.model, branchModel: classifyBranches?.model };
 }

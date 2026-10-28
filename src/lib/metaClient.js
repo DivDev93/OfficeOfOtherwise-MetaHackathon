@@ -119,10 +119,11 @@ export function createMetaClient(opts = {}) {
   }
 
   /** POST /responses (non-streaming). Returns { text, response, usage, costUsd }. */
-  async function respond({ model, input, instructions, maxOutputTokens = 4096, label, ...rest }) {
+  async function respond({ model, input, instructions, maxOutputTokens = 4096, reasoning, label, ...rest }) {
     if (!model) throw new Error('respond() needs a model id');
     if (Object.hasOwn(rest, 'max_output_tokens') || Object.hasOwn(rest, 'tools') || Object.hasOwn(rest, 'tool_choice')) throw new Error('Unsupported metered response options');
-    const body = { model, input, ...(instructions ? { instructions } : {}), ...rest, max_output_tokens: maxOutputTokens };
+    if (reasoning !== undefined && (!reasoning || typeof reasoning !== 'object' || Array.isArray(reasoning) || !['none', 'minimal', 'low', 'medium', 'high'].includes(reasoning.effort) || Object.keys(reasoning).some(key => key !== 'effort'))) throw new Error('Invalid reasoning effort');
+    const body = { model, input, ...(instructions ? { instructions } : {}), ...rest, ...(reasoning ? { reasoning: { effort: reasoning.effort } } : {}), max_output_tokens: maxOutputTokens };
     const inputBytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
     const estimate = estimateTextCost(model, { inputBytes, maxOutputTokens });
     const reservation = reserve(estimate);

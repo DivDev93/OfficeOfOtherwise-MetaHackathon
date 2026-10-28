@@ -10,7 +10,7 @@ async function fixture(t, options = {}) {
   const runsDir = join(base, 'runs'), webDir = join(base, 'web');
   await mkdir(join(runsDir, 'orrery'), { recursive: true }); await mkdir(webDir);
   await writeFile(join(webDir, 'index.html'), '<h1>Demo</h1>');
-  await writeFile(join(runsDir, 'orrery', 'branch.json'), JSON.stringify({ status: 'ok', divergence: 'What if?', hero: { title: 'Orrery' } }));
+  await writeFile(join(runsDir, 'orrery', 'branch.json'), JSON.stringify(options.branch ?? { status: 'ok', divergence: 'What if?', hero: { title: 'Orrery' } }));
   await writeFile(join(runsDir, 'orrery', 'hero.png'), Buffer.from('png'));
   const server = createDemoServer({ runsDir, webDir, env: { DEMO_ACCESS_CODE: 'private-code', DEMO_DAILY_CAP_USD: '1' }, ...options });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -31,6 +31,16 @@ test('lists replay and serves allowlisted assets and HEAD', async t => {
   assert.equal((await fetch(`${url}/runs/%2e%2e%2fsecret`)).status, 404);
 });
 
+test('exposes an unauthenticated health endpoint for container probes', async t => {
+  const url = await fixture(t);
+  const response = await fetch(`${url}/health`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { status: 'ok', replayOnly: false });
+  assert.equal((await fetch(`${url}/health`, { method: 'HEAD' })).status, 200);
+  const noAccessCode = await fixture(t, { env: {} });
+  assert.deepEqual(await (await fetch(`${noAccessCode}/health`)).json(), { status: 'ok', replayOnly: true });
+});
+
 test('live gate defaults to replay and refuses runners without daily-cap enforcement', async t => {
   const url = await fixture(t, { runPipeline: async () => ({}) });
   assert.equal((await post(url, 'wrong')).status, 403);
@@ -39,17 +49,67 @@ test('live gate defaults to replay and refuses runners without daily-cap enforce
   assert.equal((await post(unset, '')).status, 403);
 });
 
+test('replay-only mode refuses a configured live runner before invoking it', async t => {
+  let called = false;
+  const url = await fixture(t, { env: { DEMO_REPLAY_ONLY: 'true', DEMO_ACCESS_CODE: 'private-code' }, runPipeline: fake(async () => { called = true; return {}; }) });
+  const response = await post(url);
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: 'Live generation is disabled. Use replay mode.' });
+  assert.equal(called, false);
+  assert.deepEqual(await (await fetch(`${url}/health`)).json(), { status: 'ok', replayOnly: true });
+});
+
+test('replay JSON redacts rejected branch text and keeps only safe rejection metadata', async t => {
+  const url = await fixture(t, { branch: {
+    status: 'ok', divergence: 'Science', hero: { title: 'Safe story' },
+    rejected: [{ branch: { id: 'bad-1', title: 'Blocked title', summary: 'Blocked summary' }, category: 'politics', layer: 'model', reason: 'Private classifier detail' }],
+  } });
+  const branch = await (await fetch(`${url}/runs/orrery/branch.json`)).json();
+  assert.equal(branch.rejectedCount, 1);
+  assert.deepEqual(branch.rejected, [{ id: 'bad-1', category: 'politics', layer: 'model' }]);
+  assert.doesNotMatch(JSON.stringify(branch), /Blocked title|Blocked summary|Private classifier detail/);
+  const manifest = await (await fetch(`${url}/runs/orrery`)).json();
+  assert.deepEqual(manifest.branch.rejected, branch.rejected);
+});
+
+test('2D-only branch render status is surfaced in replay metadata and live completion', async t => {
+  const reason = 'SAM 3.1 returned no mask; cutout and 3D model were not generated';
+  const replayUrl = await fixture(t, { branch: {
+    status: 'ok', renderStatus: '2d-only', renderReason: 'no-segmentation-mask', divergence: 'Science', hero: { title: 'Scene' },
+  } });
+  const detail = await (await fetch(`${replayUrl}/runs/orrery`)).json();
+  assert.equal(detail.status, 'provisional');
+  assert.equal(detail.renderStatus, '2d-only');
+  assert.equal(detail.reason, reason);
+  assert.equal(detail.hasModel, false);
+  const list = await (await fetch(`${replayUrl}/runs`)).json();
+  assert.equal(list.runs[0].status, 'provisional');
+  assert.equal(list.runs[0].renderStatus, '2d-only');
+
+  const liveUrl = await fixture(t, { runPipeline: fake(async () => ({
+    runId: 'render-only', branch: { status: 'ok', renderStatus: '2d-only' }, trace: [],
+  })) });
+  const response = await post(liveUrl);
+  const text = await response.text();
+  const completion = JSON.parse(text.match(/event: complete\ndata: (.+)/)[1]);
+  assert.equal(completion.status, 'provisional');
+  assert.equal(completion.renderStatus, '2d-only');
+  assert.equal(completion.reason, reason);
+});
+
 test('streams named events in order and redacts credentials', async t => {
   const runner = fake(async ({ onStep, dailyCapUsd }) => {
     assert.equal(dailyCapUsd, 1);
     for (const step of ['policy', 'propose', 'review', 'image', 'cutout', '3d']) onStep({ step, runId: 'sample', message: 'private-code', token: 'hidden' });
-    return { runId: 'sample' };
+    return { runId: 'sample', rejected: [{ branch: { id: 'bad-1', title: 'Blocked SSE title' }, category: 'war', reason: 'Private SSE reason' }] };
   });
   const url = await fixture(t, { runPipeline: runner });
   const response = await post(url); assert.equal(response.status, 200);
   const text = await response.text();
   assert.deepEqual([...text.matchAll(/^event: (.+)$/gm)].map(m => m[1]), ['policy', 'propose', 'review', 'image', 'cutout', '3d', 'complete']);
-  assert.doesNotMatch(text, /private-code|hidden/);
+  assert.doesNotMatch(text, /private-code|hidden|Blocked SSE title|Private SSE reason/);
+  assert.match(text, /"rejectedCount":1/);
+  assert.match(text, /"rejected":\[\{"id":"bad-1","category":"war"\}\]/);
 });
 
 test('rate limits and excludes concurrent sessions', async t => {

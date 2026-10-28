@@ -1,16 +1,67 @@
-# Demo deployment — draft, not deployed
+# Cloud Run deployment guide
 
-These are deployment preparation notes. The server and replay routes have local fixture coverage, but the browser UI, TRELLIS handoff and deployment have not been verified. Do not publish until a target, access policy, assets and working routes are confirmed.
+This guide prepares a replay-first Cloud Run service. It does not deploy anything by itself. The image defaults `DEMO_REPLAY_ONLY=true`; the server returns 503 for live-run requests before reading credentials or invoking the pipeline. The container listens on `0.0.0.0:$PORT`; Cloud Run supplies `PORT` (8080 by default). `/health` is a lightweight GET/HEAD probe. Replay data comes from the reviewed `demo/runs/` manifests and assets.
 
-## Intended replay-first configuration
+## Build and publish
 
-- Host the Node server on a platform supporting Node 22, persistent process execution and server-sent events. Install locked dependencies with `npm ci --ignore-scripts`; start with `npm run demo`. It binds to loopback by default; configure `HOST` and `PORT` for the host and verify its health check.
-- Package only reviewed, policy-compliant cached runs in `demo/runs/`. A public visitor should be able to view replay without a code; confirm that no public path can initiate paid generation. If no verified runs exist, keep the deployment private until they do.
-- Keep `DEMO_ACCESS_CODE` in the host's secret manager. Live requests should require it via the server's access-code header; distribute it privately only to authorized operators. Never embed it in client code or the public repository. Verify rejection without the code, rate limiting and streaming before exposing live access.
-- Configure `DEMO_DAILY_CAP_USD` (default 3) and `META_SPEND_CAP_USD` to the operator-authorized remaining budget. Initialize the persistent `out/` ledger and task checkpoint once with `npm run init-demo-budget`; never delete or reset it to bypass a limit. The task-wide Meta limit is $2, so the daily default does not authorize additional spend. The ledger uses persistent reservations and filesystem locking; instances must share a filesystem with compatible atomic rename and locks. Failed or uncertain requests retain reservations and can stop later work pending investigation. The guard uses cost estimates, which are not a guarantee against provider charges exceeding an estimate.
-- For live Meta calls, supply `META_API_KEY` (or `MODEL_API_KEY`) privately. Model IDs and optional price estimates are listed in `.env.example`. Leave `TOPIC_POLICY_BLOCK` empty for the strict default; do not loosen it for the hackathon.
-- A live 3D handoff additionally requires private `CHRONOS_API_BASE` (or `CHRONOS_3D_ENDPOINT`), `CHRONOS_API_TOKEN`, `CHRONOS_3D_CAPABILITY_CONFIRMED`, and optional `CHRONOS_3D_PROVIDER`, `CHRONOS_3D_MAX_JOBS`, and `CHRONOS_3D_ARTIFACT_ORIGINS`. Keep values in the secret manager. Confirm that the real TRELLIS relic path and any external artifact origin are enabled before setting capability confirmed. The job counter is durable on the shared ledger and conservatively refuses duplicate submissions after an uncertain outcome.
+Run these Bash commands from the repository root. Set `PROJECT_ID` to the intended Google Cloud project first. The Artifact Registry repository is created once; image tags use the current Git revision.
 
-## Before sharing
+```bash
+export PROJECT_ID="YOUR_PROJECT_ID"
+export REGION="us-central1"
+export REPOSITORY="office-otherwise"
+export IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/office-otherwise:$(git rev-parse --short HEAD)"
 
-Verify public replay, access-code rejection, no secret exposure, SSE behavior, cap and rate-limit enforcement, and at least one actual asset in the deployed environment. Check CDN access and dependency licenses. Add the public demo link to the submission only after a successful independent check; record any restrictions. Do not put private endpoints, tokens or storage identifiers in logs, docs or public output.
+gcloud config set project "$PROJECT_ID"
+gcloud services enable artifactregistry.googleapis.com run.googleapis.com secretmanager.googleapis.com
+gcloud artifacts repositories create "$REPOSITORY" --repository-format=docker --location="$REGION"
+gcloud auth configure-docker "$REGION-docker.pkg.dev"
+docker buildx build --load --platform linux/amd64 --tag "$IMAGE" .
+docker push "$IMAGE"
+```
+
+The image uses `node:22-slim`, installs only locked production dependencies, runs as the unprivileged `node` user, and creates a writable `/app/out` directory. `.dockerignore` excludes local output, dependencies, and `.env` files while allowing only the empty/example configuration file.
+
+## Store secrets
+
+Create secrets outside the repository. For example, place the values in temporary local files that are excluded from source control, then remove those files after adding versions:
+
+```bash
+gcloud secrets create META_API_KEY --replication-policy=automatic
+gcloud secrets versions add META_API_KEY --data-file=/secure/path/meta-api-key.txt
+gcloud secrets create DEMO_ACCESS_CODE --replication-policy=automatic
+gcloud secrets versions add DEMO_ACCESS_CODE --data-file=/secure/path/demo-access-code.txt
+
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+RUNTIME_IDENTITY="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+gcloud secrets add-iam-policy-binding META_API_KEY --member="serviceAccount:$RUNTIME_IDENTITY" --role=roles/secretmanager.secretAccessor
+gcloud secrets add-iam-policy-binding DEMO_ACCESS_CODE --member="serviceAccount:$RUNTIME_IDENTITY" --role=roles/secretmanager.secretAccessor
+```
+
+The Cloud Run runtime identity needs `roles/secretmanager.secretAccessor` on both secrets. Google recommends Secret Manager for sensitive settings and supports exposing secret versions as environment variables at deploy time ([Cloud Run service secrets](https://cloud.google.com/run/docs/configuring/services/secrets)). The project may use a dedicated least-privilege runtime identity instead of the default Compute Engine identity shown above.
+
+## Deploy
+
+```bash
+META_KEY_ENV="META_API_KEY"
+gcloud run deploy office-otherwise \
+  --image="$IMAGE" \
+  --region="$REGION" \
+  --port=8080 \
+  --timeout=600s \
+  --max-instances=2 \
+  --min-instances=0 \
+  --allow-unauthenticated \
+  --set-env-vars="DEMO_REPLAY_ONLY=true,DEMO_3D_ENABLED=false,DEMO_DAILY_CAP_USD=1,META_SPEND_CAP_USD=2" \
+  --set-secrets="$META_KEY_ENV=META_API_KEY:1,DEMO_ACCESS_CODE=DEMO_ACCESS_CODE:1"
+```
+
+Unauthenticated Cloud Run ingress is needed for public replay. The live POST route separately requires the secret `x-demo-access-code` header. Cloud Run requires the ingress container to listen on `0.0.0.0` at the configured port, and `gcloud run deploy` accepts `--max-instances` and `--timeout` ([container contract](https://cloud.google.com/run/docs/container-contract), [deploy reference](https://cloud.google.com/sdk/gcloud/reference/run/deploy)).
+
+## Spend and storage limits
+
+Treat this Cloud Run setup as **replay-only** until live spending is redesigned around durable shared state. `DEMO_DAILY_CAP_USD` and the file-backed `out/spend.json` ledger are process/instance-local. Cloud Run's writable container filesystem is ephemeral, instances can restart, and two instances can each admit work against their own daily-cap view. With `--max-instances=2`, the daily setting is not a service-wide spend ceiling; it can allow up to two independent instance-local amounts, and fresh instances can lose prior ledger state. `META_SPEND_CAP_USD` is also enforced against a local ledger. Do not represent either setting as a global cap or expose live access on this deployment as financial protection ([Cloud Run's filesystem is disposable and instance-local](https://cloud.google.com/run/docs/overview/what-is-cloud-run)).
+
+The current live pipeline additionally fails closed without the pre-established task budget checkpoint and ledger under `out/`. The image intentionally excludes `out/`, so simply supplying secrets does not enable a valid live run. The deployment command wires both requested secrets but keeps `DEMO_REPLAY_ONLY=true`; the server gate prevents the access code from enabling live requests. `DEMO_3D_ENABLED=false` also keeps the optional 3D provider disabled. Do not remove the replay-only setting or initialize/reset a budget to bypass these checks.
+
+After a replay-only deployment, check `/health`, `/`, `/runs`, and a listed run's assets from an independent client. The pipeline supports Meta-only live generation when `DEMO_3D_ENABLED=false`; 3D remains opt-in and requires the separate confirmed Chronos configuration. Before enabling any live generation, use an approved durable shared ledger/checkpoint with cross-instance atomic reservations, retain the access code privately, and verify that failed/uncertain requests remain accounted for. Do not add deployment URLs, secret values, or provider endpoints to this repository.

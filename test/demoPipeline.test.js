@@ -21,12 +21,14 @@ test('task checkpoint clamps the configured cap and cannot be silently reset', t
   assert.throws(() => taskSpendCap({ outputRoot: root, env: {} }), /Invalid/);
 });
 
-test('live runner rejects unverified Chronos capability before model work', async t => {
+test('Meta-only live runner does not require 3D configuration, but enabled 3D remains gated', async t => {
   const root = mkdtempSync(join(tmpdir(), 'demo-runner-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const runner = createDemoRunner({ env: {}, outputRoot: root, dailyCapUsd: 3 });
+  const runner = createDemoRunner({ env: { META_API_KEY: 'fixture-key' }, outputRoot: root, dailyCapUsd: 3 });
   assert.equal(runner.enforcesDailyCap, true);
-  await assert.rejects(runner({ divergence: 'What if a library survived?' }), /confirmed Chronos/i);
+  await assert.rejects(runner({ divergence: 'What if a library survived?' }), /budget checkpoint/i);
+  const with3d = createDemoRunner({ env: { DEMO_3D_ENABLED: 'true' }, outputRoot: root, dailyCapUsd: 3 });
+  await assert.rejects(with3d({ divergence: 'What if a library survived?' }), /confirmed Chronos/i);
 });
 
 test('initialization durably creates the ledger and never resets an existing checkpoint', t => {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { readdirSync } from 'node:fs';
 import { runHarness } from '../harness/run.js';
 import { writeCutoutPng, decodePng } from '../src/lib/png.js';
+import { createSamMask } from '../src/providers/samMask.js';
 
 function temp() { return mkdtempSync(join(tmpdir(), 'otherwise-harness-')); }
 
@@ -67,6 +68,49 @@ test('SAM failure persists paid calls and raw output', async () => {
     assert.equal(trace.steps.find(t => t.step === 'segment').costUsd, 0.05);
     assert.equal(readFileSync(join(dir, '4', 'sam-raw-1.txt'), 'utf8'), 'malformed output');
     assert.deepEqual(JSON.parse(readFileSync(join(dir, '4', 'sam-response-1.json'), 'utf8')), { status: 'completed', output_text: 'malformed output' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('completed empty SAM result preserves a 2D-only story without inventing a cutout or starting 3D', async () => {
+  const dir = temp();
+  try {
+    let spent = 0, samCalls = 0, threeDCalls = 0;
+    const emptyResponse = JSON.parse(readFileSync(new URL('./fixtures/sam-empty-completed-response.json', import.meta.url), 'utf8'));
+    const client = { spent: () => spent, async meteredPost(_path, _body, { costUsd }) { samCalls++; spent += costUsd; return emptyResponse; } };
+    const image = { model: 'fixture-image', async generate() { spent += 0.01; return { buffer: writeCutoutPng(Uint8Array.from([20, 30, 40, 255]), 1, 1), mime: 'image/png', costUsd: 0.01 }; } };
+    const sam = createSamMask({ client, env: { META_SEGMENT_COST_USD: '0.05' } });
+    const events = [];
+    const result = await runHarness({
+      divergence: 'What if a library survived?',
+      client,
+      agent: { run: async () => ({ status: 'ok', divergence: 'What if a library survived?', branches: [], hero: { imagePrompt: 'A brass pump', subject: 'brass pump' }, trace: [] }) },
+      image, sam, outputRoot: dir, timestamp: 8, log: text => events.push(text), no3d: false,
+      chronos3d: { generate() { threeDCalls++; throw new Error('must not generate without a mask'); } },
+      onStep: event => events.push(event),
+    });
+    const runDir = join(dir, '8');
+    const branch = JSON.parse(readFileSync(join(runDir, 'branch.json'), 'utf8'));
+    const trace = JSON.parse(readFileSync(join(runDir, 'trace.json'), 'utf8'));
+    assert.equal(result.renderStatus, '2d-only');
+    assert.equal(branch.renderStatus, '2d-only');
+    assert.equal(branch.renderReason, 'no-segmentation-mask');
+    assert.equal(trace.renderStatus, '2d-only');
+    assert.equal(trace.steps.find(step => step.step === 'cutout').status, 'unavailable');
+    assert.equal(trace.steps.find(step => step.step === 'cutout').reason, 'no-segmentation-mask');
+    const cutoutSummary = trace.steps.find(step => step.step === 'cutout');
+    assert.equal(cutoutSummary.summary, true);
+    assert.equal(cutoutSummary.costUsd, 0);
+    assert.ok(Math.abs(cutoutSummary.originalCostUsd - 0.1) < 1e-9);
+    assert.equal(trace.steps.filter(step => step.step === 'segment').length, 2);
+    assert.ok(Math.abs(trace.steps.filter(step => !step.summary).reduce((sum, step) => sum + (step.costUsd ?? 0), 0) - result.costUsd) < 1e-9);
+    assert.equal(samCalls, 2);
+    assert.equal(threeDCalls, 0);
+    assert.equal(existsSync(join(runDir, 'hero.png')), true);
+    assert.equal(existsSync(join(runDir, 'mask.png')), false);
+    assert.equal(existsSync(join(runDir, 'cutout.png')), false);
+    assert.equal(existsSync(join(runDir, 'model.glb')), false);
+    assert.ok(events.some(event => event?.step === 'cutout' && event.status === 'unavailable'));
+    assert.ok(events.some(event => typeof event === 'string' && event.includes('2D preview only')));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -224,7 +268,7 @@ test('disconnect after proposal waits for review and prevents image and 3D work'
     let finished=false;
     const pending=runHarness({divergence:'What if an ancient library survived?',agent,client,signal:controller.signal,outputRoot:dir,timestamp:9,log(){},no3d:false,
       image:{generate(){imageCalls++;}},sam:{segment(){throw new Error('unexpected SAM');}},chronos3d:{generate(){jobs++;}},
-      onStep:event=>{if(event.step==='propose') controller.abort();}}).finally(()=>{finished=true;});
+      onStep:event=>{if(event.step==='propose' && event.pending === false) controller.abort();}}).finally(()=>{finished=true;});
     await new Promise(resolve=>setImmediate(resolve));
     assert.equal(finished,false); assert.equal(reviewSettled,false);
     release(); await assert.rejects(pending,/Run aborted/);

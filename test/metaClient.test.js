@@ -47,6 +47,15 @@ test('respond() posts to /responses with bearer auth and returns text + cost', a
   assert.equal(client.spent(), out.costUsd);
 });
 
+test('respond() includes validated Responses reasoning effort when requested', async () => {
+  const fetch = fakeFetch([{ status: 200, body: RESPONSE_FIXTURE }]);
+  const client = createMetaClient({ ...base, fetch });
+  await client.respond({ model: 'muse-wonder-1.0', input: 'x', reasoning: { effort: 'low' } });
+  assert.deepEqual(JSON.parse(fetch.calls[0].init.body).reasoning, { effort: 'low' });
+  await assert.rejects(client.respond({ model: 'muse-wonder-1.0', input: 'x', reasoning: { effort: 'extreme' } }), /reasoning effort/);
+  assert.equal(fetch.calls.length, 1);
+});
+
 test('spend cap refuses a call before it is sent', async () => {
   const fetch = fakeFetch([]);
   const client = createMetaClient({ ...base, fetch, spendCapUsd: 1, ledger: memoryLedger(0.999) });
