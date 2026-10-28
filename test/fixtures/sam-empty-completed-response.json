@@ -1,0 +1,9 @@
+{
+  "status": "completed",
+  "output_text": "",
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "images_processed": 1
+  }
+}

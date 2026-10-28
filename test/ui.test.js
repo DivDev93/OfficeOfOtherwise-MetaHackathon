@@ -1,19 +1,60 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { retryPrompt, formatYear, provenance, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel } from '../web/logic.js';
+import { retryPrompt, formatYear, provenance, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode } from '../web/logic.js';
 test('guardrail retry extracts a complete suggested question', () => { assert.equal(retryPrompt('Try “What if the Sahara had stayed green?”'), 'What if the Sahara had stayed green?'); assert.equal(retryPrompt('No suggestion'), ''); });
 test('SSE parser handles named events and line endings', () => { assert.deepEqual(parseSseBlock('event: propose\r\ndata: {"branches":[]}'), {event:'propose',data:{branches:[]}}); });
 test('provenance excludes summary duplicates and reports actual measured costs', () => { const p=provenance([{step:'branch-agent:propose',ms:1000,costUsd:.02},{step:'propose',ms:1000,costUsd:0,summary:true}]); assert.equal(p[1].ms,1000); assert.equal(p[1].costUsd,.02); assert.equal(p[2].available,false); assert.equal(formatYear(-50),'50 BCE'); });
+test('policy provenance follows measured models and retains historical Wonder attribution', () => {
+ assert.equal(provenance([{step:'policy:prompt',model:'muse-spark-1.3',ms:10,costUsd:0}])[0].model,'Muse Spark 1.3');
+ assert.equal(provenance([{step:'policy:prompt',model:'muse-wonder-1.0',ms:10,costUsd:0}])[0].model,'Muse Wonder 1.0');
+ assert.equal(provenance([{step:'policy:prompt',model:'muse-wonder-1.0',summary:true}])[0].model,'Muse Spark 1.3');
+});
 
 test('unavailable views fall back to available content', () => {
  assert.equal(availableView('model',{image:true,cutout:true,model:false}),'scene');
  assert.equal(availableView('cutout',{image:true,cutout:true}),'cutout');
+ assert.equal(availableView('cutout',{image:true,cutout:false,model:false}),'scene');
  assert.equal(availableView('model',{image:true,model:true}),'model');
 });
 test('completion preserves blocked and empty outcomes', () => {
  assert.match(completionStatus({status:'blocked'}),/reframe/);
  assert.match(completionStatus({status:'empty'}),/No suitable/);
  assert.equal(completionStatus({status:'ok'}),'Story complete');
+ assert.equal(completionStatus({status:'ok',renderStatus:'2d-only',renderReason:'no-segmentation-mask'}),'2D scene only · no SAM cutout available');
+});
+test('health response selects replay-only/live mode and fails closed when unavailable or malformed', () => {
+ assert.equal(liveAccessMode({status:'ok',replayOnly:true}),'replay-only');
+ assert.equal(liveAccessMode({status:'ok',replayOnly:false}),'live-enabled');
+ assert.equal(liveAccessMode(null),'unknown');
+ assert.equal(liveAccessMode({status:'error',replayOnly:false}),'unknown');
+ assert.equal(liveAccessMode({status:'ok',replayOnly:'false'}),'unknown');
+});
+
+test('fixture event sequence exposes policy-cleared proposals before review and finalizes the hero later', () => {
+ const branch={id:'b1',title:'Open observatory',year:500,place:{name:'Alexandria'},summary:'Astronomers map the sky.'};
+ const blocked={id:'b2',title:'Rejected candidate'};
+ let state={branches:[],heroId:null,phase:'idle'};
+ state=branchProgress(state,'propose',{pending:true,candidateCount:3});
+ assert.equal(state.phase,'policy-checking'); assert.deepEqual(state.branches,[]); assert.equal(state.candidateCount,3);
+ assert.match(branchPhaseLabel(state.phase),/CHECKING TOPIC POLICY/);
+ // The follow-up event replaces placeholders with policy-cleared branch text.
+ state=branchProgress(state,'propose',{branches:[branch]});
+ assert.equal(state.phase,'provisional'); assert.deepEqual(state.branches,[branch]); assert.equal(state.heroId,null);
+ assert.match(branchPhaseLabel(state.phase),/REVIEW IN PROGRESS/);
+ state=branchProgress(state,'review',{branches:[{...branch,score:9}],hero:{branchId:'b1'}});
+ assert.equal(state.phase,'reviewed'); assert.equal(state.heroId,'b1');
+ state=branchProgress(state,'complete',{branch:{status:'ok',branches:[{...branch,score:9}],hero:{branchId:'b1'}}});
+ assert.equal(state.phase,'final'); assert.equal(state.heroId,'b1');
+ assert.equal(branchProgress(state,'policy',{branches:[blocked]}),state);
+});
+
+test('blocked events clear candidate branches instead of leaving a provisional display', () => {
+ const state=branchProgress({branches:[{id:'b1'}],heroId:null,phase:'provisional'},'complete',{branch:{status:'blocked',branches:[]}});
+ assert.deepEqual(state,{branches:[],heroId:null,phase:'blocked'});
+ assert.match(branchPhaseLabel(state.phase),/OUTSIDE EXPLORATION SCOPE/);
+ const empty=branchProgress({branches:[],heroId:null,phase:'policy-checking'},'complete',{branch:{status:'empty',branches:[]}});
+ assert.equal(empty.phase,'empty'); assert.match(branchPhaseLabel(empty.phase),/NO SUITABLE PATHS/);
+ assert.equal(branchProgress({branches:[],heroId:null,phase:'policy-checking'},'propose',{pending:false,branches:[]}).phase,'empty');
 });
 
 test('guardrail retry finds an exact matching usable cached story', () => {

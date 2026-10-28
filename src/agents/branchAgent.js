@@ -1,7 +1,7 @@
 // Branch agent: turns one "what if" into a small set of plausible, on-policy
-// timeline branches and picks a hero scene to render. Multi-step, Muse Wonder:
+// timeline branches and picks a hero scene to render.
 //
-//   1. policy   check the divergence prompt              (keyword + Wonder)
+//   1. policy   check the divergence prompt              (keyword + policy model)
 //   2. propose  N+2 candidate branches as structured JSON (Wonder)
 //   3. policy   drop any branch that drifted into war/politics      } run in
 //   4. review   score plausibility & causal consistency, rank, pick the hero,
@@ -75,7 +75,7 @@ export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' })
     const t0 = now();
     const policyStartSpent = client.spent();
     const gate = await policy.checkPrompt(divergence);
-    trace.push({ step: 'policy:prompt', model: gate.layer === 'model' ? model : 'keyword', ms: now() - t0, allowed: gate.allowed });
+    trace.push({ step: 'policy:prompt', model: gate.model ?? (gate.layer === 'model' ? model : 'keyword'), ms: now() - t0, allowed: gate.allowed });
     onStep?.({ step: 'policy', allowed: gate.allowed, reason: gate.reason ?? gate.matched, reframe: gate.reframe, model: trace.at(-1).model, ms: trace.at(-1).ms, costUsd: client.spent() - policyStartSpent });
     if (!gate.allowed) return done({ status: 'blocked', reframe: gate.reframe, reason: gate.reason ?? gate.matched, category: gate.category });
     throwIfAborted(signal);
@@ -88,6 +88,7 @@ export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' })
     }, signal);
     throwIfAborted(signal);
     const candidates = (Array.isArray(proposed) ? proposed : proposed?.branches ?? []).filter(validBranch);
+    onStep?.({ step: 'propose', pending: candidates.length > 0, candidateCount: candidates.length, branches: [] });
 
     // 3 + 4 in parallel: the per-branch policy check and the review are independent,
     // so run them together and drop rejected branches from the ranking afterwards.
@@ -95,8 +96,8 @@ export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' })
     if (!candidates.length) return done({ status: 'empty', rejected: [] });
     const t1 = now();
     const policyRun = policy.checkBranches(candidates).then(r => {
-      trace.push({ step: 'policy:branches', model, ms: now() - t1, kept: r.kept.length, rejected: r.rejected.length });
-      onStep?.({ step: 'propose', branches: r.kept, model, ms: trace.findLast(t => t.step === 'propose')?.ms, costUsd: trace.filter(t => t.step === 'propose').reduce((n, t) => n + (t.costUsd ?? 0), 0) });
+      trace.push({ step: 'policy:branches', model: policy.branchModel ?? model, ms: now() - t1, kept: r.kept.length, rejected: r.rejected.length });
+      onStep?.({ step: 'propose', pending: false, branches: r.kept, model, policyModel: policy.branchModel ?? null, policyMs: now() - t1, ms: trace.findLast(t => t.step === 'propose')?.ms, costUsd: trace.filter(t => t.step === 'propose').reduce((n, t) => n + (t.costUsd ?? 0), 0) });
       return r;
     });
     const reviewRun = step(trace, 'review', {

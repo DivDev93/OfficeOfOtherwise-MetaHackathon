@@ -24,7 +24,7 @@ export async function runHarness({ divergence, from, subjectOverride, client, ag
   mkdirSync(directory, { recursive: true });
   const trace = [];
   let selection = null;
-  const persistTrace = () => writeFileSync(join(directory, 'trace.json'), JSON.stringify({ source: from ? resolve(from) : null, subjectOverride: subjectOverride?.trim() ?? null, steps: trace, selection, costUsd: client.spent() - startedSpent }, null, 2));
+  const persistTrace = () => writeFileSync(join(directory, 'trace.json'), JSON.stringify({ source: from ? resolve(from) : null, subjectOverride: subjectOverride?.trim() ?? null, steps: trace, selection, renderStatus: branch?.renderStatus ?? null, costUsd: client.spent() - startedSpent }, null, 2));
   let branch;
   try {
     throwIfAborted();
@@ -60,7 +60,7 @@ export async function runHarness({ divergence, from, subjectOverride, client, ag
       persistTrace();
       throw error;
     }
-    trace.push(...apiCalls.slice(callStart), { step: 'policy:reuse', model: gate.layer === 'model' ? (process.env.META_TEXT_MODEL_PLANNER || 'muse-wonder-1.0') : gate.layer, ms: Math.round(performance.now() - start), costUsd: 0, originalCostUsd: client.spent() - before, summary: true, allowed: gate.allowed });
+    trace.push(...apiCalls.slice(callStart), { step: 'policy:reuse', model: gate.layer === 'model' ? (process.env.META_TEXT_MODEL_POLICY_PROMPT || 'muse-spark-1.3') : gate.layer, ms: Math.round(performance.now() - start), costUsd: 0, originalCostUsd: client.spent() - before, summary: true, allowed: gate.allowed });
     persistTrace();
     if (!gate.allowed) {
       log(`status: blocked\nreframe: ${gate.reframe ?? ''}\nreason: ${gate.reason ?? gate.matched ?? gate.category ?? 'topic policy'}`);
@@ -105,7 +105,21 @@ export async function runHarness({ divergence, from, subjectOverride, client, ag
   appendSam(segmented);
   persistTrace();
   const mask = segmented.selectedMask;
-  if (!mask) throw new Error(`No segmentation mask found; trace saved in ${directory}`);
+  if (!mask) {
+    const segments = segmented.trace ?? [];
+    const reason = 'no-segmentation-mask';
+    branch.renderStatus = '2d-only';
+    branch.renderReason = reason;
+    writeFileSync(join(directory, 'branch.json'), JSON.stringify(branch, null, 2));
+    const record = { step: 'cutout', status: 'unavailable', reason, model: 'SAM 3.1', summary: true, ms: 0, costUsd: 0, originalCostUsd: segments.reduce((n, t) => n + (t.costUsd ?? 0), 0) };
+    trace.push(record);
+    persistTrace();
+    emit({ ...record, message: 'No segmentation mask was returned; showing the generated 2D scene.' });
+    log('2D preview only: no segmentation mask was returned; showing the full generated scene.');
+    const costUsd = client.spent() - startedSpent;
+    log(`run cost: $${costUsd.toFixed(5)} | total spent: $${client.spent().toFixed(5)} | saved: ${directory}`);
+    return { directory, branch, trace, costUsd, selectedMask: null, area: 0, renderStatus: '2d-only' };
+  }
   const hero = decodePng(generated.buffer);
   if (hero.width !== mask.width || hero.height !== mask.height || mask.raster.length !== hero.width * hero.height) throw new Error('Mask dimensions do not match hero image');
   const rgba = Buffer.from(hero.data);
@@ -159,12 +173,14 @@ async function main() {
   const dailyCapUsd = Number(process.env.DEMO_DAILY_CAP_USD ?? 3);
   const client = createMetaClient({ ledger, spendCapUsd, dailyCapUsd });
   const model = process.env.META_TEXT_MODEL_PLANNER || 'muse-wonder-1.0';
+  const promptPolicyModel = process.env.META_TEXT_MODEL_POLICY_PROMPT || 'muse-spark-1.3';
+  const branchPolicyModel = process.env.META_TEXT_MODEL_POLICY_BRANCHES || 'muse-spark-1.3';
   const categories = categoriesFromEnv();
   const apiCalls = [];
   const agentClient = { ...client, async respond(args) {
     const start = performance.now();
     try {
-      const result = await client.respond(args);
+      const result = await client.respond({ ...args, ...(args.label === 'branch-agent:review' ? { reasoning: { effort: 'low' } } : {}) });
       apiCalls.push({ step: args.label ?? 'responses', model: args.model, ms: Math.round(performance.now() - start), costUsd: result.costUsd });
       return result;
     } catch (error) {
@@ -172,7 +188,10 @@ async function main() {
       throw error;
     }
   } };
-  const policy = createTopicPolicy({ categories, classify: createModelClassifier(agentClient, { model, categories }) });
+  const policy = createTopicPolicy({ categories,
+    classifyPrompt: createModelClassifier(agentClient, { model: promptPolicyModel, categories }),
+    classifyBranches: createModelClassifier(agentClient, { model: branchPolicyModel, categories }),
+  });
   const agent = createBranchAgent({ client: agentClient, policy, model });
   await runHarness({ divergence, from, subjectOverride, client, agent, image: createMetaImage({ client }), sam: createSamMask({ client }), policy, apiCalls, chronos3d, no3d });
 }

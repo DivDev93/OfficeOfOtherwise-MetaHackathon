@@ -129,9 +129,30 @@ test('policy-approved proposals stream while review is still in flight', async (
   } };
   const pending = createBranchAgent({ client, policy: allowAll }).run({ divergence: 'What if the Library of Alexandria never burned?', onStep: event => events.push(event) });
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(events.map(e => e.step), ['policy', 'propose']);
-  assert.ok(events[1].branches.every(b => b.id !== 'b4' && b.id !== 'bad'));
+  assert.deepEqual(events.map(e => e.step), ['policy', 'propose', 'propose']);
+  assert.equal(events[1].pending, true);
+  assert.equal(events[1].candidateCount, 4);
+  assert.deepEqual(events[1].branches, []);
+  assert.ok(events[2].branches.every(b => b.id !== 'b4' && b.id !== 'bad'));
+  assert.equal(events[2].model, 'muse-wonder-1.0');
+  assert.equal(events[2].policyModel, null);
   releaseReview(); await pending;
-  assert.deepEqual(events.map(e => e.step), ['policy', 'propose', 'review']);
-  assert.equal(events[2].hero.branchId, 'b1');
+  assert.deepEqual(events.map(e => e.step), ['policy', 'propose', 'propose', 'review']);
+  assert.equal(events[3].hero.branchId, 'b1');
+});
+
+test('Spark policy provenance is distinct from Wonder propose and review', async () => {
+  const client = fakeClient({ propose: JSON.stringify(BRANCHES), review: REVIEW });
+  const classify = async () => ({ verdict: 'allow', category: null, reason: 'ok' });
+  const promptClassifier = Object.assign(classify, { model: 'muse-spark-1.3' });
+  const branchClassifier = Object.assign(async () => ({ verdict: 'allow', category: null, reason: 'ok' }), { model: 'muse-spark-1.3' });
+  const policy = createTopicPolicy({ classifyPrompt: promptClassifier, classifyBranches: branchClassifier });
+  const events = [];
+  const out = await createBranchAgent({ client, policy, model: 'muse-wonder-1.0' }).run({ divergence: 'What if the Library of Alexandria never burned?', onStep: event => events.push(event) });
+  assert.equal(out.trace.find(t => t.step === 'policy:prompt').model, 'muse-spark-1.3');
+  assert.equal(out.trace.find(t => t.step === 'policy:branches').model, 'muse-spark-1.3');
+  assert.deepEqual(client.calls.map(call => call.model), ['muse-wonder-1.0', 'muse-wonder-1.0']);
+  const proposal = events.find(event => event.step === 'propose' && event.pending === false);
+  assert.equal(proposal.model, 'muse-wonder-1.0');
+  assert.equal(proposal.policyModel, 'muse-spark-1.3');
 });
