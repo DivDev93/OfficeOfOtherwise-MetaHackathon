@@ -1,6 +1,8 @@
 # Submission draft
 
-**Public replay demo:** [Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app) (deployed revision `office-otherwise-00001-84n`; replay-only, live generation disabled)
+**Public replay demo:** [Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app) (deployed revision `office-otherwise-00003-gz2`, built from `main` commit `cd2953e`; replay-only, live generation disabled)
+
+**Deployment verified 2026-10-28:** The Earth globe renders on the hosted service. Alexandria, Beringia, Green Sahara and Mechanisms each display their hero scene and cutout and load the 3D viewer. Full downloads of every `hero.png`, `cutout.png` and original `model.glb` returned HTTP 200 and matched the repository's SHA-256 hashes; the browser uses the corresponding Meshopt viewer copies. The existing project, region and service settings were preserved.
 
 ## Project description
 
