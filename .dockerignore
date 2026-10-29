@@ -16,3 +16,7 @@ gcp-*.json
 credentials*.json
 .DS_Store
 Thumbs.db
+
+# Keep private scouting captures and local video out of release images
+docs/scouting/
+video/
