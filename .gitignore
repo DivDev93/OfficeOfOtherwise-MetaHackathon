@@ -18,6 +18,7 @@ out/
 *.ply
 *.splat
 *.mp4
+video/
 .DS_Store
 Thumbs.db
 
