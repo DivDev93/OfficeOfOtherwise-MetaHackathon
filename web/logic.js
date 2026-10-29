@@ -31,6 +31,19 @@ export function provenance(trace = []) {
   });
 }
 
+// Saved calls determine which cards exist, even before their replay beat arrives.
+export function modelCardSteps(trace = [], savedTrace = trace) {
+  const current = provenance(trace), recorded = provenance(savedTrace);
+  return [
+    ['Topic policy', 0, [0]],
+    ['Branches + review', 1, [1, 2]],
+    ['Scene', 3, [3]],
+    ['Cutout', 4, [4]],
+    ['3D', 5, [5]],
+  ].filter(([, , indices]) => indices.some(index => recorded[index].available))
+    .map(([role, index]) => ({ role, index, model: current[index].available ? current[index].model : recorded[index].model }));
+}
+
 export function replayTraceGroups(trace = []) {
   const steps = trace.filter(step => !step.summary);
   return [
