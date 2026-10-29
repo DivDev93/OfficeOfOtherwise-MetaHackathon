@@ -126,13 +126,57 @@ export async function createGlobe(el, onBranchSelect = () => {}) {
   controls.dampingFactor = 0.08;
   const canvas = el.querySelector('canvas');
   if (canvas) canvas.style.touchAction = 'pan-y';
-  globe.pointOfView({ lat: 18, lng: 0, altitude: 2.5 }, 0);
+  globe.pointOfView({ lat: 30, lng: 22, altitude: 1.4 }, 0);
 
   let branches = [];
   let pins = [];
   let selectedId = null;
   let focusId = null;
   let heroId = null;
+
+  function panelRects() {
+    return ['.site-header', '#invitation', '#chronicle', '#guardrail', '.map-panel .panel-head']
+      .map(selector => document.querySelector(selector))
+      .filter(node => node && !node.hidden && getComputedStyle(node).display !== 'none')
+      .map(node => node.getBoundingClientRect());
+  }
+
+  function positionGlobe() {
+    const width = el.clientWidth, height = el.clientHeight;
+    let left = 12, right = width - 12, top = 116, bottom = height - 12;
+    for (const rect of panelRects()) {
+      if (rect.width > width * 0.7 && rect.top > height * 0.25) bottom = Math.min(bottom, rect.top - 18);
+      else if (rect.left < width * 0.2 && rect.width < width * 0.45) left = Math.max(left, rect.right + 18);
+      else if (rect.right > width * 0.8 && rect.width < width * 0.45) right = Math.min(right, rect.left - 18);
+    }
+    if (right - left < 180) { left = 12; right = width - 12; }
+    const x = width >= 700 && !branches.length ? width / 2 : (left + right) / 2;
+    const y = width < 700 ? (top + Math.max(top + 80, bottom)) / 2 : height / 2;
+    globe.globeOffset([x - width / 2, y - height / 2]);
+  }
+
+  function avoidPanels() {
+    const panels = panelRects();
+    for (const pin of pins) {
+      const point = globe.getScreenCoords(pin.branch.place.lat, pin.branch.place.lon, 0.018);
+      const width = pin.element.offsetWidth || 40;
+      const height = pin.element.offsetHeight || 34;
+      // CSS2D elements are centred on their geographic anchor. Hide occluded UI
+      // targets rather than painting labels over the floating sheets.
+      const blocked = !Number.isFinite(point.x) || !Number.isFinite(point.y)
+        || point.x - width / 2 < 8 || point.x + width / 2 > el.clientWidth - 8
+        || point.y - height / 2 < 8 || point.y + height / 2 > el.clientHeight - 8
+        || panels.some(rect => point.x + width / 2 > rect.left - 8 && point.x - width / 2 < rect.right + 8
+        && point.y + height / 2 > rect.top - 8 && point.y - height / 2 < rect.bottom + 8);
+      pin.element.style.visibility = blocked ? 'hidden' : '';
+    }
+  }
+  controls.addEventListener('change', avoidPanels);
+  const panelsObserver = new ResizeObserver(() => { positionGlobe(); requestAnimationFrame(avoidPanels); });
+  for (const selector of ['#invitation', '#chronicle', '.site-header']) {
+    const panel = document.querySelector(selector);
+    if (panel) panelsObserver.observe(panel);
+  }
 
   function updatePins() {
     for (const pin of pins) {
@@ -176,13 +220,16 @@ export async function createGlobe(el, onBranchSelect = () => {}) {
     pins = places.map(branch => makeBranchPin(branch, selected => select(selected, true)));
     globe.htmlElementsData(pins);
     updatePins();
+    positionGlobe();
+    requestAnimationFrame(avoidPanels);
   }
 
   function focus(branch) {
     if (!validPlace(branch?.place)) return;
     focusId = branch.id;
     updatePins();
-    globe.pointOfView({ lat: branch.place.lat, lng: branch.place.lon, altitude: 2.5 }, reducedMotion.matches ? 0 : 1100);
+    positionGlobe();
+    globe.pointOfView({ lat: branch.place.lat, lng: branch.place.lon, altitude: 1.05 }, reducedMotion.matches ? 0 : 1100);
   }
 
   function select(branch, fromPin = false) {
@@ -196,6 +243,8 @@ export async function createGlobe(el, onBranchSelect = () => {}) {
     const width = el.clientWidth || 400;
     const height = el.clientHeight || 300;
     globe.width(width).height(height);
+    positionGlobe();
+    requestAnimationFrame(avoidPanels);
   });
   observer.observe(el);
   globe.width(el.clientWidth || 400).height(el.clientHeight || 300);

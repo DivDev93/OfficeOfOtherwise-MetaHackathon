@@ -101,35 +101,7 @@ function selectBranch(branch) {
     button.setAttribute('aria-pressed', String(selected));
   }
 }
-function renderTrace() {
-  $('steps').replaceChildren();
-  const current = provenance(trace), expected = provenance(savedTrace);
-  const hasRecordedSteps = trace.some(s => !s.summary);
-  const sparkPolicy = /Muse Spark/.test(expected[0].model);
-  const rows = [];
-  if (replayLoaded && !sparkPolicy) {
-    rows.push({ label: 'Topic policy', model: 'Muse Spark 1.3', special: 'No call in this saved replay · time not recorded · cost not recorded' });
-    rows.push({ label: 'Saved policy', model: expected[0].model, progress: current[0] });
-  } else {
-    rows.push({ label: 'Topic policy', model: expected[0].model || 'Muse Spark 1.3', progress: current[0] });
-  }
-  rows.push(...current.slice(1).map(step => ({ label: step.label, model: step.model, progress: step })));
-  for (const row of rows) {
-    const el = document.createElement('div'); el.className = 'step'; const name = document.createElement('strong');
-    name.textContent = `${row.label}: ${row.model}${row.label === 'Saved policy' ? ' · saved replay' : ''}`;
-    const progress = row.progress;
-    const value = document.createElement('span');
-    if (row.special) value.textContent = row.special;
-    else if (progress?.available) {
-      const duration = Number.isFinite(progress.ms) ? `${(progress.ms / 1000).toFixed(1)}s` : 'Time not recorded';
-      const cost = Number.isFinite(progress.costUsd) ? `$${progress.costUsd.toFixed(4)}` : 'Cost not recorded';
-      value.textContent = `${duration} · ${cost}`;
-    } else value.textContent = replayActive ? 'Pending' : hasRecordedSteps || replayLoaded ? 'Not recorded in this replay' : 'No replay loaded';
-    if (!progress?.available && replayActive && !row.special) el.dataset.state = 'pending';
-    el.append(name, value); $('steps').append(el);
-  }
-  renderHeroModels();
-}
+function renderTrace() { renderHeroModels(); }
 function metricText(item, fallback = 'Not recorded in this replay') {
   if (!item?.available) return replayActive ? 'Pending' : replayLoaded ? fallback : 'No replay loaded';
   const duration = Number.isFinite(item?.ms) ? `${(item.ms / 1000).toFixed(1)}s` : 'Time not recorded';
@@ -157,7 +129,7 @@ function renderHeroModels() {
     { role: 'Branches + review', model: 'Muse Wonder 1.0', metrics: branchMetrics },
     { role: 'Scene', model: 'Muse Image 1.0', metrics: metricText(steps[3]) },
     { role: 'Cutout', model: 'SAM 3.1', metrics: metricText(steps[4]) },
-    { role: '3D', model: 'Meta SAM 3D Objects', metrics: metricText(steps[5]) },
+    { role: '3D', model: steps[5].available ? steps[5].model : expected[5].model, metrics: metricText(steps[5]) },
   );
   for (const item of models) {
     const card = document.createElement('div'); card.className = 'hero-model-card';
