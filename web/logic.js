@@ -33,15 +33,38 @@ export function provenance(trace = []) {
 
 // Saved calls determine which cards exist, even before their replay beat arrives.
 export function modelCardSteps(trace = [], savedTrace = trace) {
-  const current = provenance(trace), recorded = provenance(savedTrace);
-  return [
-    ['Topic policy', 0, [0]],
-    ['Branches + review', 1, [1, 2]],
-    ['Scene', 3, [3]],
-    ['Cutout', 4, [4]],
-    ['3D', 5, [5]],
-  ].filter(([, , indices]) => indices.some(index => recorded[index].available))
-    .map(([role, index]) => ({ role, index, model: current[index].available ? current[index].model : recorded[index].model }));
+  const roles = ['Policy checks', 'Branches / review', 'Branches / review', 'Scene', 'Cutout', '3D'];
+  const groupCalls = records => {
+    const cards = new Map();
+    replayTraceGroups(records).forEach((calls, index) => {
+      for (const call of calls) {
+        const model = modelCardLabel(index === 5 ? provenance([call])[5].model : call.model || provenance([call])[index].model);
+        if (!cards.has(model)) cards.set(model, { roles: new Set(), calls: [] });
+        const card = cards.get(model);
+        card.roles.add(roles[index]);
+        card.calls.push(call);
+      }
+    });
+    return cards;
+  };
+  const current = groupCalls(trace);
+  return [...groupCalls(savedTrace)].map(([model, recorded]) => {
+    const calls = current.get(model)?.calls || [];
+    const sum = key => calls.length && calls.every(call => Number.isFinite(call[key]))
+      ? calls.reduce((total, call) => total + call[key], 0) : null;
+    return { model, role: [...recorded.roles].join(' + '), ms: sum('ms'), costUsd: sum('costUsd'),
+      available: calls.length > 0, pending: calls.length < recorded.calls.length };
+  });
+}
+
+function modelCardLabel(model) {
+  const labels = {
+    'muse-wonder-1.0': 'Muse Wonder 1.0', 'Muse Wonder': 'Muse Wonder 1.0',
+    'muse-spark-1.3': 'Muse Spark 1.3', 'Muse Spark': 'Muse Spark 1.3',
+    'muse-image-1.0': 'Muse Image 1.0', 'Muse Image': 'Muse Image 1.0',
+    'sam-3.1': 'SAM 3.1',
+  };
+  return labels[model] || model;
 }
 
 export function replayTraceGroups(trace = []) {
