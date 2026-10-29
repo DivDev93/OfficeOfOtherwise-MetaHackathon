@@ -27,8 +27,15 @@ function setView(view) {
   $('hero-image').hidden = !hasImage || view !== 'scene';
   $('cutout-image').hidden = !hasCutout || view !== 'cutout';
   $('model-view').hidden = !hasModel || view !== 'model';
+  $('viewer-hint').hidden = view !== 'model';
   $('stage-empty').hidden = hasImage || (hasModel && view === 'model');
-  for (const [id, name] of [['scene-view','scene'],['cutout-view','cutout'],['model-button','model']]) $(id).classList.toggle('active', view === name);
+  for (const [id, name] of [['scene-view','scene'],['cutout-view','cutout'],['model-button','model']]) {
+    const selected = view === name;
+    $(id).classList.toggle('active', selected);
+    $(id).setAttribute('aria-selected', String(selected));
+    $(id).tabIndex = selected ? 0 : -1;
+  }
+  $('chronicle-stage').setAttribute('aria-labelledby', `${view === 'scene' ? 'scene-view' : view === 'cutout' ? 'cutout-view' : 'model-button'}`);
   const modelFocus = hasModel && !!modelApi && view === 'model';
   const heroFocus = modelFocus || hasCutout && view === 'cutout';
   $('workspace').classList.toggle('hero-focus', heroFocus);
@@ -52,6 +59,8 @@ function showGuard(data) {
   $('retry').hidden = !$('retry').dataset.prompt;
 }
 function renderBranches() {
+  document.body.classList.toggle('has-story', branchState.branches.length > 0);
+  $('show-invitation').setAttribute('aria-expanded', String(!matchMedia('(max-width: 700px)').matches || document.body.classList.contains('invitation-open')));
   $('branch-list').replaceChildren(); $('map-empty').hidden = branchState.branches.length > 0 || branchState.phase === 'policy-checking';
   if (branchState.phase === 'policy-checking') {
     const count = Math.min(branchState.candidateCount || 1, 8);
@@ -76,6 +85,15 @@ function renderBranches() {
 function selectBranch(branch) {
   if (!branch?.id) return;
   selectedBranchId = branch.id;
+  document.body.classList.add('has-story');
+  const context = $('selected-branch-context');
+  context.replaceChildren();
+  if (!branchState.heroId || branch.id === branchState.heroId) context.hidden = true;
+  else {
+    const label = document.createElement('strong'); label.textContent = `Selected alternate · ${branch.title}. `;
+    context.append(label, document.createTextNode(`${branch.summary || 'An alternate path through this moment.'} Scene and 3D preview show the reviewed hero path: ${$('hero-title').textContent}.`));
+    context.hidden = false;
+  }
   globeApi?.select(branch);
   for (const button of $('branch-list').querySelectorAll('[data-branch-id]')) {
     const selected = button.dataset.branchId === selectedBranchId;
@@ -149,14 +167,14 @@ function renderHeroModels() {
     card.append(model, role, metrics); host.append(card);
   }
 }
-function reset() { replayRequest++; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; modelRequestId++; globeApi?.select(null); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG TO EXPLORE'; $('hero-title').textContent = 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = 'The strongest branch becomes a scene, then a subject to explore in three dimensions.'; setStageMessage('A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
+function reset() { replayRequest++; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; modelRequestId++; globeApi?.select(null); document.body.classList.remove('has-story', 'invitation-open'); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG TO EXPLORE'; $('hero-title').textContent = 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = 'The strongest branch becomes a scene, then a subject to explore in three dimensions.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage('A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
 function setBranch(data, event = 'complete') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchPhaseLabel(branchState.phase);
   if (branchState.phase === 'blocked') { showGuard(data); $('map-status').textContent = 'NO BRANCHES · REFRAME REQUIRED'; status('This question needs a reframe'); renderBranches(); return; }
   renderBranches();
   const hero = branchState.branches.find(b => b.id === branchState.heroId);
-  if (hero) { selectedBranchId = hero.id; $('hero-title').textContent = hero.title; $('hero-description').textContent = hero.summary; if (!hasImage) setStageMessage('Preparing the selected scene…'); syncBranchSelection(); globeApi?.focus(hero); }
+  if (hero) { selectedBranchId = hero.id; $('hero-title').textContent = hero.title; $('hero-description').textContent = hero.summary; $('selected-branch-context').hidden = true; if (!hasImage) setStageMessage('Preparing the selected scene…'); syncBranchSelection(); globeApi?.focus(hero); }
 }
 function syncBranchSelection() {
   for (const button of $('branch-list').querySelectorAll('[data-branch-id]')) {
@@ -307,6 +325,13 @@ async function runPrompt(prompt) {
   } catch(e) { status(e.message); $('generation').hidden = true; }
 }
 $('prompt-form').addEventListener('submit', e => { e.preventDefault(); runPrompt($('prompt').value); });
+ $('show-invitation').addEventListener('click', () => {
+  if (matchMedia('(max-width: 700px)').matches) {
+    document.body.classList.toggle('invitation-open');
+    $('show-invitation').setAttribute('aria-expanded', String(document.body.classList.contains('invitation-open')));
+  } else $('show-invitation').setAttribute('aria-expanded', 'true');
+  $('prompt').focus({ preventScroll: true });
+ });
 document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { $('prompt').value = b.dataset.prompt; $('prompt').focus(); }));
 $('retry').addEventListener('click', () => {
   const prompt = $('retry').dataset.prompt; $('prompt').value = prompt;
@@ -317,6 +342,16 @@ $('retry').addEventListener('click', () => {
 });
 $('load-run').addEventListener('click', () => loadRun($('runs').value));
 $('scene-view').addEventListener('click', () => setView('scene')); $('cutout-view').addEventListener('click', () => setView('cutout')); $('model-button').addEventListener('click', () => setView('model'));
+document.querySelector('[role="tablist"]').addEventListener('keydown', event => {
+  const tabs = [...document.querySelectorAll('[role="tab"]')].filter(tab => !tab.disabled);
+  const current = tabs.indexOf(event.target);
+  if (current < 0) return;
+  const next = event.key === 'ArrowRight' ? (current + 1) % tabs.length
+    : event.key === 'ArrowLeft' ? (current - 1 + tabs.length) % tabs.length
+      : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+  if (next < 0) return;
+  event.preventDefault(); tabs[next].focus(); tabs[next].click();
+});
 $('orbit-button').addEventListener('click', () => {
   const enabled = $('orbit-button').getAttribute('aria-pressed') !== 'true';
   const active = modelApi?.setAutoRotate(enabled) || false;
@@ -332,9 +367,19 @@ reducedMotion.addEventListener?.('change', () => {
     $('orbit-button').textContent = 'Orbit object';
   }
 });
-$('back-to-atlas').addEventListener('click', () => setView('scene'));
+$('back-to-atlas').addEventListener('click', () => { setView('scene'); $('scene-view').focus({ preventScroll: true }); });
 $('retry-model').addEventListener('click', () => { loadedModelUrl = ''; loadingModelUrl = ''; modelError = false; requestModelLoad(); setView('model'); });
 reset();
 loadServiceMode();
 fetch('/runs').then(r => r.json()).then(data => { const runs = Array.isArray(data) ? data : data.runs || []; savedRuns = runs; $('runs').replaceChildren(); if (!runs.length) { $('runs').add(new Option('No saved stories yet', '')); return; } for (const run of runs) $('runs').add(new Option(replayLabel(run), run.id)); }).catch(() => { $('runs').replaceChildren(new Option('Archive unavailable', '')); });
-import('./visuals.js').then(({createGlobe,createModelViewer}) => { globeApi = createGlobe($('globe'), selectBranch); modelApi = createModelViewer($('model-view')); renderBranches(); const visibleBranch = branchState.phase === 'replay' ? branchState.branches.at(-1) : branchState.branches.find(branch => branch.id === branchState.heroId); if (visibleBranch) globeApi.focus(visibleBranch); setView(activeView); }).catch(() => { $('globe-fallback').hidden = false; });
+import('./visuals.js').then(async ({createGlobe,createModelViewer}) => {
+  // The independent model viewer can stay available if the globe CDN fails.
+  try { modelApi = createModelViewer($('model-view')); setView(activeView); }
+  catch { modelApi = null; setView(activeView); }
+  try {
+    globeApi = await createGlobe($('globe'), selectBranch);
+    renderBranches();
+    const visibleBranch = branchState.phase === 'replay' ? branchState.branches.at(-1) : branchState.branches.find(branch => branch.id === branchState.heroId);
+    if (visibleBranch) globeApi.focus(visibleBranch);
+  } catch { $('globe-fallback').hidden = false; }
+}).catch(() => { $('globe-fallback').hidden = false; });

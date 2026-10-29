@@ -20,3 +20,7 @@ out/
 *.mp4
 .DS_Store
 Thumbs.db
+
+# Private visual references and local scouting
+/docs/scouting/chronos-ref/
+/docs/scouting/chronos-design-fit.md

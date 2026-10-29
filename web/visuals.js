@@ -46,332 +46,164 @@ function validPlace(place) {
   return Number.isFinite(place?.lat) && Number.isFinite(place?.lon);
 }
 
-// SphereGeometry's UV map puts longitude zero on +X; its texture longitude runs toward -Z.
-function surfacePoint(place, radius = 100) {
-  const lat = THREE.MathUtils.degToRad(place.lat);
-  const lon = THREE.MathUtils.degToRad(place.lon);
-  return new THREE.Vector3(
-    radius * Math.cos(lat) * Math.cos(lon),
-    radius * Math.sin(lat),
-    -radius * Math.cos(lat) * Math.sin(lon),
-  );
-}
-
-function disposeGroup(group) {
-  for (const child of [...group.children]) {
-    group.remove(child);
-    if (child.children?.length) disposeGroup(child);
-    child.geometry?.dispose();
-    const materials = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) {
-      material?.map?.dispose();
-      material?.dispose();
-    }
-  }
-}
-
-function makeBranchLabel(branch, hero) {
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
-  const text = `${formatYear(branch.year)} · ${branch.title}`;
-  context.font = '600 22px "DM Sans", Arial, sans-serif';
-  const width = Math.ceil(context.measureText(text).width + 34);
-  canvas.width = Math.min(width, 760);
-  canvas.height = 54;
-  const ctx = canvas.getContext('2d');
-  ctx.font = '600 22px "DM Sans", Arial, sans-serif';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = 'rgba(9, 20, 21, 0.91)';
-  ctx.strokeStyle = hero ? 'rgba(230, 190, 121, 0.92)' : 'rgba(117, 170, 159, 0.8)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.roundRect(1, 1, canvas.width - 2, canvas.height - 2, 14);
-  ctx.fill();
-  ctx.stroke();
-  ctx.fillStyle = hero ? '#f0cf91' : '#e0e8df';
-  const shown = canvas.width < width ? `${text.slice(0, Math.max(12, Math.floor(text.length * canvas.width / width) - 2))}…` : text;
-  ctx.fillText(shown, 17, canvas.height / 2, canvas.width - 32);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
-  sprite.scale.set((canvas.width / canvas.height) * 13.5, 13.5, 1);
-  sprite.userData.fullLabel = text;
-  return sprite;
-}
-
-function makeArc(from, to, color) {
-  const start = from.clone().normalize();
-  const end = to.clone().normalize();
-  const angle = start.angleTo(end);
-  if (angle < 0.012) return null;
-  const axis = new THREE.Vector3().crossVectors(start, end);
-  if (axis.lengthSq() < 1e-6) {
-    const fallback = Math.abs(start.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
-    axis.crossVectors(start, fallback);
-  }
-  axis.normalize();
-  class ElevatedArc extends THREE.Curve {
-    getPoint(t, target = new THREE.Vector3()) {
-      const direction = start.clone().applyAxisAngle(axis, angle * t);
-      const lift = Math.sin(Math.PI * t) * (8 + Math.min(angle * 7, 22));
-      return target.copy(direction.multiplyScalar(101.5 + lift));
-    }
-  }
-  const curve = new ElevatedArc();
-  const group = new THREE.Group();
-  const glow = new THREE.Mesh(
-    new THREE.TubeGeometry(curve, 48, 2.1, 8, false),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false }),
-  );
-  const line = new THREE.Mesh(
-    new THREE.TubeGeometry(curve, 48, 0.9, 8, false),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.92, depthWrite: false }),
-  );
-  group.add(glow, line);
-  return group;
-}
-
-export function createGlobe(el, onBranchSelect = () => {}) {
-  const { scene, camera, controls, renderer } = setup(el);
-  const earth = new THREE.Group();
-  scene.add(earth);
-
-  const earthMaterial = new THREE.MeshPhongMaterial({
-    color: 0xd4dcda,
-    emissive: 0x0b2727,
-    emissiveIntensity: 0.24,
-    specular: 0x243c3a,
-    shininess: 4,
+function makeBranchPin(branch, onSelect) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'globe-pin';
+  button.dataset.branchId = branch.id;
+  button.setAttribute('aria-label', `${formatYear(branch.year)} · ${branch.title}${branch.place?.name ? ` · ${branch.place.name}` : ''}`);
+  button.title = `${formatYear(branch.year)} · ${branch.title}`;
+  button.setAttribute('aria-pressed', 'false');
+  button.style.cssText = 'position:relative;display:flex;align-items:center;gap:8px;padding:5px 10px 5px 5px;border:1px solid rgba(230,190,121,.82);border-radius:999px;background:rgba(9,17,20,.9);color:#f4eee2;font:600 12px/1.2 var(--sans,Inter,sans-serif);white-space:nowrap;cursor:pointer;box-shadow:0 0 18px rgba(230,190,121,.28);touch-action:manipulation;';
+  const bead = document.createElement('span');
+  bead.className = 'globe-pin-bead';
+  bead.setAttribute('aria-hidden', 'true');
+  bead.style.cssText = 'position:relative;display:block;flex:0 0 20px;width:20px;height:20px;border:2px solid currentColor;border-radius:50%;background:radial-gradient(circle,#fff2cf 0 18%,currentColor 24% 48%,transparent 58%);color:#78c5e6;box-shadow:0 0 12px currentColor;';
+  const ripple = document.createElement('span');
+  ripple.className = 'globe-pin-ripple';
+  ripple.setAttribute('aria-hidden', 'true');
+  bead.append(ripple);
+  const label = document.createElement('span');
+  label.className = 'globe-pin-label';
+  label.textContent = `${formatYear(branch.year)} · ${branch.title}`;
+  label.style.cssText = 'display:none;max-width:min(48vw,240px);overflow:hidden;text-overflow:ellipsis;';
+  button.append(bead, label);
+  button.addEventListener('click', event => {
+    event.stopPropagation();
+    onSelect(branch);
   });
-  const texture = new THREE.TextureLoader().load('/assets/earth-blue-marble.jpg', () => {
-    renderer.render(scene, camera);
-  });
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  earthMaterial.map = texture;
-  earthMaterial.needsUpdate = true;
-  earth.add(new THREE.Mesh(new THREE.SphereGeometry(100, 96, 64), earthMaterial));
+  button.addEventListener('pointerdown', event => event.stopPropagation());
+  return { branch, element: button, label, bead };
+}
 
-  const atmosphereMaterial = new THREE.MeshBasicMaterial({
-    color: 0x80c4bd,
-    transparent: true,
-    opacity: 0.15,
-    side: THREE.BackSide,
-    depthWrite: false,
-  });
-  earth.add(new THREE.Mesh(new THREE.SphereGeometry(103.5, 64, 48), atmosphereMaterial));
-
-  const arcs = new THREE.Group();
-  const markers = new THREE.Group();
-  scene.add(arcs, markers);
-  camera.position.set(0, 0, 350);
-  controls.enableZoom = false;
+export async function createGlobe(el, onBranchSelect = () => {}) {
+  const { default: Globe } = await import('https://esm.sh/globe.gl@2.46.0');
+  if (!document.getElementById('globe-pin-motion-style')) {
+    const style = document.createElement('style');
+    style.id = 'globe-pin-motion-style';
+    style.textContent = '@keyframes globe-pin-ripple{0%{transform:scale(.7);opacity:.75}100%{transform:scale(2.15);opacity:0}}.globe-pin-ripple{position:absolute;inset:-2px;border:1px solid currentColor;border-radius:50%;pointer-events:none;animation:globe-pin-ripple 2.4s ease-out infinite}@media(prefers-reduced-motion:reduce){.globe-pin-ripple{animation:none;opacity:.35;transform:scale(1.2)}}';
+    document.head.append(style);
+  }
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-  const mobile = matchMedia('(max-width: 560px)');
+  const globe = Globe({
+    animateIn: false,
+    rendererConfig: { antialias: true, alpha: true },
+  })(el)
+    .backgroundColor('rgba(0,0,0,0)')
+    .globeImageUrl('/assets/earth-blue-marble.jpg')
+    .bumpImageUrl('/assets/earth-relief.png')
+    .showAtmosphere(true)
+    .atmosphereColor('#7775d6')
+    .atmosphereAltitude(0.035)
+    .enablePointerInteraction(true)
+    .arcsData([])
+    .arcStartLat('startLat')
+    .arcStartLng('startLng')
+    .arcEndLat('endLat')
+    .arcEndLng('endLng')
+    .arcColor(d => d.color)
+    .arcAltitude(0.18)
+    .arcStroke(0.45)
+    .arcDashLength(0.45)
+    .arcDashGap(0.24)
+    .arcDashInitialGap(d => d.phase)
+    .arcDashAnimateTime(reducedMotion.matches ? 0 : 2400)
+    .htmlElementsData([])
+    .htmlElement(d => d.element)
+    .htmlLat(d => d.branch.place.lat)
+    .htmlLng(d => d.branch.place.lon)
+    .htmlAltitude(0.018);
+
+  globe.globeMaterial().bumpScale = 0.2;
+
+  // Disable wheel zoom so scrolling through the atlas remains ordinary page scroll.
+  // OrbitControls belongs to globe.gl's renderer; no Three.js objects or materials cross
+  // the library boundary (the Meshopt model viewer keeps the app's existing Three build).
+  const controls = globe.controls();
+  controls.enableZoom = false;
+  controls.autoRotate = false;
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  const canvas = el.querySelector('canvas');
+  if (canvas) canvas.style.touchAction = 'pan-y';
+  globe.pointOfView({ lat: 18, lng: 0, altitude: 2.5 }, 0);
+
+  let branches = [];
+  let pins = [];
   let selectedId = null;
   let focusId = null;
   let heroId = null;
-  let flight = 0;
-  const clickable = [];
 
-  function updateLabelVisibility() {
-    for (const marker of markers.children) {
-      const label = marker.userData.label;
-      const visibleId = mobile.matches ? selectedId || heroId : focusId || heroId;
-      if (label) label.visible = marker.userData.branch.id === visibleId;
+  function updatePins() {
+    for (const pin of pins) {
+      const selected = pin.branch.id === selectedId;
+      const hero = pin.branch.id === heroId;
+      pin.element.classList.toggle('selected', selected);
+      pin.element.classList.toggle('hero', hero);
+      pin.element.setAttribute('aria-pressed', String(selected));
+      pin.element.style.borderColor = hero ? '#f0c678' : selected ? '#d7eadf' : 'rgba(127,190,180,.8)';
+      pin.element.style.boxShadow = selected || hero ? '0 0 20px rgba(240,198,120,.5)' : '0 0 10px rgba(127,190,180,.28)';
+      pin.bead.style.color = hero ? '#f0c678' : selected ? '#9adcf6' : '#78c5e6';
+      // Keep the active/hero path named on the globe, while all pins remain compact buttons.
+      pin.label.style.display = pin.branch.id === (focusId || selectedId || heroId) ? 'inline' : 'none';
     }
   }
 
-  function updatePinSelection() {
-    for (const marker of markers.children) {
-      const isHero = marker.userData.branch.id === heroId;
-      const isSelected = marker.userData.branch.id === selectedId;
-      const color = isHero ? 0xf0c678 : isSelected ? 0xc4e6dd : 0x8cc9bd;
-      const bead = marker.userData.bead;
-      const halo = marker.userData.halo;
-      bead.material.color.setHex(color);
-      bead.material.emissive.setHex(color);
-      bead.material.emissiveIntensity = isHero ? 0.65 : isSelected ? 0.52 : 0.28;
-      halo.material.color.setHex(color);
-      halo.material.opacity = isHero ? 0.8 : isSelected ? 0.72 : 0.46;
-      halo.scale.setScalar(isSelected ? 1.2 : 1);
-    }
-  }
-
-  function setBranches(branches, nextHeroId = null, explicitOrigin = null) {
-    for (const marker of markers.children) {
-      const label = marker.userData.label;
-      if (!label) continue;
-      scene.remove(label);
-      label.material.map?.dispose();
-      label.material.dispose();
-    }
-    disposeGroup(arcs);
-    disposeGroup(markers);
-    clickable.length = 0;
+  function setBranches(nextBranches, nextHeroId = null, explicitOrigin = null) {
+    branches = Array.isArray(nextBranches) ? nextBranches : [];
     heroId = nextHeroId;
     if (nextHeroId) selectedId = nextHeroId;
     else if (!branches.some(branch => branch.id === selectedId)) selectedId = null;
     if (!branches.some(branch => branch.id === focusId)) focusId = null;
     const places = branches.filter(branch => validPlace(branch.place));
     const firstOrigin = places[0]?.place;
+    const first = branches[0];
     const origin = validPlace(explicitOrigin?.place) ? explicitOrigin.place
       : validPlace(explicitOrigin) ? explicitOrigin
-        : validPlace(branches[0]?.origin?.place) ? branches[0].origin.place
-          : validPlace(branches[0]?.origin) ? branches[0].origin
+        : validPlace(first?.origin?.place) ? first.origin.place
+          : validPlace(first?.origin) ? first.origin
             : firstOrigin;
-    const originPoint = origin ? surfacePoint(origin) : null;
-
-    for (const [index, branch] of places.entries()) {
-      const isHero = branch.id === heroId;
-      const point = surfacePoint(branch.place);
-      if (originPoint) {
-        const arc = makeArc(originPoint, point, isHero ? 0xe6be79 : 0x73aaa1);
-        if (arc) arcs.add(arc);
-      }
-
-      const normal = point.clone().normalize();
-      const pin = new THREE.Group();
-      pin.position.copy(point.clone().multiplyScalar(1.015));
-      pin.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
-      pin.userData.branch = branch;
-      const color = isHero ? 0xf0c678 : 0x8cc9bd;
-      const bead = new THREE.Mesh(
-        new THREE.SphereGeometry(isHero ? 2.8 : 2.4, 20, 16),
-        new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: isHero ? 0.65 : 0.28, roughness: 0.38 }),
-      );
-      pin.add(bead);
-      const halo = new THREE.Mesh(
-        new THREE.RingGeometry(3.8, 4.5, 32),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: isHero ? 0.8 : 0.46, side: THREE.DoubleSide, depthWrite: false }),
-      );
-      pin.add(halo);
-      pin.userData.bead = bead;
-      pin.userData.halo = halo;
-      const hit = new THREE.Mesh(
-        new THREE.SphereGeometry(7, 12, 10),
-        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
-      );
-      hit.position.z = 8;
-      hit.userData.branch = branch;
-      pin.add(hit);
-      clickable.push(hit);
-
-      const label = makeBranchLabel(branch, isHero);
-      const tangent = new THREE.Vector3(0, 1, 0).cross(normal).normalize();
-      if (tangent.lengthSq() < 0.01) tangent.set(1, 0, 0);
-      const side = index % 2 === 0 ? 1 : -1;
-      label.position.copy(point.clone().add(normal.multiplyScalar(10)).add(tangent.multiplyScalar(side * (14 + index * 3))));
-      label.userData.branchId = branch.id;
-      scene.add(label);
-      pin.userData.label = label;
-      markers.add(pin);
-    }
-    updateLabelVisibility();
-    updatePinSelection();
+    const originLat = origin?.lat;
+    const originLng = origin?.lon;
+    globe.arcsData(origin ? places.filter(branch => branch.place.lat !== originLat || branch.place.lon !== originLng).map((branch, index) => ({
+      startLat: originLat,
+      startLng: originLng,
+      endLat: branch.place.lat,
+      endLng: branch.place.lon,
+      color: branch.id === nextHeroId ? '#e6be79' : '#73aaa1',
+      phase: (index % 5) * 0.13,
+    })) : []);
+    pins = places.map(branch => makeBranchPin(branch, selected => select(selected, true)));
+    globe.htmlElementsData(pins);
+    updatePins();
   }
 
   function focus(branch) {
     if (!validPlace(branch?.place)) return;
     focusId = branch.id;
-    updateLabelVisibility();
-    const target = surfacePoint(branch.place).normalize();
-    const start = camera.position.clone().normalize();
-    const angle = start.angleTo(target);
-    const axis = new THREE.Vector3().crossVectors(start, target);
-    if (axis.lengthSq() < 0.001) axis.set(0, 1, 0);
-    axis.normalize();
-    const distance = el.clientHeight < 300 ? 300 : 350;
-    const current = ++flight;
-    controls.autoRotate = false;
-    if (reducedMotion.matches || angle < 0.001) {
-      camera.position.copy(target.multiplyScalar(distance));
-      camera.lookAt(0, 0, 0);
-      controls.update();
-      return;
-    }
-    const started = performance.now();
-    const duration = 780;
-    const origin = start.clone();
-    function move(now) {
-      if (current !== flight) return;
-      const progress = Math.min(1, (now - started) / duration);
-      const eased = progress * progress * (3 - 2 * progress);
-      const direction = origin.clone().applyAxisAngle(axis, angle * eased).normalize();
-      camera.position.copy(direction.multiplyScalar(distance));
-      camera.lookAt(0, 0, 0);
-      controls.update();
-      if (progress < 1) requestAnimationFrame(move);
-    }
-    requestAnimationFrame(move);
+    updatePins();
+    globe.pointOfView({ lat: branch.place.lat, lng: branch.place.lon, altitude: 2.5 }, reducedMotion.matches ? 0 : 1100);
   }
 
   function select(branch, fromPin = false) {
     selectedId = branch?.id || null;
-    updateLabelVisibility();
-    updatePinSelection();
-    if (fromPin) onBranchSelect(branch);
-    focus(branch);
+    updatePins();
+    if (fromPin && branch) onBranchSelect(branch);
+    if (branch) focus(branch);
   }
 
-  const raycaster = new THREE.Raycaster();
-  const pointer = new THREE.Vector2();
-  let pointerStart = null;
-  let lastPointerUpAt = 0;
-  function selectPinAt(event) {
-    const rect = renderer.domElement.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    pointer.set((x / rect.width) * 2 - 1, -(y / rect.height) * 2 + 1);
-    raycaster.setFromCamera(pointer, camera);
-    const pinHit = raycaster.intersectObjects(clickable, false)[0];
-    const earthHit = raycaster.intersectObject(earth.children[0], false)[0];
-    let branch = pinHit && (!earthHit || pinHit.distance < earthHit.distance)
-      ? pinHit.object.userData.branch
-      : null;
+  const observer = new ResizeObserver(() => {
+    const width = el.clientWidth || 400;
+    const height = el.clientHeight || 300;
+    globe.width(width).height(height);
+  });
+  observer.observe(el);
+  globe.width(el.clientWidth || 400).height(el.clientHeight || 300);
 
-    // A small projected hit area makes touch selection reliable when a finger lands
-    // beside a bead. Keep the same Earth occlusion test so hidden, far-side pins do
-    // not become clickable through the planet.
-    if (!branch) {
-      camera.updateMatrixWorld();
-      const projected = new THREE.Vector3();
-      let closest = Infinity;
-      const maxDistance = mobile.matches ? 30 : 22;
-      for (const hit of clickable) {
-        hit.getWorldPosition(projected);
-        const distanceFromCamera = camera.position.distanceTo(projected);
-        projected.project(camera);
-        if (projected.z < -1 || projected.z > 1) continue;
-        const screenX = (projected.x + 1) * rect.width / 2;
-        const screenY = (1 - projected.y) * rect.height / 2;
-        const screenDistance = Math.hypot(screenX - x, screenY - y);
-        if (screenDistance >= closest || screenDistance > maxDistance) continue;
-        raycaster.setFromCamera(new THREE.Vector2(projected.x, projected.y), camera);
-        const candidateEarthHit = raycaster.intersectObject(earth.children[0], false)[0];
-        const occluded = candidateEarthHit && candidateEarthHit.distance < distanceFromCamera - 7;
-        if (occluded) continue;
-        closest = screenDistance;
-        branch = hit.userData.branch;
-      }
-    }
-    if (branch) select(branch, true);
-  }
-  renderer.domElement.addEventListener('pointerdown', event => { pointerStart = { x: event.clientX, y: event.clientY }; });
-  renderer.domElement.addEventListener('pointerup', event => {
-    const start = pointerStart;
-    pointerStart = null;
-    lastPointerUpAt = performance.now();
-    if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 7) return;
-    selectPinAt(event);
+  reducedMotion.addEventListener?.('change', () => {
+    globe.arcDashAnimateTime(reducedMotion.matches ? 0 : 2400);
+    if (reducedMotion.matches) controls.autoRotate = false;
   });
-  renderer.domElement.addEventListener('click', event => {
-    if (performance.now() - lastPointerUpAt < 500) return;
-    selectPinAt(event);
-  });
-  mobile.addEventListener?.('change', updateLabelVisibility);
-  reducedMotion.addEventListener?.('change', () => { if (reducedMotion.matches) controls.autoRotate = false; });
   return {
     setBranches,
     focus,
@@ -385,18 +217,58 @@ export function createModelViewer(el) {
   const { scene, camera, controls, renderer } = setup(el);
   camera.position.set(2, 1.5, 3);
   controls.autoRotateSpeed = 0.8;
+  controls.minDistance = 1.8;
+  controls.maxDistance = 20;
+  el.tabIndex = 0;
+  el.setAttribute('role', 'region');
+  el.setAttribute('aria-label', 'Interactive 3D model viewer. Use arrow keys to orbit, plus or minus to zoom, and Home to reset the view.');
+  el.setAttribute('aria-keyshortcuts', 'ArrowUp ArrowDown ArrowLeft ArrowRight + - Home');
+  el.style.outlineOffset = '4px';
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   let object, loadedUrl = '', requestId = 0;
-  let narrowFrame = null;
+  let frameAspect = null, objectRadius = 1;
+  const homeDirection = new THREE.Vector3(2, 1.5, 3).normalize();
+  const fitDistance = () => {
+    const aspect = el.clientWidth / Math.max(el.clientHeight, 1);
+    const vertical = THREE.MathUtils.degToRad(camera.fov);
+    const horizontal = 2 * Math.atan(Math.tan(vertical / 2) * aspect);
+    return Math.max(3.9, objectRadius * 1.12 / Math.sin(Math.min(vertical, horizontal) / 2));
+  };
   const fitCamera = () => {
     if (!object) return;
-    const narrow = el.clientWidth / Math.max(el.clientHeight, 1) < 0.86;
-    if (narrow === narrowFrame) return;
-    narrowFrame = narrow;
+    const aspect = el.clientWidth / Math.max(el.clientHeight, 1);
+    if (aspect === frameAspect) return;
+    frameAspect = aspect;
     const direction = camera.position.clone().normalize();
-    camera.position.copy(direction.multiplyScalar(narrow ? 4.6 : 3.9));
+    camera.position.copy(direction.multiplyScalar(fitDistance()));
     controls.update();
   };
+  el.addEventListener('keydown', event => {
+    if (event.target !== el && event.target !== renderer.domElement) return;
+    const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '=', '-', '_', 'Home'];
+    if (!keys.includes(event.key)) return;
+    event.preventDefault();
+    if (!object) return;
+
+    if (event.key === 'Home') {
+      camera.position.copy(controls.target).addScaledVector(homeDirection, fitDistance());
+      controls.update();
+      return;
+    }
+
+    const offset = camera.position.clone().sub(controls.target);
+    const spherical = new THREE.Spherical().setFromVector3(offset);
+    const orbitStep = 0.12;
+    if (event.key === 'ArrowLeft') spherical.theta -= orbitStep;
+    else if (event.key === 'ArrowRight') spherical.theta += orbitStep;
+    else if (event.key === 'ArrowUp') spherical.phi = Math.max(0.05, spherical.phi - orbitStep);
+    else if (event.key === 'ArrowDown') spherical.phi = Math.min(Math.PI - 0.05, spherical.phi + orbitStep);
+    else if (event.key === '+' || event.key === '=') spherical.radius = Math.max(controls.minDistance, spherical.radius / 1.12);
+    else if (event.key === '-' || event.key === '_') spherical.radius = Math.min(controls.maxDistance, spherical.radius * 1.12);
+    camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(spherical));
+    camera.lookAt(controls.target);
+    controls.update();
+  });
   const frameObserver = new ResizeObserver(fitCamera);
   frameObserver.observe(el);
   scene.add(new THREE.AmbientLight(0xffffff, 1.15));
@@ -427,6 +299,8 @@ export function createModelViewer(el) {
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
         const scale = 2 / Math.max(size.x, size.y, size.z, 0.001);
+        objectRadius = size.length() * scale / 2;
+        frameAspect = null;
         object.position.sub(center);
         object.scale.setScalar(scale);
         object.position.multiplyScalar(scale);
