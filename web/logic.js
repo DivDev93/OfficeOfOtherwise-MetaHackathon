@@ -158,6 +158,77 @@ export function cachedRetryRun(runs, suggestion) {
   if (typeof suggestion !== 'string' || !suggestion) return null;
   return runs.find(run => run.divergence === suggestion && !['blocked', 'simulated'].includes(run.status)) ?? null;
 }
+export function suggestionAction(mode, runs, prompt) {
+  if (mode !== 'replay-only') return { action: 'fill-input', run: null };
+  const run = cachedRetryRun(runs, prompt);
+  return run ? { action: 'open-saved-run', run } : { action: 'no-saved-match', run: null };
+}
+export function sourceVerificationLabel(method) {
+  return ({ full_text: 'Full text reviewed', abstract: 'Abstract reviewed', search_excerpt: 'Search excerpt only' })[method]
+    || 'Access method not recorded';
+}
+export function lessonMarkdown({ run, branch, evidenceBranch, comparisonBranch = null, sources = [], method = null, score = null } = {}) {
+  if (!run || !branch || !evidenceBranch) return '';
+  const byId = new Map(sources.map(source => [source.id, source]));
+  const baseline = (evidenceBranch.baselineSourceIds || []).map(id => byId.get(id)).filter(Boolean);
+  const lines = [
+    `# Scenario brief: ${evidenceBranch.title || branch.title}`,
+    '',
+    `**Question:** ${run.divergence || 'Not recorded'}`,
+    '',
+    'Historical starting points are source-linked. The changed assumption and alternate timeline are imagined.',
+    '',
+    '## Historical starting points',
+    ...(baseline.length ? baseline.flatMap(source => [
+      `- ${source.baselineParaphrase || 'No baseline summary recorded.'}`,
+      `  Source: ${source.title || source.id}${source.publisher ? ` · ${source.publisher}` : ''}${source.checkedDate ? ` · checked ${source.checkedDate}` : ''} · ${sourceVerificationLabel(source.verificationMethod)}${source.url ? ` · ${source.url}` : ''}`,
+    ]) : ['- No baseline sources are linked to this branch.']),
+    '',
+    '## Changed assumption',
+    evidenceBranch.changedAssumption || 'No changed assumption recorded.',
+    '',
+    '## Imagined sequence',
+    ...(evidenceBranch.causalSteps || []).map((step, index) => `${index + 1}. ${step}`),
+    ...(evidenceBranch.causalSteps?.length ? [] : ['No causal steps recorded.']),
+    '',
+    '## Uncertainty',
+    evidenceBranch.uncertainty || 'No uncertainty note recorded.',
+    '',
+    '## Unverified claims',
+    ...(evidenceBranch.unverifiedClaims?.length ? evidenceBranch.unverifiedClaims.map(claim => `- ${claim}`) : ['- No explicit unverified-claims list was recorded.']),
+    '',
+    '## What the visualization shows',
+    evidenceBranch.demonstrates || 'The selected imagined path.',
+    '',
+    '## What it does not establish',
+    evidenceBranch.doesNotEstablish || 'That the imagined events occurred.',
+    '',
+    '## Research prompt',
+    evidenceBranch.discussionQuestion || 'Which assumption most changes the outcome, and what evidence could help test it?',
+    '',
+    ...(comparisonBranch ? [
+      `## Compare with: ${comparisonBranch.title || 'another path'}`,
+      'Both outcomes are imagined paths from the same starting question.',
+      '### Historical starting points linked to this path',
+      ...((comparisonBranch.baselineSourceIds || []).map(id => byId.get(id)).filter(Boolean).length
+        ? (comparisonBranch.baselineSourceIds || []).map(id => byId.get(id)).filter(Boolean).flatMap(source => [`- ${source.baselineParaphrase || 'No baseline summary recorded.'}`, `  Source: ${source.title || source.id}${source.publisher ? ` · ${source.publisher}` : ''}${source.checkedDate ? ` · checked ${source.checkedDate}` : ''} · ${sourceVerificationLabel(source.verificationMethod)}${source.url ? ` · ${source.url}` : ''}`])
+        : ['- No baseline sources are linked to this path.']),
+      `Changed assumption: ${comparisonBranch.changedAssumption || 'Not recorded.'}`,
+      ...(comparisonBranch.causalSteps || []).map((step, index) => `${index + 1}. ${step}`),
+      `Uncertainty: ${comparisonBranch.uncertainty || 'Not recorded.'}`,
+      ...(comparisonBranch.unverifiedClaims?.length ? ['Unverified claims:', ...comparisonBranch.unverifiedClaims.map(claim => `- ${claim}`)] : []),
+      '',
+    ] : []),
+    ...(Number.isFinite(score) ? ['## Model review signal', `Score: ${score}/10. This ranks the generated branches; it is not a probability that this path would happen.`, ''] : []),
+    ...(method?.label ? ['## Source and scenario method', `${method.label}${method.scope ? ` · ${method.scope}` : ''}${method.role ? ` · ${method.role}` : ''}${method.reviewedAgainst ? ` · reviewed against ${method.reviewedAgainst}` : ''}`, ...(method.scoreDisclaimer ? [method.scoreDisclaimer] : []), ''] : []),
+    '## Scenario development prompts',
+    '- What additional source would sharpen the historical starting point?',
+    '- Which causal step depends most on an assumption?',
+    '- What alternate divergence could produce a different path?',
+    '',
+  ];
+  return lines.join('\n');
+}
 export function replayLabel(run) {
   const shortTitles = {
     alexandria: 'Alexandria · Library survives',

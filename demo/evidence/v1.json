@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 1,
+  "authoredAt": "2026-10-29",
+  "method": {
+    "label": "Curated evidence notes",
+    "scope": "Sources ground present-day, archaeological, or historical baseline facts only. The alternate timelines and causal chains are creative counterfactual hypotheses authored for this replay, not source-backed predictions.",
+    "scoreDisclaimer": "Saved model review scores rank candidate branches for this run; they are not probabilities, factual confidence scores, or evidence quality ratings."
+  },
+  "sources": [
+    { "id": "alex-library", "title": "The Library of Alexandria: limits of knowledge", "publisher": "University College London, Digital Egypt", "url": "https://www.ucl.ac.uk/museums-static/digitalegypt/writing/library/alexandria.html", "checkedDate": "2026-10-29", "verificationMethod": "full_text", "baselineParaphrase": "The Museum and library are usually dated to the third century BCE, but surviving evidence is limited and major details remain uncertain." },
+    { "id": "alex-aristarchus", "title": "Lecture 13: Greek Astronomy", "publisher": "Ohio State University, Department of Astronomy", "url": "https://www.astronomy.ohio-state.edu/pogge.1/Ast161/Unit3/greek.html", "checkedDate": "2026-10-29", "verificationMethod": "full_text", "baselineParaphrase": "Archimedes' Sand Reckoner is the main surviving account that Aristarchus proposed a Sun-centered cosmos; details of Aristarchus' model are not known." },
+    { "id": "alex-exhaustion", "title": "A history of the calculus", "publisher": "University of St Andrews, MacTutor History of Mathematics", "url": "https://mathshistory.st-andrews.ac.uk/HistTopics/The_rise_of_calculus/", "checkedDate": "2026-10-29", "verificationMethod": "full_text", "baselineParaphrase": "Archimedes used the method of exhaustion for geometric area problems; this is an antecedent, not the later system of calculus." },
+    { "id": "alex-anatomy", "title": "Development of Anatomophysiologic Knowledge Regarding the Cardiovascular System: From Egyptians to Harvey", "publisher": "PubMed Central, National Library of Medicine (review article)", "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4290745/", "checkedDate": "2026-10-29", "verificationMethod": "abstract", "baselineParaphrase": "The review describes anatomical contributions attributed to Herophilus and Erasistratus, while noting that interpretations of how close Erasistratus came to circulation remain contested." },
+    { "id": "ber-landbridge", "title": "About Beringia", "publisher": "U.S. National Park Service", "url": "https://www.nps.gov/subjects/beringia/about.htm", "checkedDate": "2026-10-29", "verificationMethod": "full_text", "baselineParaphrase": "Lower glacial sea levels exposed a land connection between Asia and North America; later warming and sea-level rise submerged it." },
+    { "id": "ber-megafauna", "title": "Pleistocene Megafauna in Beringia", "publisher": "U.S. National Park Service / Alaska Park Science", "url": "https://www.nps.gov/articles/aps-17-1-4.htm", "checkedDate": "2026-10-29", "verificationMethod": "full_text", "baselineParaphrase": "Late-Pleistocene Beringia supported mammoths, bison, and horses in a complex steppe ecosystem; warming, moisture change, and shrub expansion accompanied its later transformation." },
+    { "id": "ber-strait", "title": "A Paleontological Inventory of Arctic Parks", "publisher": "U.S. National Park Service / Alaska Park Science", "url": "https://home.nps.gov/articles/aps-16-1-7.htm", "checkedDate": "2026-10-29", "verificationMethod": "full_text", "baselineParaphrase": "The opening of Bering Strait altered ocean circulation and allowed exchanges between Arctic and Pacific marine organisms; the land bridge also constrained terrestrial movement when flooded." },
+    { "id": "ber-migration", "title": "A Survey of Human Migration in Alaska's National Parks through Time", "publisher": "U.S. National Park Service / Alaska Park Science", "url": "https://www.nps.gov/articles/aps-17-1-2.htm", "checkedDate": "2026-10-29", "verificationMethod": "full_text", "baselineParaphrase": "A land bridge was exposed during the Last Glacial Maximum, while the timing and route of later human movement south from Alaska remain debated." },
+    { "id": "sahara-megachad", "title": "Remnants of an Ancient Lake", "publisher": "NASA Earth Observatory", "url": "https://science.nasa.gov/earth/earth-observatory/remnants-of-an-ancient-lake-146304/", "checkedDate": "2026-10-29", "verificationMethod": "full_text", "baselineParaphrase": "Geologic shorelines show that Lake Mega-Chad expanded to a very large area during a past humid interval; this does not document boats or a continuous modern lake." },
+    { "id": "sahara-humid", "title": "African humid periods triggered the reactivation of a large river system in Western Sahara", "publisher": "Nature Communications (full text in PubMed Central)", "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4659928/", "checkedDate": "2026-10-29", "verificationMethod": "full_text", "baselineParaphrase": "The paper reports radar evidence for a roughly 520 km buried Mauritanian paleoriver bed and argues, using this and other evidence, that a larger river system was likely reactivated during some humid periods. It states that direct on-continent evidence for the proposed complete Hoggar-to-canyon link had not been found." },
+    { "id": "sahara-cereals", "title": "Wild cereals from Holocene central Sahara archaeological sites: aDNA and archaeobotany from the Takarkori rockshelter", "publisher": "University of Modena and Reggio Emilia repository (conference abstract)", "url": "https://iris.unimore.it/handle/11380/1131886", "checkedDate": "2026-10-29", "verificationMethod": "abstract", "baselineParaphrase": "Archaeobotanical remains show people used and transported wild cereals in central Saharan sites; they do not establish an independent domestication centre for sorghum on the Tassili plateau." },
+    { "id": "sahara-sorghum", "title": "Evidence for Sorghum Domestication in Fourth Millennium BC Eastern Sudan: Spikelet Morphology from Ceramic Impressions of the Butana Group", "publisher": "Current Anthropology / University College London repository", "url": "https://discovery.ucl.ac.uk/1574602/7/Fuller_693898.pdf", "checkedDate": "2026-10-29", "verificationMethod": "full_text", "baselineParaphrase": "Diagnostic plant impressions support domesticated and wild sorghum in eastern Sudan during the fourth millennium BCE; this evidence is geographically distinct from Tassili." },
+    { "id": "antikythera-review", "title": "Our current knowledge of the Antikythera Mechanism", "publisher": "Nature Astronomy", "url": "https://www.nature.com/articles/s41550-017-0347-2", "checkedDate": "2026-10-29", "verificationMethod": "abstract", "baselineParaphrase": "The authors describe a second-century BCE geared calculator whose understood functions included calendars and solar/lunar astronomy; they say the device was also intended to display planets and note major uncertainty about its origin, context, and purpose. This note is limited to the publisher abstract." },
+    { "id": "hero-automata", "title": "Hero of Alexandria's Automata: a critical edition and translation, including a commentary on Book One", "publisher": "University of Glasgow Enlighten Theses (full text available)", "url": "https://theses.gla.ac.uk/76774/", "checkedDate": "2026-10-29", "verificationMethod": "full_text", "baselineParaphrase": "Francesco Grillo's thesis edits and translates Hero's Automata, a first-century CE mechanical treatise; Book One concerns constructing a mobile automaton. The thesis describes textual and dating uncertainties, including uncertainty about Book Two's relation to Philo of Byzantium." },
+    { "id": "archimedes-screw", "title": "On Architecture, Book 10, section 6.1", "publisher": "Vitruvius, English translations hosted by Lexundria", "url": "https://lexundria.com/vitr/10.6.1/cf", "checkedDate": "2026-10-29", "verificationMethod": "full_text", "baselineParaphrase": "Vitruvius describes a machine on the principle of the screw that raises water, and provides construction instructions. This passage establishes a textual description of water-raising machinery; it does not attribute the device to Archimedes or document its use in a particular Nile irrigation system." }
+  ],
+  "runs": [
+    {
+      "runId": "alexandria",
+      "divergence": "What if the Library of Alexandria never burned?",
+      "branchSha256": "a8a598cab92c189a90cabb5f038c7d013e7ab1921bc07ed097395f9527871807",
+      "branches": [
+        {
+          "branchId": "b1", "title": "Heliocentric Astronomy Taught Early", "baselineSourceIds": ["alex-library", "alex-aristarchus"],
+          "changedAssumption": "Assume a durable institution in Alexandria repeatedly copies and teaches Aristarchus' Sun-centered proposal, and that later scholars can access it.",
+          "causalSteps": ["If copies and teaching networks persist, more astronomers could encounter the proposal and its arguments.", "If those scholars find observations and mathematical methods persuasive, some schools might adopt or extend it."],
+          "uncertainty": "The divergence's popular single-burning premise is uncertain: the library's history is poorly documented, and surviving accounts do not establish one event as its end. Even survival of an institution would not ensure preservation, acceptance, or standard teaching of Aristarchus' model.",
+          "unverifiedClaims": ["That Aristarchus' writings were held by the Library of Alexandria.", "That preservation would make heliocentrism standard teaching."],
+          "demonstrates": "A hypothetical scholarly and instrument-making culture in which a Sun-centered model receives sustained investigation.",
+          "doesNotEstablish": "It does not establish that the historical library burned in one event, that Aristarchus' writings were held there, or that early heliocentrism would have become standard.",
+          "discussionQuestion": "What additional institutions, observations, or mathematical tools might help a debated model gain wider attention?"
+        },
+        {
+          "branchId": "b5", "title": "Calculus Emerges From Archimedes", "baselineSourceIds": ["alex-library", "alex-exhaustion"],
+          "changedAssumption": "Assume mathematical works associated with Archimedes remain available, are copied across generations, and are studied by distant mathematical communities.",
+          "causalSteps": ["If the treatises remain accessible, later scholars could reuse geometric proof techniques and pose new problems.", "If translation and teaching networks connect those scholars, selected techniques might be generalized into new mathematics."],
+          "uncertainty": "The branch's early calculus and Samarkand setting are invented. A method resembling a later concept does not imply the concepts, notation, institutions, or historical route needed for calculus actually develop.",
+          "unverifiedClaims": ["That relevant Archimedes texts were held by the library or their loss delayed calculus.", "That scholars in Samarkand would develop calculus from those texts."],
+          "demonstrates": "A speculative chain from preservation and transmission to a changed mathematical research tradition.",
+          "doesNotEstablish": "It does not show that Archimedes' works were all in the library, that their later loss caused calculus to be delayed, or that a specific city would develop it.",
+          "discussionQuestion": "Which links in this chain depend on preserving a text, and which depend on later people developing new questions or methods?"
+        },
+        {
+          "branchId": "b2", "title": "Anatomy Advances Circulation Knowledge", "baselineSourceIds": ["alex-library", "alex-anatomy"],
+          "changedAssumption": "Assume Alexandrian medical writings continue to circulate and later physicians can compare them with new observations and practices.",
+          "causalSteps": ["If descriptions of anatomy are copied and taught, later practitioners could inherit some terminology and observations.", "If new dissections and clinical records are added, medical theories might change earlier in this imagined timeline."],
+          "uncertainty": "The replay title's reference to circulation is stronger than the evidence permits: the surviving record does not credit these physicians with discovering modern blood circulation. Their writings are fragmentary and known through later authors.",
+          "unverifiedClaims": ["That loss of the library removed the medical knowledge described in the branch.", "That translation to Salerno would lead to early discovery of modern blood circulation."],
+          "demonstrates": "A hypothetical continuity of medical teaching and accumulated anatomical study.",
+          "doesNotEstablish": "It does not establish that the library's fate erased these medical works or that Salerno would receive them or discover circulation centuries earlier.",
+          "discussionQuestion": "How can later summaries and fragmentary sources make it difficult to separate a historical observation from a later interpretation?"
+        }
+      ]
+    },
+    {
+      "runId": "beringia",
+      "divergence": "What if the Bering land bridge never flooded?",
+      "branchSha256": "6bec86174365b9cba2bdd07801b32d4891b08ebfff7a494a762b8f351ef7ade3",
+      "branches": [
+        {
+          "branchId": "b2", "title": "Reindeer Herders Cross Continents", "baselineSourceIds": ["ber-landbridge", "ber-migration"],
+          "changedAssumption": "Assume the Bering land connection remains passable after the period when post-glacial sea-level rise submerged it.",
+          "causalSteps": ["If a route remains exposed, people, animals, and materials could move across it more often than across open water.", "If communities choose to travel and exchange knowledge, some practices could spread between regions over time."],
+          "uncertainty": "A land corridor creates an opportunity, not a migration. Human movement south from Alaska already has debated timing and routes; the replay's reindeer herding and shared seasonal round are speculative.",
+          "unverifiedClaims": ["That reindeer herding and sled practices would spread across the corridor.", "That distant communities would develop a shared seasonal round."],
+          "demonstrates": "How a changed geographic connection could alter possible routes for movement and exchange.",
+          "doesNotEstablish": "It does not establish who would travel, whether herding would spread, or that two distant communities would develop a shared culture.",
+          "discussionQuestion": "What environmental, social, and practical conditions would determine whether people use a newly available route?"
+        },
+        {
+          "branchId": "b5", "title": "An Arctic Ocean Sealed South", "baselineSourceIds": ["ber-landbridge", "ber-strait"],
+          "changedAssumption": "Assume the land connection persists and blocks the modern Bering Strait's Pacific-Arctic marine exchange.",
+          "causalSteps": ["If the strait remains closed, one pathway for water and marine organisms between the Pacific and Arctic would be absent.", "If other gateways and climate processes do not compensate, regional circulation and ecological patterns could differ."],
+          "uncertainty": "The saved branch's claim that the Arctic would become colder and fresher is not demonstrated by the source; circulation depends on several gateways and climate factors. The branch's eighteenth-century discovery scene is invented.",
+          "unverifiedClaims": ["That a closed strait would make the Arctic colder and fresher.", "That naturalists would observe the stated result or develop the described theories."],
+          "demonstrates": "A possible link between a changed seaway and questions about ocean exchange and regional environments.",
+          "doesNotEstablish": "It does not establish the direction or size of a climate effect, a permanently sealed Arctic, or a specific historical scientific theory.",
+          "discussionQuestion": "What other ocean gateways and climate variables would you need to study before predicting the effect of closing one strait?"
+        },
+        {
+          "branchId": "b1", "title": "Mammoth Steppe Without End", "baselineSourceIds": ["ber-landbridge", "ber-megafauna"],
+          "changedAssumption": "Assume dry grassland habitat persists across the Bering region long after the real late-Pleistocene transition.",
+          "causalSteps": ["If grassland forage and suitable climate persist, grazing animals could retain connected habitat across the region.", "If populations remain viable and connected, some migration between Siberia and Yukon could continue."],
+          "uncertainty": "The source associates steppe change with warming, moisture, and vegetation as well as geography. Keeping a land bridge dry alone does not keep grassland or extinct species alive; the required climate/ecological changes are a major extra assumption.",
+          "unverifiedClaims": ["That a persistent land bridge alone would sustain steppe grassland.", "That mammoths, bison, and horses would continue migrating there."],
+          "demonstrates": "A hypothetical relationship between habitat continuity and animal movement.",
+          "doesNotEstablish": "It does not establish that mammoths, bison, or horses would survive, or that grazing alone would prevent forest or shrub expansion.",
+          "discussionQuestion": "Which matters more to a migrating species: a physical corridor, food along the corridor, or climate across its range?"
+        }
+      ]
+    },
+    {
+      "runId": "green-sahara",
+      "divergence": "What if the Sahara had stayed green?",
+      "branchSha256": "1a28d693e3d0d015317885f59e995c53ed2acf0bc5f5b940247f88778060d6d1",
+      "branches": [
+        {
+          "branchId": "b2", "title": "Sailboats Cross Megalake Chad", "baselineSourceIds": ["sahara-megachad"],
+          "changedAssumption": "Assume a large Lake Mega-Chad and its connected shore habitats persist into the imagined period, with communities able to develop watercraft suited to them.",
+          "causalSteps": ["If broad, connected water remains, boats could make some shore-to-shore trips faster than travel around the lake.", "If communities build and maintain craft and share route knowledge, water travel could change patterns of contact and resource use."],
+          "uncertainty": "The geological evidence supports an ancient large lake, not sailboats, navigation practices, or a continuous lake through later centuries. Reed sailboats and star-based travel are creative assumptions.",
+          "unverifiedClaims": ["That Lake Mega-Chad would persist into the imagined era.", "That communities would build reed sailboats and navigate between settlements."],
+          "demonstrates": "A hypothetical adaptation to persistent inland water and the spatial possibilities of water travel.",
+          "doesNotEstablish": "It does not establish that the lake would remain at that size, that people would invent sails, or that island settlements existed.",
+          "discussionQuestion": "What evidence would archaeologists need to distinguish a plausible boat technology from an imagined one?"
+        },
+        {
+          "branchId": "b1", "title": "Sorghum Farmers Of Tassili Plateau", "baselineSourceIds": ["sahara-cereals", "sahara-sorghum"],
+          "changedAssumption": "Assume reliable water and grassland persist near Tassili long enough for communities to settle and cultivate local plants.",
+          "causalSteps": ["If water is dependable, some mobile groups might choose to stay for longer periods.", "If people cultivate useful local cereals and select seed over many generations, farming practices and plant traits might change."],
+          "uncertainty": "Wild cereal use in central Saharan sites is evidenced, but this is not proof of sorghum domestication on the Tassili plateau. Evidence for early domesticated sorghum cited here comes from eastern Sudan, a different region; the proposed independent farming centre is hypothetical.",
+          "unverifiedClaims": ["That sorghum was domesticated on the Tassili plateau.", "That a local farming centre would emerge there because rainfall persisted."],
+          "demonstrates": "How persistent water and repeated human selection could be explored as conditions for food-production change.",
+          "doesNotEstablish": "It does not establish the crop, date, route, or location of any Tassili domestication, or that rainfall alone causes farming.",
+          "discussionQuestion": "How would archaeobotanical evidence distinguish gathering wild grain, cultivation, and domestication?"
+        },
+        {
+          "branchId": "b3", "title": "River Explorers Map Hoggar Headwaters", "baselineSourceIds": ["sahara-humid"],
+          "changedAssumption": "Assume humid conditions persist and the proposed Hoggar-fed paleodrainage remains active and navigable in the imagined era.",
+          "causalSteps": ["If stronger rainfall sustains channels, water and sediment could move from highlands toward lower western basins.", "If navigable stretches persist and communities travel them, waterways could support seasonal exploration and exchange."],
+          "uncertainty": "Research supports likely reactivation of a large paleoriver during some humid periods, but explicitly notes that direct on-continent evidence for its full connection is lacking. A perennial navigable river to the Atlantic and the explorers are speculative.",
+          "unverifiedClaims": ["That a continuous navigable river ran from Hoggar to the Atlantic.", "That explorers used it to map the imagined tributary network."],
+          "demonstrates": "A hypothesis connecting rainfall, drainage networks, and possible travel corridors.",
+          "doesNotEstablish": "It does not establish a continuous river to the Atlantic, year-round navigation, or a historical expedition that mapped its tributaries.",
+          "discussionQuestion": "What observations could tell you whether separate ancient channels belonged to one connected river system?"
+        }
+      ]
+    },
+    {
+      "runId": "mechanisms",
+      "divergence": "What if Antikythera-style mechanisms had scaled into industry?",
+      "branchSha256": "9cd383940c3085b025a8ec17a54d12deb94ee1110d617e89a3c4638346ef1ca1",
+      "branches": [
+        {
+          "branchId": "b1", "title": "Geared Tides Guide Ocean Sailors", "baselineSourceIds": ["antikythera-review"],
+          "changedAssumption": "Assume workshops reproduce and adapt precision gearing at scale, and that new instruments are independently designed for maritime use.",
+          "causalSteps": ["If gearmaking becomes repeatable, more complex calendars or astronomical displays could be made and maintained.", "If sailors can use accurate sky observations and reliable instruments, some navigation practices might change."],
+          "uncertainty": "The publisher abstract describes calendar and astronomical displays but does not establish tidal prediction or navigation. The saved title compresses two unsupported steps: scaling the device and translating it into practical open-ocean instruments.",
+          "unverifiedClaims": ["That Antikythera-style mechanisms predicted tides or guided ocean sailors.", "That the mechanism scaled into reproducible industrial production."],
+          "demonstrates": "A speculative transfer from precision astronomical mechanisms to an imagined maritime instrument tradition.",
+          "doesNotEstablish": "It does not establish that the historical mechanism predicted tides, guided sailors, or that gear technology would spread into industry.",
+          "discussionQuestion": "What additional design features, observations, and maintenance systems would a shipboard instrument need?"
+        },
+        {
+          "branchId": "b4", "title": "Mechanical Heavens Enchant Public Theaters", "baselineSourceIds": ["antikythera-review", "hero-automata"],
+          "changedAssumption": "Assume specialized makers can reproduce astronomical gearing and combine it with existing traditions of mechanical display.",
+          "causalSteps": ["If mechanisms become more reproducible, makers could experiment with larger, more visible demonstrations of celestial cycles.", "If patrons and audiences value them, workshops might adapt displays for public gatherings or demonstrations."],
+          "uncertainty": "The source describes Hero's written account of mobile automata, not evidence that they were combined with geared astronomical devices, enlarged to room scale, or broadly used in public. Theaters, festivals, and schools in this branch are imagined outcomes.",
+          "unverifiedClaims": ["That Antikythera-style mechanisms were enlarged into room-sized devices.", "That such devices were installed in Athenian theaters or schools."],
+          "demonstrates": "A possible intersection of astronomical modeling, craft skill, and public demonstration.",
+          "doesNotEstablish": "It does not establish that Antikythera-style mechanisms were mass-produced or used in Athenian public theaters.",
+          "discussionQuestion": "How might cost, materials, maintenance, and audience access shape whether a complex machine stays a luxury object or becomes public technology?"
+        },
+        {
+          "branchId": "b2", "title": "Clockwork Pumps Green The Delta", "baselineSourceIds": ["antikythera-review", "archimedes-screw"],
+          "changedAssumption": "Assume engineers transfer precision gearing into water-lifting devices and coordinate their use across selected delta waterways.",
+          "causalSteps": ["If gears can reliably regulate or drive water-lifting machinery, some pumps might be easier to operate at chosen rates.", "If communities maintain machines and have suitable water, land, labor, and distribution channels, some plots could receive more controlled irrigation."],
+          "uncertainty": "A water-raising screw is an established technology, and Antikythera gears establish precision mechanism-making; no cited evidence shows these were combined for Nile irrigation. Farm expansion depends on hydrology, soils, labor, and upkeep, not gearing alone.",
+          "unverifiedClaims": ["That Antikythera-style gears drove Archimedes screws in the Nile Delta.", "That the imagined system expanded farms beyond floodplains."],
+          "demonstrates": "A hypothetical combination of two known technical ideas and the conditions needed for infrastructure to matter.",
+          "doesNotEstablish": "It does not establish ancient clockwork irrigation, changed Nile floodplains, or an agricultural expansion caused by gearboxes.",
+          "discussionQuestion": "Which non-mechanical constraints could prevent a technically successful pump from changing farming at regional scale?"
+        }
+      ]
+    }
+  ]
+}

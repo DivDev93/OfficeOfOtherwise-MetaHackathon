@@ -1,17 +1,16 @@
-# 2:40 judging demo
+# Three-minute replay storyboard
 
-Use only cached runs on the replay deployment. The guardrail fixture simulates an unavailable classifier; Alexandria includes a separately generated, saved SAM 3D Objects model. This walkthrough makes no live model calls.
+The local recording is assembled at `video/hackathon-audit-2026-10-29/office-of-otherwise-audit-final.mp4` from captured offline replay beats and synthetic narration. It has not been uploaded or submitted. This table is the earlier storyboard for the intended flow; its timings and narration are not the exact edited cut. For actual recording duration, chapters, and media properties, see [the recording note](recording/2026-10-29.md). To inspect the workflow live without provider calls, start `npm run demo:replay` and select **Alexandria** from the archive.
 
-| Time | Screen and narration |
-| --- | --- |
-| 0:00–0:12 | In the invitation's archive, choose Alexandria and **Open**. “Office of Otherwise explores possible histories as places. This saved Alexandria story is replaying; no model calls or credits are used.” |
-| 0:12–0:22 | Choose **Simulated guardrail** and **Open**. “This simulated fixture shows fail-closed behavior when the topic classifier is unavailable. It made no Muse policy call.” |
-| 0:22–0:47 | **Try the suggestion**; let the saved pins stream and review finish. Select another path, then return to the gold hero. “Muse Wonder proposes and reviews three geo-anchored paths. Gold marks the reviewed hero; other paths remain selectable. This older replay used Wonder for policy; current policy uses Spark.” |
-| 0:47–0:59 | Show **Scene** and the model cards. “Muse Image rendered the scene. The sheet identifies each Meta model and its recorded time and cost.” |
-| 0:59–1:44 | Select **SAM cutout**, then **3D object** at about 1:04 and **Orbit object** at 1:06. Keep this full-width cutout-to-orbit beat on screen for 45 seconds. “SAM 3.1 isolates the subject. Meta SAM 3D Objects supplies the saved model. The 13.39 MB original has a 2.63 MB Meshopt viewer copy. We can orbit with the pointer or keyboard. This is object reconstruction replay.” Leave the remaining time for the orbit. |
-| 1:44–2:05 | **Back to atlas**; show the model cards. “Spark was not called in this older run. Wonder's saved policy, branches and review, Muse Image, SAM 3.1, and SAM 3D Objects retain their own time and cost. Unknown values stay unknown.” |
-| 2:05–2:40 | Show the public repository, then return to the Earth and hero around 2:25. “The event-built Meta orchestration and this independently authored Chronos-style interface are public. The shared client meters calls; policy fails closed; saved artifacts and provenance make runs inspectable. People can explore how places and ideas might have changed.” |
+| Time | Action | Narration |
+|---|---|---|
+| 0:00–0:15 | Show the globe/invitation, then scroll to the archive and open Alexandria. | “Office of Otherwise turns a what-if into possible worlds you can locate and inspect. This is a cached replay; it does not make a model call.” |
+| 0:15–0:40 | Point out the divergence, dates, places, and pins. Select another path, then return to the gold hero. | “A writer or worldbuilder can compare several consequences of one changed condition. The branch scores rank candidates; they are not probabilities or evidence of what would have happened.” |
+| 0:40–1:15 | Select **Evidence & brief**. Show a linked baseline source, changed assumption, imagined causal steps, uncertainty, and unverified claims. | “The source is evidence for the starting world. The changed assumption and later sequence are creative hypotheses; this source does not verify the alternate timeline.” |
+| 1:15–1:35 | Open **Compare with another path**, select a second branch, and contrast its assumptions and uncertainties. | “The comparison keeps the shared starting question visible while making different imagined paths explicit.” |
+| 1:35–1:55 | Use **Save scenario brief** and show the downloaded Markdown brief with its source, uncertainty, and visualization limits. | “The exported brief carries the source boundary and the selected path’s limits into a creative workflow.” |
+| 1:55–2:20 | Show **Scene**, **SAM cutout**, then **3D object** and **Orbit object**. | “Muse Image rendered the scene and SAM 3.1 segmented its subject. This cached object was generated separately and attached to the replay; it is an illustration, not a simulation.” |
+| 2:20–2:45 | Show the repository’s current code for the Meta runner and evidence matching, then the curated baseline/uncertainty record. | “The new work is the Meta orchestration, policy guardrails, replay interface, and source-linked scenario notes. Saved evidence matches the exact branch artifact. Fresh model generation is a separate, metered path.” |
+| 2:45–3:00 | Return to the globe and name the pre-existing-system boundary. | “Chronos is pre-existing private infrastructure, not the hackathon code. The public replay shows the event-built layers using saved artifacts.” |
 
-**Measured browser rehearsal:** 160.02 seconds (2:40.02) on 2026-10-29 after the immersive framing/provenance refinement, at 1920×1080. This continuous replay included browser actions and allotted narration holds; no narration audio was recorded. Full-width cutout began at 59.31 s, the model opened at 64.43 s, orbit began at 66.36 s, and return to the atlas/model cards completed at 104.39 s: a 45.08-second full-width beat. This leaves 9.98 seconds under the 2:50 limit. No live model generation was invoked.
-
-The orrery cutout misses Saturn and some thin components; the source scene and saved 3D model remain available. New exploration reopens the invitation/archive on mobile. The model supports arrow-key orbit, plus/minus zoom, and Home reset; reduced motion disables automatic orbit.
+Before recording, verify the actual screens, exported file, runtime, and exact code paths shown. No user feedback has been collected. Do not imply a current hosted deployment, live generation, or fresh 3D job unless separately verified.

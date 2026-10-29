@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { retryPrompt, formatYear, provenance, replayTraceGroups, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from '../web/logic.js';
+import { retryPrompt, formatYear, provenance, replayTraceGroups, parseSseBlock, availableView, completionStatus, cachedRetryRun, suggestionAction, sourceVerificationLabel, lessonMarkdown, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from '../web/logic.js';
 test('guardrail retry extracts a complete suggested question', () => { assert.equal(retryPrompt('Try “What if the Sahara had stayed green?”'), 'What if the Sahara had stayed green?'); assert.equal(retryPrompt('No suggestion'), ''); });
 test('SSE parser handles named events and line endings', () => { assert.deepEqual(parseSseBlock('event: propose\r\ndata: {"branches":[]}'), {event:'propose',data:{branches:[]}}); });
 test('provenance excludes summary duplicates and reports actual measured costs', () => { const p=provenance([{step:'branch-agent:propose',ms:1000,costUsd:.02},{step:'propose',ms:1000,costUsd:0,summary:true}]); assert.equal(p[1].ms,1000); assert.equal(p[1].costUsd,.02); assert.equal(p[2].available,false); assert.equal(formatYear(-50),'50 BCE'); });
@@ -87,6 +87,46 @@ test('guardrail retry finds an exact matching usable cached story', () => {
  assert.match(replayLabel(runs[0]),/Simulated guardrail/);
  assert.match(replayLabel(runs[1]),/2D preview/);
  assert.equal(replayLabel({id:'alexandria',divergence:'What if the Library of Alexandria never burned?'}),'Alexandria · Library survives');
+});
+
+test('suggested questions open matching saved stories in replay-only mode and remain editable for live mode', () => {
+ const runs=[{id:'alexandria',status:'ok',divergence:'What if the Library of Alexandria never burned?'},{id:'guardrail',status:'simulated',divergence:'What if the Bering land bridge never flooded?'}];
+ assert.deepEqual(suggestionAction('replay-only',runs,'What if the Library of Alexandria never burned?'),{action:'open-saved-run',run:runs[0]});
+ assert.deepEqual(suggestionAction('replay-only',runs,'What if the Bering land bridge never flooded?'),{action:'no-saved-match',run:null});
+ assert.deepEqual(suggestionAction('live-enabled',runs,'What if the Library of Alexandria never burned?'),{action:'fill-input',run:null});
+ assert.deepEqual(suggestionAction('unknown',runs,'What if the Library of Alexandria never burned?'),{action:'fill-input',run:null});
+});
+
+test('scenario brief separates sourced history from imagined paths and labels review score as non-probabilistic', () => {
+ const markdown=lessonMarkdown({
+  run:{divergence:'What if the Library of Alexandria never burned?'},
+  branch:{title:'A living library'},
+  evidenceBranch:{title:'A living library',baselineSourceIds:['s1'],changedAssumption:'The library survives.',causalSteps:['Scholars copy more works.'],uncertainty:'Later conflicts remain unpredictable.',unverifiedClaims:['That the library would survive.'],demonstrates:'A possible knowledge network.',doesNotEstablish:'That the library would survive.',discussionQuestion:'What else must change?'},
+  comparisonBranch:{title:'Astronomy becomes a teaching tradition',baselineSourceIds:['s1'],changedAssumption:'The proposal is repeatedly taught.',causalSteps:['More scholars use it.'],uncertainty:'Political support varies.',unverifiedClaims:['That the proposal becomes standard teaching.']},
+  sources:[{id:'s1',title:'Library history',publisher:'Museum',checkedDate:'2026-10-29',verificationMethod:'search_excerpt',url:'https://example.org',baselineParaphrase:'The institution operated in Ptolemaic Alexandria.'}],
+  method:{label:'Curated evidence notes',scope:'Alternate timelines and causal chains are creative counterfactual hypotheses authored for this replay.',scoreDisclaimer:'Scores are not factual confidence.'},score:8,
+ });
+ assert.match(markdown,/# Scenario brief: A living library/);
+ assert.match(markdown,/Historical starting points[\s\S]*operated in Ptolemaic Alexandria/);
+ assert.match(markdown,/Imagined sequence[\s\S]*Scholars copy more works/);
+ assert.match(markdown,/Score: 8\/10\. This ranks the generated branches; it is not a probability/);
+ assert.match(markdown,/Compare with: Astronomy becomes a teaching tradition/);
+ assert.match(markdown,/Unverified claims/);
+ assert.match(markdown,/That the library would survive/);
+ assert.match(markdown,/Search excerpt only/);
+ assert.match(markdown,/same starting question/);
+ assert.match(markdown,/Research prompt/);
+ assert.match(markdown,/creative counterfactual hypotheses/);
+ assert.doesNotMatch(markdown,/educational hypotheses|lesson|discussion/i);
+ assert.match(markdown,/https:\/\/example\.org/);
+ assert.equal(lessonMarkdown({run:{},branch:{}}),'');
+});
+
+test('source access labels state how each source was checked without overstating access', () => {
+ assert.equal(sourceVerificationLabel('full_text'),'Full text reviewed');
+ assert.equal(sourceVerificationLabel('abstract'),'Abstract reviewed');
+ assert.equal(sourceVerificationLabel('search_excerpt'),'Search excerpt only');
+ assert.equal(sourceVerificationLabel('unknown'),'Access method not recorded');
 });
 
 test('offline 3D provenance identifies pre-generation and unknown cost and duration', () => {

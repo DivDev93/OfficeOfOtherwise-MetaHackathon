@@ -1,25 +1,47 @@
-# Submission draft
+# Submission notes — draft, not a submitted entry
 
-**Public replay demo:** [Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app) (deployed revision `office-otherwise-00003-gz2`, built from `main` commit `cd2953e`; replay-only, live generation disabled)
+| Project | Office of Otherwise |
+| --- | --- |
+| Draft track | Startup — confirm the registered entrant and eligibility before filing |
+| Theme | Build for Your World |
 
-**Deployment verified 2026-10-28:** The Earth globe renders on the hosted service. Alexandria, Beringia, Green Sahara and Mechanisms each display their hero scene and cutout and load the 3D viewer. Full downloads of every `hero.png`, `cutout.png` and original `model.glb` returned HTTP 200 and matched the repository's SHA-256 hashes; the browser uses the corresponding Meshopt viewer copies. The existing project, region and service settings were preserved.
+**Repository:** [DivDev93/OfficeOfOtherwise-MetaHackathon](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon)
 
 ## Project description
 
-Office of Otherwise is a Meta-powered branching layer for Chronos, an alternate-history explorer. Start with a question about science, technology, culture or geography; the system checks the topic, proposes geographically anchored branches, reviews them for consistency and selects a hero scene. Muse Spark 1.3 handles the current topic-policy path; Muse Wonder proposes and reviews branches. Muse Image renders the hero scene, while SAM 3.1 isolates a subject. Alexandria, Beringia, Green Sahara and Mechanisms each include a separately generated SAM 3D Objects model, with the actual generation time recorded and unknown cost left null. The browser prefers Meshopt-compressed copies while retaining each original GLB: Alexandria loads as 2,628,148 bytes instead of 13,385,656 bytes, an 80.4% reduction. All eight model files bring the cached demo archive to 52,811,787 bytes under its 80 MB limit. The orrery cutout missed some thin components. Chronos, including its globe, accounts, credits and 3D infrastructure, existed before the event. The proposed product uses credits to support interactive exploration.
+Office of Otherwise explores science, technology, culture, and geography counterfactuals as paths across a globe. A prompt produces geographically anchored branches with years, short causal narratives, review notes, and a selected hero scene. Users can compare branches, inspect the generated scene and SAM 3.1 cutout, and orbit a saved 3D object for four curated replays.
 
-## Built during the hackathon
+Our impact hypothesis is that scenario creators can use this format to explore visual consequences of a what-if while distinguishing documented baseline facts from imagined outcomes. Curated replays link sources for baseline facts and separately label the changed assumption, hypothetical causal chain, and uncertainty; the sources do not establish the imagined timeline. No user feedback has been collected. We propose a small, task-based creator-usability pilot in [docs/USER_VALIDATION.md](USER_VALIDATION.md).
 
-Public repository: https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon
+The project uses Meta Muse Wonder for branch proposals and review; Muse Spark 1.3 is the default model for topic-policy checks on fresh runs; Muse Image renders scenes; SAM 3.1 segments a subject. The four saved traces are historical records and attribute policy/proposal/review to Wonder, not Spark. None records Spark narration. Cached SAM 3D Objects models were generated separately and attached to replay runs; their costs are unknown. This repository provides GLB validation/attachment and replay provenance, not the 3D generation service.
 
-All four curated replays record SAM 3D Objects as `3D: Meta SAM 3D Objects (via Tattva Cloud Run)`; the models were generated separately and attached to the cached runs. This repository provides validated attachment and provenance display, not the provider service.
-
-The first functional commit after the 2026-10-26 12:00 ET kickoff is `ba7110f`, authored 2026-10-26 13:38:22 -04:00 (Eastern Daylight Time). The earlier scaffold `53a83c0` predates kickoff and has no functional code. The working range is `ba7110f` through `HEAD`, inclusive; resolve `HEAD` to the final integration commit and verify ancestry before submission. Inspect with `git log --reverse --format="%h %aI %s"`.
-
-Muse Spark 1.3 handles current prompt and per-branch topic-policy checks; Muse Wonder proposes and reviews branches; Muse Image generates the hero scene; SAM 3.1 generates the subject mask; Meta SAM 3D Objects supplies the separately generated replay models. Older cached traces retain the model and timing/cost information actually recorded at generation time, including Muse Wonder policy calls. The hosted demo is replay-only and the simulated guardrail fixture is not a live Muse verdict.
+Chronos provides the pre-existing private product context and infrastructure. It is not the hackathon deliverable, and no private Chronos code or assets are included here. The official event details allow existing products when the hackathon contribution is clearly identified; the exact registered entrant remains unconfirmed. The [published replay](https://office-otherwise-875096283797.northamerica-northeast2.run.app) was verified as replay-only on 2026-10-29. This local evidence-and-brief batch is not deployed there; recheck its status before submission.
 
 ## Judge setup
 
-1. Install Node 22 (at least 22.9.0), clone the public repository and run `npm ci --ignore-scripts` and `npm test`.
-2. Open the public replay demo above or run `npm run demo` for local replay. Alexandria, Beringia, Green Sahara and Mechanisms are completed 3D replays. The hosted deployment does not enable live model generation.
-3. For optional local live work, copy `.env.example` to `.env`, provide credentials privately, initialize the task checkpoint once using `npm run init-demo-budget`, and configure verified Chronos capability. For 2D-only generation use `npm run harness -- "What if the Library of Alexandria never burned?" --no-3d`. These commands make metered calls. Do not put credentials in the repository or submission.
+For an offline replay, install Node.js 22.9 or newer and run:
+
+```bash
+npm ci --ignore-scripts
+npm test
+npm run demo:replay
+```
+
+Open `http://127.0.0.1:3000`, select a saved story in the archive, and inspect its branches, **Evidence & brief**, hero scene, cutout, and 3D object when available. Replay uses cached assets and makes no provider calls. The guardrail story is an explicitly simulated unavailable-classifier case.
+
+Fresh model generation is optional and separate. It requires private credentials and a configured budget; it makes metered Meta calls. A fresh harness run can generate branches, an image, and a subject mask. A fresh 3D generation is not demonstrated by the public replay; saved models were generated separately. Do not put secrets in the repository or submission.
+
+The bounded four-prompt evaluation completed on 2026-10-29 under a separately authorized allowance; see [docs/EVALUATION.md](EVALUATION.md) and its sanitized [evidence summary](evaluation/2026-10-29-live.md). It records pipeline completion and one 2D-only result, not source quality, product impact, or user feedback. The evaluator’s one-time scope is consumed and cannot be repeated.
+
+## Official criteria reference
+
+The event waiver lists **Impact (30%)**, **Meta tooling (25%)**, **Demo (25%)**, and **Technical (20%)**. The central submission risk is Impact: creator value is a hypothesis with no user feedback yet. The demo should show a scenario path from divergent premise to spatial exploration and evidence-linked brief, while making clear that sources support baseline facts, not the imagined outcome. The technical explanation should separate fresh Meta work from historical replay artifacts. See the [official event waiver](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/waiver) for judging weights and [official event details](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details) for project-type and submission rules.
+
+## Submission checklist
+
+- [ ] Recheck the published replay and enter its current URL in the official form. The existing URL was verified as replay-only on 2026-10-29, before this local evidence-and-brief batch.
+- [ ] Review and publish the locally assembled three-minute demo video by Nov 4, 2026, 9:00 PM ET; add its public video URL to the official entry. No upload or submission receipt is recorded here.
+- [ ] Confirm the legal/applicant name, track, and final code range against registration and the final integration commit. Git history identifies `DivDev93` as repository code author; it does not establish the official entrant, entity, team, or behalf-of relationship.
+- [ ] Run the proposed creator-usability pilot or state explicitly in the entry that no user feedback has yet been collected.
+- [ ] Confirm whether Meta API credits were claimed in the official account/form; this repository does not establish that status.
+- [ ] Recheck topic policy, licenses, assets, and public repository scan before final submission.

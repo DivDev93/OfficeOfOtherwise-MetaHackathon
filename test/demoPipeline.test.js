@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, unlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,19 @@ test('task checkpoint clamps the configured cap and cannot be silently reset', t
   assert.equal(taskSpendCap({ outputRoot: root, env: { META_SPEND_CAP_USD: '1' } }), 1);
   writeFileSync(join(root, 'demo-task-budget.json'), JSON.stringify({ startingMetaSpendUsd: 0.5, taskBudgetUsd: 3 }));
   assert.throws(() => taskSpendCap({ outputRoot: root, env: {} }), /Invalid/);
+});
+
+test('taskSpendCap accepts an explicitly selected evaluation checkpoint without changing the demo default', t => {
+  const root = mkdtempSync(join(tmpdir(), 'demo-scoped-budget-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const outputRoot = join(root, 'out');
+  const evaluationCheckpoint = join(outputRoot, 'evaluations', 'fresh-live-evaluation.json');
+  mkdirSync(join(outputRoot, 'evaluations'), { recursive: true });
+  writeFileSync(join(outputRoot, 'demo-task-budget.json'), JSON.stringify({ startingMetaSpendUsd: 0.5, taskBudgetUsd: 2 }));
+  writeFileSync(evaluationCheckpoint, JSON.stringify({ startingMetaSpendUsd: 2.6, taskBudgetUsd: 2 }));
+  writeFileSync(join(outputRoot, 'spend.json'), JSON.stringify({ totalUsd: 2.6, entries: [], reservations: {} }));
+  assert.equal(taskSpendCap({ outputRoot, env: {}, checkpointPath: evaluationCheckpoint }), 4.6);
+  assert.equal(taskSpendCap({ outputRoot, env: {} }), 2.5);
 });
 
 test('Meta-only live runner does not require 3D configuration, but enabled 3D remains gated', async t => {

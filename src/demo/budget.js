@@ -3,9 +3,9 @@ import { join } from 'node:path';
 import { fileLedger } from '../lib/spendLedger.js';
 
 // A missing or damaged checkpoint fails closed; never silently reset the task budget.
-export function taskSpendCap({ env = process.env, outputRoot = 'out' } = {}) {
+export function taskSpendCap({ env = process.env, outputRoot = 'out', checkpointPath = join(outputRoot, 'demo-task-budget.json') } = {}) {
   let budget;
-  try { budget = JSON.parse(readFileSync(join(outputRoot, 'demo-task-budget.json'), 'utf8')); } catch { throw new Error('Demo task budget checkpoint is required'); }
+  try { budget = JSON.parse(readFileSync(checkpointPath, 'utf8')); } catch { throw new Error('Demo task budget checkpoint is required'); }
   if (!Number.isFinite(budget.startingMetaSpendUsd) || budget.startingMetaSpendUsd < 0 || budget.taskBudgetUsd !== 2) throw new Error('Invalid demo task budget checkpoint');
   const ledger = fileLedger(join(outputRoot, 'spend.json'), { requireExisting: true });
   if (ledger.total() < budget.startingMetaSpendUsd) throw new Error('Spend ledger is below the task budget checkpoint');

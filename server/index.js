@@ -3,6 +3,7 @@ import { readFile, readdir, stat, realpath } from 'node:fs/promises';
 import { resolve, join, extname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { selectRunEvidence } from '../src/evidence/index.js';
 
 const assets = new Set(['branch.json', 'trace.json', 'hero.png', 'mask.png', 'cutout.png', 'model.glb', 'model.meshopt.glb']);
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.glb': 'model/gltf-binary', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
@@ -15,7 +16,7 @@ function renderMetadata(branch) {
     : {};
 }
 
-export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), runPipeline, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now } = {}) {
+export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), evidencePath = resolve('demo/evidence/v1.json'), runPipeline, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now } = {}) {
   let busy = false;
   const requests = new Map();
   const liveRoots = new Map();
@@ -67,8 +68,8 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     }
     return result.sort((a, b) => a.id.localeCompare(b.id));
   }
-  async function manifest(id) {
-    const roots = [runsRoot, liveRoots.get(id)].filter(Boolean);
+  async function manifest(id, { cachedOnly = false } = {}) {
+    const roots = [runsRoot, ...(cachedOnly ? [] : [liveRoots.get(id)])].filter(Boolean);
     for (const candidate of roots) {
       try {
         const actualRoot = await realpath(candidate);
@@ -113,6 +114,18 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       if ((req.method === 'GET' || req.method === 'HEAD') && path === '/runs') return json(res, 200, { runs: await listRuns() });
       if ((req.method === 'GET' || req.method === 'HEAD') && path.startsWith('/runs/')) {
         const segments = path.split('/');
+        if (segments.length === 4 && safeId(segments[2]) && segments[3] === 'evidence') {
+          // Curated notes only belong to their exact saved branches, never a fresh live result.
+          const saved = await manifest(segments[2], { cachedOnly: true });
+          let evidence = null;
+          if (saved?.status === 'ok') {
+            try {
+              const dataset = JSON.parse(await readFile(evidencePath, 'utf8'));
+              evidence = selectRunEvidence(dataset, segments[2], saved.branch);
+            } catch { /* missing, malformed, or stale notes must not appear as sourced evidence */ }
+          }
+          return evidence ? json(res, 200, evidence) : json(res, 404, { error: 'No curated evidence is available for this saved run.' });
+        }
         if (segments.length === 3 && safeId(segments[2])) {
           const data = await manifest(segments[2]);
           return data ? json(res, 200, data) : json(res, 404, { error: 'Not found' });
