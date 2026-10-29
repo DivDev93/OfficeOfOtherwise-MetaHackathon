@@ -1,5 +1,7 @@
 # Hackathon log and compliance
 
+- 2026-10-29: Combined repeated model cards by canonical model name. Wonder now lists policy checks and branches/review together with summed recorded time and cost; unknown metrics remain explicit and replay totals grow as steps arrive. Added four-run sum checks plus mixed-model, summary, zero-cost and pending-state coverage.
+
 - 2026-10-29: Selected-world model cards now follow recorded replay calls: unused models are hidden, policy checks name the actual recorded model (Wonder in the four saved runs), and pending replay beats retain their recorded attribution. Added regression coverage for all four runs, absent stages, summary records and actual Spark calls.
 
 Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Submit by Nov 4, 9:00 PM ET** (target: early afternoon).
