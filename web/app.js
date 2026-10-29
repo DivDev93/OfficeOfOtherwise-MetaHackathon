@@ -1,4 +1,4 @@
-import { retryPrompt, formatYear, provenance, replayTraceGroups, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from './logic.js';
+import { retryPrompt, formatYear, provenance, modelCardSteps, replayTraceGroups, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from './logic.js';
 const $ = id => document.getElementById(id);
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', globeApi = null, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0;
@@ -112,25 +112,16 @@ function renderHeroModels() {
   const host = $('hero-models'); host.replaceChildren();
   const recorded = trace.some(s => !s.summary);
   host.hidden = !recorded && !replayActive && !replayLoaded;
-  const steps = provenance(trace), expected = provenance(savedTrace);
-  const sparkUsed = /Muse Spark/.test(expected[0].model);
-  const models = [{
-    role: 'Topic policy', model: 'Muse Spark 1.3',
-    metrics: sparkUsed ? metricText(steps[0]) : replayLoaded ? 'No call in this saved replay · time not recorded · cost not recorded' : 'Pending',
-  }];
-  if (replayLoaded && !sparkUsed) models.push({ role: 'Saved topic-policy checks', model: expected[0].model, metrics: metricText(steps[0]) });
+  const steps = provenance(trace);
   const branchMs = [steps[1].ms, steps[2].ms].every(Number.isFinite) ? steps[1].ms + steps[2].ms : null;
   const branchCost = [steps[1].costUsd, steps[2].costUsd].every(Number.isFinite) ? steps[1].costUsd + steps[2].costUsd : null;
   let branchMetrics = steps[1].available || steps[2].available
     ? metricText({ ...steps[1], ms: branchMs, costUsd: branchCost })
     : metricText(steps[1]);
   if (replayActive && steps[1].available && !steps[2].available) branchMetrics = `${metricText(steps[1])} · review pending`;
-  models.push(
-    { role: 'Branches + review', model: 'Muse Wonder 1.0', metrics: branchMetrics },
-    { role: 'Scene', model: 'Muse Image 1.0', metrics: metricText(steps[3]) },
-    { role: 'Cutout', model: 'SAM 3.1', metrics: metricText(steps[4]) },
-    { role: '3D', model: steps[5].available ? steps[5].model : expected[5].model, metrics: metricText(steps[5]) },
-  );
+  const models = modelCardSteps(trace, replayLoaded ? savedTrace : trace).map(({ role, index, model }) => ({
+    role, model, metrics: index === 1 ? branchMetrics : metricText(steps[index]),
+  }));
   for (const item of models) {
     const card = document.createElement('div'); card.className = 'hero-model-card';
     const model = document.createElement('strong'); model.textContent = item.model;

@@ -1,5 +1,7 @@
 # Hackathon log and compliance
 
+- 2026-10-29: Selected-world model cards now follow recorded replay calls: unused models are hidden, policy checks name the actual recorded model (Wonder in the four saved runs), and pending replay beats retain their recorded attribution. Added regression coverage for all four runs, absent stages, summary records and actual Spark calls.
+
 Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Submit by Nov 4, 9:00 PM ET** (target: early afternoon).
 
 ## Compliance checklist
