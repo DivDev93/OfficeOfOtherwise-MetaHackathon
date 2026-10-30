@@ -39,7 +39,7 @@ Office of Otherwise helps speculative-fiction writers, worldbuilders and concept
 
 The public replay includes four saved stories and requires no credentials or paid generation. Fresh runs retrieve excerpts from fixed public-source registries for Alexandria, Beringia, Green Sahara climate or ancient mechanisms. A baseline must exactly quote a complete retrieved source unit. This preserves source wording; it does not establish historical truth or validate the alternate outcome. Topics are limited to science, technology, culture and geography.
 
-Functional hackathon development began October 26, 2026, at 13:38 EDT with commit ba7110f, after the noon kickoff. The earlier 53a83c0 commit is a non-functional repository scaffold. Published implementation and source archive end at 925c110; final integration provenance remains pending. The pre-existing private reconstruction backend is excluded. Saved SAM 3D Objects assets were generated separately and attached; the demo does not claim fresh 3D generation.
+Functional hackathon development began October 26, 2026, at 13:38 EDT with commit ba7110f, after the noon kickoff. The earlier 53a83c0 commit is a non-functional repository scaffold. The latest deployed implementation and supplemental source archive end at 29b2741; the earlier media/source archive at 925c110 remains preserved. Receipt-only documentation follows the implementation snapshot. The pre-existing private reconstruction backend is excluded. Saved SAM 3D Objects assets were generated separately and attached; the demo does not claim fresh 3D generation.
 
 Creator value is a hypothesis. No real participant feedback has been collected; a 3–5 adult creator pilot is prepared. Public demo: https://office-otherwise-875096283797.northamerica-northeast2.run.app
 ```
@@ -94,4 +94,4 @@ Somewhat favorable
 
 Leave all consent/terms/attestation checkboxes untouched for the operator's own review. Do not click Submit. This file does not accept terms, claim credits, invent additional legal facts, merge PR #7, or close the real-user-validation gate.
 
-Before using these answers as the final entry, complete the final locally validated batch, update its integration/deployment/source identities, record shipped browser proof, and retain the honest zero-participant statement unless actual consented observations have since been assessed.
+The implementation batch passed 223 local/container tests and 34 public content checks; deployed pilot browser proof and source/deployment identities are recorded. Retain the honest zero-participant statement unless actual consented observations have since been assessed. Keep the PR draft and do not submit without a later operator instruction.

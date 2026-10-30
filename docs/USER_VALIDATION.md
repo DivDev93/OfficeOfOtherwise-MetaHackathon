@@ -22,7 +22,14 @@ Run `npm run demo:replay`. It binds to loopback, forces replay-only mode, and do
 
 ## Run the next session now
 
-The operator will create and share participant invitations themselves. A self-service pilot page is being implemented for 1–5 anonymous links, recipient consent and task instructions, downloadable participant results, and moderator import with observed rubric scoring. Treat this as work in progress until local/browser checks and the new deployment are recorded. Link creation and returned files alone do not establish consented observation or close the pilot. The current public deployment remains source `925c110`; no participant has completed a session.
+The operator creates and shares participant invitations themselves using the deployed [creator-session page](https://office-otherwise-875096283797.northamerica-northeast2.run.app/pilot.html). Source `29b2741`, revision `office-otherwise-00009-t8f`, passed local and deployed browser checks. No participant has completed a session.
+
+1. Choose 1–5 invitations and click **Create invitations**. Copy each link or its invitation text, and download the invitation list before closing the page.
+2. Share links yourself through your chosen private channel and arrange an observed session. Participants make separate eligibility, notes and quotation choices, perform the task, and download their result JSON.
+3. Ask each participant to return their result file privately. Import it on the creator-session page, choose **Add / edit observation**, and record the actual times, rubric evidence, source understanding and assistance you directly observed.
+4. Download **observations & assessment** to retain your work. Reloading clears the page. Reimported observations require explicit confirmation again; the files are unsigned and cannot authenticate a participant or prove observation by themselves.
+
+Solo returned files remain preliminary. Link creation, the number of imports and agent/browser QA do not establish real user validation. Keep results private and share only consented anonymous summaries.
 
 The facilitator can begin with 1–3 introductions to adult creators and continue until the planned 3–5 sessions are complete. One or two sessions are useful preliminary observations; they do not satisfy the pre-registered pilot sample. Keep the target and rubric below unchanged. A builder, agent, or scripted browser walkthrough is a technical rehearsal and does not count as a participant.
 

@@ -22,6 +22,14 @@ The public [hackathon review prerelease](https://github.com/DivDev93/OfficeOfOth
 
 ## Event-built scope
 
+### Latest deployed implementation
+
+The original media prerelease tag remains at `925c110`. Its supplemental [current implementation source ZIP](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/releases/download/hackathon-preview-2026-10-30/office-of-otherwise-source-29b2741.zip) is the exact `29b2741133aedcc141c06d161348d22f1f5bec2e` snapshot, **53,000,337 bytes**, SHA-256 `7237e5a217878869f1b457d8f315343624a136a1b4ce051df822860e2d57cc5d`. It adds self-service pilot invitations and the review package records. It does not replace the earlier source archive or videos. The [current scope comparison](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/compare/53a83c0...29b2741) identifies all event implementation changes through this deployment.
+
+Revision `office-otherwise-00009-t8f` serves `29b2741`. Later receipt-only documentation records deployment, public downloads and verification; it is not silently part of that container/source snapshot. See the [deployment receipt](deployment/2026-10-30.md). PR #7 stays draft and no hackathon entry is submitted.
+
+### Original media source boundary
+
 The pre-kickoff baseline is [`53a83c0`](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/commit/53a83c0), **2026-10-26 at 09:17 EDT**: README, license, CI secret scan and repository structure, with no functional code. Kickoff was **12:00 PM EDT** that day. Functional implementation begins with [`ba7110f`](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/commit/ba7110f), **13:38 EDT**, introducing the shared Meta client and hard spend cap. The published implementation ends at [`925c110`](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/commit/925c110), **2026-10-30 at 00:39 EDT**. The [baseline-to-release comparison](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/compare/53a83c0...925c110) identifies the event-built changes.
 
 The event contribution is the public Meta orchestration, topic guardrails, spend controls, saved-story interface, provenance, complete-source-wording preservation, and scenario-brief export. The private reconstruction backend predates the event and is not included in the source ZIP. Attached SAM 3D Objects assets were generated separately; they illustrate creative concepts, their generation cost is unrecorded, and neither video demonstrates fresh 3D generation.
