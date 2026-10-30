@@ -96,7 +96,7 @@ test('fresh evidence failures never receive a hero phase or leave stale branches
 test('fresh retrieval status reports partial source failures without implying fact verification', () => {
  assert.match(freshRetrievalStatus({status:'retrieved',sources:[{},{}],errors:[]}),/Fresh excerpts retrieved from 2 registered sources/);
  assert.match(freshRetrievalStatus({status:'retrieved',sources:[{}],errors:[{reason:'timeout'}]}),/1 of 2 registered sources; 1 source fetches failed/);
- assert.match(freshRetrievalStatus({status:'retrieved',sources:[{}],errors:[]}),/Model-derived claims require human source review/);
+ assert.match(freshRetrievalStatus({status:'retrieved',sources:[{}],errors:[]}),/Model-selected source text requires human source review/);
  assert.match(freshRetrievalStatus({status:'unavailable',reason:'topic_out_of_coverage'}),/four supported topics/);
  const timeout=freshRetrievalStatus({status:'unavailable',reason:'all_sources_unavailable',errors:[{sourceId:'s1',reason:'timeout'}]});
  assert.match(timeout,/source requests timed out/);
@@ -164,14 +164,14 @@ test('source access labels state how each source was checked without overstating
  assert.equal(sourceVerificationLabel('unknown'),'Access method not recorded');
 });
 
-test('fresh evidence only trusts branch citations backed by retrieved, hashed, safe-URL excerpts', () => {
+test('fresh evidence requires a verbatim complete paragraph as well as retrieved, hashed, safe-URL citations', () => {
  const evidence={status:'retrieved',topicId:'alexandria',retrievedAt:'2026-10-29T12:00:00Z',sources:[
-  {id:'s1',title:'Museum record',publisher:'Museum',url:'https://example.org/source',checkedDate:'2026-10-29',verificationMethod:'retrieved_excerpt',excerpt:'The library operated in Alexandria.',contentSha256:'a'.repeat(64)},
+  {id:'s1',title:'Museum record',publisher:'Museum',url:'https://example.org/source',checkedDate:'2026-10-29',verificationMethod:'retrieved_excerpt',excerptFormat:'complete-source-units-v1',excerpt:'The library operated in Alexandria.',contentSha256:'a'.repeat(64)},
   {id:'s2',title:'Unverified record',url:'https://example.org/bad',verificationMethod:'search_excerpt',excerpt:'Not accepted.',contentSha256:'b'.repeat(64)},
   {id:'s3',title:'Unsafe link',url:'javascript:alert(1)',verificationMethod:'retrieved_excerpt',excerpt:'Not accepted.',contentSha256:'c'.repeat(64)},
   {id:'s4',title:'Missing digest',url:'https://example.org/missing',verificationMethod:'retrieved_excerpt',excerpt:'Not accepted.'},
  ]};
- const branch={title:'Living library',baselineClaims:[{text:'The institution operated in Ptolemaic Alexandria.',sourceIds:['s1','s2','unknown','s3','s4']},{text:'A validly linked baseline claim.',sourceIds:['s1']},{text:'A model claim with no valid citation.',sourceIds:['unknown']}],changedAssumption:'It survives.',causalSteps:['More works are copied.'],uncertainty:'Later conflicts remain unpredictable.',unverifiedClaims:['The library would survive.'],demonstrates:'A possible knowledge network.',doesNotEstablish:'That it survived.',discussionQuestion:'What else must change?',score:8};
+ const branch={title:'Living library',baselineClaims:[{text:'The institution operated in Ptolemaic Alexandria.',sourceIds:['s1','s2','unknown','s3','s4']},{text:'The library operated in Alexandria.',sourceIds:['s1']},{text:'A model claim with no valid citation.',sourceIds:['unknown']}],changedAssumption:'It survives.',causalSteps:['More works are copied.'],uncertainty:'Later conflicts remain unpredictable.',unverifiedClaims:['The library would survive.'],demonstrates:'A possible knowledge network.',doesNotEstablish:'That it survived.',discussionQuestion:'What else must change?',score:8};
  evidence.method={label:'Bounded public source retrieval',scope:'Fixed registered public sources.',scoreDisclaimer:'Scores do not measure factual confidence.'};
  const normalized=normalizeFreshEvidence(branch,evidence);
  assert.deepEqual(normalized.sources.map(source=>source.id),['s1']);
@@ -180,7 +180,8 @@ test('fresh evidence only trusts branch citations backed by retrieved, hashed, s
  const markdown=freshLessonMarkdown({run:{divergence:'What if the library survived?'},branch,evidence,supportedTopics:['Alexandria','Beringia']});
  assert.match(markdown,/Retrieved excerpts are provided as baseline context/);
  assert.match(markdown,/Supported fresh evidence topics:\*\* Alexandria, Beringia/);
- assert.match(markdown,/A validly linked baseline claim/);
+ assert.match(markdown,/Model-selected source text/);
+ assert.match(markdown,/human source review/);
  const baselineSection=markdown.split('## Changed assumption')[0];
  assert.doesNotMatch(baselineSection,/^- The institution operated in Ptolemaic Alexandria/m);
  const unverifiedSection=markdown.split('## Unverified claims')[1];
@@ -196,8 +197,8 @@ test('fresh evidence only trusts branch citations backed by retrieved, hashed, s
 });
 
 test('fresh scenario exports escape Markdown injection and preserve complete comparison limits and review metadata', () => {
- const evidence={status:'retrieved',method:{label:'Bounded retrieval',scope:'Fixed registered URLs.',scoreDisclaimer:'Scores do not measure factual confidence.'},sources:[{id:'s1',title:'<script>title</script>',url:'https://example.org/source',verificationMethod:'retrieved_excerpt',excerpt:'<img src=x onerror=alert(1)>',contentSha256:'a'.repeat(64)}]};
- const branch={title:'![click](javascript:alert(1))',baselineClaims:[{text:'Primary claim',sourceIds:['s1']}],changedAssumption:'Primary survives.',causalSteps:['Copying continues.'],uncertainty:'Uncertain.',score:7};
+ const evidence={status:'retrieved',method:{label:'Bounded retrieval',scope:'Fixed registered URLs.',scoreDisclaimer:'Scores do not measure factual confidence.'},sources:[{id:'s1',title:'<script>title</script>',url:'https://example.org/source',verificationMethod:'retrieved_excerpt',excerptFormat:'complete-source-units-v1',excerpt:'<img src=x onerror=alert(1)>\n\nAlternate baseline',contentSha256:'a'.repeat(64)}]};
+ const branch={title:'![click](javascript:alert(1))',baselineClaims:[{text:'<img src=x onerror=alert(1)>',sourceIds:['s1']}],changedAssumption:'Primary survives.',causalSteps:['Copying continues.'],uncertainty:'Uncertain.',score:7};
  const comparison={title:'Alternate',baselineClaims:[{text:'Alternate baseline',sourceIds:['s1']}],changedAssumption:'A different assumption.',causalSteps:['Teaching expands.'],uncertainty:'Support varies.',unverifiedClaims:['Standard teaching is speculative.'],demonstrates:'A possible scholarly network.',doesNotEstablish:'That history followed this path.',score:6};
  const markdown=freshLessonMarkdown({run:{divergence:'<script>question</script> [source](https://phishing.example) https://plain.example'},branch,comparisonBranch:comparison,evidence});
  assert.match(markdown,/&lt;script&gt;title&lt;\/script&gt;/);
@@ -216,6 +217,58 @@ test('fresh scenario exports escape Markdown injection and preserve complete com
  assert.doesNotMatch(markdown,/<https:\/\/phishing\.example/);
  assert.ok(markdown.includes('https\\://plain\\.example'));
  assert.doesNotMatch(markdown,/<script>|<img/);
+});
+
+test('fresh UI and export demote claims that drop source hedges, negation, attribution, or ranges', () => {
+ const units=[
+  'The route may have carried texts, although the surviving evidence is limited.',
+  'The records do not establish that every collection survived.',
+  'According to the museum, scholars proposed that the network expanded.',
+  'The manuscripts date to between 200 and 400 CE, with uncertainty remaining.',
+ ];
+ const altered=[
+  'The route carried texts.',
+  'The records establish that every collection survived.',
+  'The network expanded.',
+  'The manuscripts date to 200 CE.',
+ ];
+ const evidence={status:'retrieved',sources:[{id:'s1',title:'Museum',url:'https://example.org/source',verificationMethod:'retrieved_excerpt',excerptFormat:'complete-source-units-v1',excerpt:units.join('\n\n'),contentSha256:'a'.repeat(64)}]};
+ const branch={baselineClaims:[...altered,...units].map(text=>({text,sourceIds:['s1']}))};
+ const normalized=normalizeFreshEvidence(branch,evidence);
+ assert.deepEqual(normalized.baselineClaims.slice(0,4).map(claim=>claim.sourceIds),[[],[],[],[]]);
+ assert.deepEqual(normalized.baselineClaims.slice(4).map(claim=>claim.text),units);
+ assert.deepEqual(freshUnverifiedClaims(branch,evidence),altered);
+ const markdown=freshLessonMarkdown({branch,evidence});
+ const baseline=markdown.split('## Changed assumption')[0];
+ const unverified=markdown.split('## Unverified claims')[1];
+ for (const text of altered) {
+  assert.equal(baseline.includes(text),false);
+  assert.equal(unverified.includes(text.slice(0,-1)),true);
+ }
+ for (const text of units) assert.equal(markdown.split(text.slice(0,-1)).length-1,1,'Each full source paragraph is exported once without repeating the whole excerpt');
+ assert.doesNotMatch(markdown,/Retrieved excerpt:/);
+});
+
+test('fresh source units fail closed for legacy excerpts, partial paragraphs, ambiguous citations, and unsafe IDs', () => {
+ const text='Evidence may support the proposal. The outcome is not established.';
+ const source={id:'constructor',title:'Museum',url:'https://example.org/source',verificationMethod:'retrieved_excerpt',excerptFormat:'complete-source-units-v1',excerpt:text,contentSha256:'a'.repeat(64)};
+ const branch={baselineClaims:[{text,sourceIds:['constructor']},{text:'Evidence may support the proposal.',sourceIds:['constructor']},{text:` ${text}`,sourceIds:['constructor']},{text,sourceIds:['constructor','constructor']}]};
+ const evidence={status:'retrieved',sources:[source]};
+ assert.deepEqual(normalizeFreshEvidence(branch,evidence).baselineClaims.map(claim=>claim.sourceIds),[['constructor'],[],[],[]]);
+ for (const sources of [
+  [{...source,excerptFormat:undefined}],
+  [{...source,excerpt:`${text}\nTrailing text`}],
+  [{...source,excerpt:`${text}\n\n`}],
+  [{...source,excerpt:'x'.repeat(1601)}],
+  [source,{...source}],
+ ]) {
+  const legacyEvidence={...evidence,sources};
+  assert.ok(normalizeFreshEvidence(branch,legacyEvidence).baselineClaims.every(claim=>!claim.sourceIds.length));
+  const markdown=freshLessonMarkdown({branch,evidence:legacyEvidence});
+  assert.match(markdown,/No baseline claim matches a complete source paragraph/);
+  assert.match(markdown.split('## Unverified claims')[1],/Evidence may support the proposal/);
+  assert.doesNotMatch(markdown.split('## Changed assumption')[0],/Source: Museum/);
+ }
 });
 
 test('offline 3D provenance identifies pre-generation and unknown cost and duration', () => {

@@ -121,18 +121,18 @@ function renderSourceFacts(host, ids, sources) {
   }
 }
 function appendFreshSourceClaim(host, claim, sources) {
-  const linked = claim.sourceIds.map(id => sources.find(source => source.id === id)).filter(Boolean);
+  const byId = new Map(sources.map(source => [source.id, source]));
+  const linked = claim.sourceIds.map(id => byId.get(id)).filter(Boolean);
   if (!linked.length) return false;
   const item = document.createElement('li');
-  const text = document.createElement('p'); text.textContent = claim.text; item.append(text);
+  const text = document.createElement('blockquote'); text.textContent = claim.text; item.append(text);
   for (const source of linked) {
     const citation = document.createElement('div'); citation.className = 'fresh-citation';
     const link = document.createElement('a');
-    link.textContent = `${source.title || source.id}${source.publisher ? ` · ${source.publisher}` : ''}${source.checkedDate ? ` · checked ${source.checkedDate}` : ''} · Retrieved excerpt`;
+    link.textContent = `${source.title || source.id}${source.publisher ? ` · ${source.publisher}` : ''}${source.checkedDate ? ` · checked ${source.checkedDate}` : ''} · Model-selected source text · human review required`;
     try { const url = new URL(source.url); if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Unsupported source URL'); link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; }
     catch { link.removeAttribute('href'); link.removeAttribute('target'); }
     citation.append(link);
-    const excerpt = document.createElement('blockquote'); excerpt.textContent = source.excerpt; citation.append(excerpt);
     item.append(citation);
   }
   host.append(item);
@@ -159,7 +159,7 @@ function renderFreshLearning(branch, evidence) {
   for (const claim of claims) {
     appendFreshSourceClaim(baseline, claim, sources);
   }
-  if (!baseline.childElementCount) { const item = document.createElement('li'); item.textContent = 'No baseline claim has a valid source link.'; baseline.append(item); }
+  if (!baseline.childElementCount) { const item = document.createElement('li'); item.textContent = 'No baseline claim matches a complete source paragraph. Model claims are listed as unverified below.'; baseline.append(item); }
   $('learning-assumption').textContent = branch.changedAssumption || 'No changed assumption was recorded.';
   textList($('learning-steps'), Array.isArray(branch.causalSteps) ? branch.causalSteps : []);
   $('learning-uncertainty').textContent = branch.uncertainty || 'Uncertainty was not recorded for this branch.';
@@ -182,7 +182,7 @@ function renderFreshLearning(branch, evidence) {
     const target = $('compare-baseline'); target.replaceChildren();
     const comparisonEvidence = normalizeFreshEvidence(comparisonBranch, evidence);
     for (const claim of comparisonEvidence?.baselineClaims || []) appendFreshSourceClaim(target, claim, comparisonEvidence.sources);
-    if (!target.childElementCount) { const item = document.createElement('li'); item.textContent = 'No baseline claim has a valid source link.'; target.append(item); }
+    if (!target.childElementCount) { const item = document.createElement('li'); item.textContent = 'No baseline claim matches a complete source paragraph. Model claims are listed as unverified below.'; target.append(item); }
     const comparisonUnverified = freshUnverifiedClaims(comparisonBranch, comparisonEvidence);
     textList($('compare-unverified'), comparisonUnverified.length ? comparisonUnverified : ['No explicit unverified-claims list was recorded.']);
     $('compare-assumption').textContent = comparisonBranch.changedAssumption || 'No changed assumption recorded.';
@@ -190,7 +190,7 @@ function renderFreshLearning(branch, evidence) {
     $('compare-uncertainty').textContent = comparisonBranch.uncertainty || 'No uncertainty note recorded.';
     $('compare-limits').textContent = comparisonBranch.doesNotEstablish || 'Retrieved excerpts do not establish that the imagined events occurred.';
   }
-  $('learning-method').textContent = `Method: Retrieved excerpt; model-derived claims${clean.method?.label ? ` · ${clean.method.label}` : ''}. Retrieval does not constitute human verification.`;
+  $('learning-method').textContent = `Method: ${claims.some(claim => claim.sourceIds.length) ? 'Model-selected source text' : 'Unverified model claims; complete source text unavailable'}${clean.method?.label ? ` · ${clean.method.label}` : ''}. Human source review is still required. Retrieval does not constitute human verification.`;
   lessonExportContent = freshLessonMarkdown({ run: { divergence: $('prompt').value }, branch, comparisonBranch, evidence: clean,
     supportedTopics: Array.isArray(clean.supportedTopics) ? clean.supportedTopics : [] });
   $('download-lesson').hidden = !lessonExportContent;

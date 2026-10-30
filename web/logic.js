@@ -141,7 +141,7 @@ export function freshRetrievalStatus(evidence = {}) {
   const retrieval = failures
     ? `Fresh excerpts retrieved from ${sources} of ${attempted} registered sources; ${failures} source fetches failed.`
     : `Fresh excerpts retrieved from ${sources} registered sources.`;
-  return `${retrieval} Model-derived claims require human source review.`;
+  return `${retrieval} Model-selected source text requires human source review.`;
 }
 
 // The propose SSE payload contains candidates that have passed branch policy,
@@ -195,23 +195,28 @@ export function sourceVerificationLabel(method) {
     || 'Access method not recorded';
 }
 
-// Fresh source links are accepted only when they resolve to an excerpt in the
-// retrieval envelope. This keeps invalid model-provided IDs out of trusted UI
-// and exported notes.
+// A fresh baseline must quote one complete source paragraph verbatim. IDs alone
+// cannot establish support, and legacy clipped excerpts fail closed.
 export function normalizeFreshEvidence(branch = {}, envelope = null) {
   const evidence = branch.evidence?.status ? branch.evidence : envelope;
   if (!evidence || !['retrieved', 'unavailable'].includes(evidence.status)) return null;
-  const sources = Array.isArray(evidence.sources) ? evidence.sources.filter(source =>
+  const rawSources = Array.isArray(evidence.sources) ? evidence.sources : [];
+  const idCounts = new Map();
+  for (const source of rawSources) if (source && typeof source.id === 'string') idCounts.set(source.id, (idCounts.get(source.id) || 0) + 1);
+  const sources = rawSources.filter(source =>
     source && typeof source.id === 'string' && source.id && source.verificationMethod === 'retrieved_excerpt'
-    && typeof source.excerpt === 'string' && source.excerpt.trim()
+    && idCounts.get(source.id) === 1 && source.excerptFormat === 'complete-source-units-v1'
+    && typeof source.excerpt === 'string' && source.excerpt.length <= 1600
+    && source.excerpt.split('\n\n').every(unit => unit && unit === unit.trim() && !/[\r\n]/.test(unit))
     && typeof source.contentSha256 === 'string' && /^[a-f0-9]{64}$/i.test(source.contentSha256)
-    && safeHttpUrl(source.url)) : [];
-  const sourceIds = new Set(sources.map(source => source.id));
+    && safeHttpUrl(source.url));
+  const byId = new Map(sources.map(source => [source.id, source]));
   const baselineClaims = (Array.isArray(branch.baselineClaims) ? branch.baselineClaims : [])
     .filter(claim => claim && typeof claim.text === 'string' && claim.text.trim())
     .map(claim => {
       const ids = Array.isArray(claim.sourceIds) ? claim.sourceIds : [];
-      return { text: claim.text, sourceIds: ids.length && ids.every(id => sourceIds.has(id)) ? [...ids] : [] };
+      const source = ids.length === 1 ? byId.get(ids[0]) : null;
+      return { text: claim.text, sourceIds: source?.excerpt.split('\n\n').includes(claim.text) ? [...ids] : [] };
     });
   return { ...evidence, sources, baselineClaims };
 }
@@ -219,7 +224,7 @@ export function freshUnverifiedClaims(branch = {}, envelope = null) {
   const clean = normalizeFreshEvidence(branch, envelope);
   const explicit = Array.isArray(branch.unverifiedClaims) ? branch.unverifiedClaims.filter(claim => typeof claim === 'string' && claim.trim()) : [];
   const unsupported = clean?.baselineClaims.filter(claim => !claim.sourceIds.length).map(claim => claim.text) ?? [];
-  return [...explicit, ...unsupported];
+  return [...new Set([...explicit, ...unsupported])];
 }
 
 const safeMarkdownText = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -236,15 +241,15 @@ export function freshLessonMarkdown({ run = {}, branch = {}, comparisonBranch = 
   const lines = [
     `# Scenario brief: ${safeMarkdownText(branch.title || 'Possible path')}`, '',
     `**Question:** ${safeMarkdownText(run.divergence || 'Not recorded')}`, '',
-    'Retrieved excerpts are provided as baseline context. Model-derived claims require human source review; changed assumptions and outcomes are hypothetical.', '',
+    'Retrieved excerpts are provided as baseline context. Model-selected source text requires human source review; changed assumptions and outcomes are hypothetical. Unmatched or legacy model claims remain unverified.', '',
     ...(supportedTopics.length ? [`**Supported fresh evidence topics:** ${supportedTopics.map(safeMarkdownText).join(', ')}`, ''] : []),
-    '## Retrieved historical starting points',
+    '## Model-selected source text',
   ];
   const trusted = clean.baselineClaims.filter(claim => claim.sourceIds.length);
   lines.push(...(trusted.length ? trusted.flatMap(claim => [
     `- ${safeMarkdownText(claim.text)}`,
-    ...claim.sourceIds.map(id => { const source = byId.get(id); const url = safeHttpUrl(source.url); return `  Source: ${safeMarkdownText(source.title || source.id)}${source.publisher ? ` · ${safeMarkdownText(source.publisher)}` : ''}${source.checkedDate ? ` · checked ${safeMarkdownText(source.checkedDate)}` : ''}${url ? ` · <${url}>` : ''}\n  Retrieved excerpt: ${safeMarkdownText(source.excerpt)}`; }),
-  ]) : ['- No retrieved excerpt is linked to a baseline claim.']));
+    ...claim.sourceIds.map(id => { const source = byId.get(id); const url = safeHttpUrl(source.url); return `  Source: ${safeMarkdownText(source.title || source.id)}${source.publisher ? ` · ${safeMarkdownText(source.publisher)}` : ''}${source.checkedDate ? ` · checked ${safeMarkdownText(source.checkedDate)}` : ''}${url ? ` · <${url}>` : ''}`; }),
+  ]) : ['- No baseline claim matches a complete source paragraph. Model claims are listed as unverified below.']));
   const unverifiedClaims = freshUnverifiedClaims(branch, clean);
   lines.push('', '## Changed assumption', safeMarkdownText(branch.changedAssumption || 'No changed assumption recorded.'), '', '## Causal steps',
     ...(Array.isArray(branch.causalSteps) && branch.causalSteps.length ? branch.causalSteps.map((step, index) => `${index + 1}. ${safeMarkdownText(step)}`) : ['No causal steps recorded.']),
@@ -255,16 +260,17 @@ export function freshLessonMarkdown({ run = {}, branch = {}, comparisonBranch = 
     '## Research prompt', safeMarkdownText(branch.discussionQuestion || 'Which assumption most changes the outcome, and what evidence could help test it?'), '');
   if (comparisonBranch) {
     const cleanComparison = normalizeFreshEvidence(comparisonBranch, clean);
+    const comparisonById = new Map((cleanComparison?.sources || []).map(source => [source.id, source]));
     const comparisonClaims = cleanComparison?.baselineClaims || [];
     const comparisonSupported = comparisonClaims.filter(claim => claim.sourceIds.length);
     const comparisonUnverified = freshUnverifiedClaims(comparisonBranch, cleanComparison);
     lines.push(`## Compare with: ${safeMarkdownText(comparisonBranch.title || 'another path')}`, 'Both outcomes are imagined paths from the same starting question.',
-      '### Retrieved historical starting points',
+      '### Model-selected source text',
       ...(comparisonSupported.length
         ? comparisonSupported.flatMap(claim => [
           `- ${safeMarkdownText(claim.text)}`,
-          ...claim.sourceIds.map(id => { const source = byId.get(id); const url = safeHttpUrl(source.url); return `  Source: ${safeMarkdownText(source.title || source.id)}${url ? ` · <${url}>` : ''}\n  Retrieved excerpt: ${safeMarkdownText(source.excerpt)}`; }),
-        ]) : ['- No retrieved excerpt is linked to a baseline claim.']),
+          ...claim.sourceIds.map(id => { const source = comparisonById.get(id); const url = safeHttpUrl(source.url); return `  Source: ${safeMarkdownText(source.title || source.id)}${url ? ` · <${url}>` : ''}`; }),
+        ]) : ['- No baseline claim matches a complete source paragraph. Model claims are listed as unverified below.']),
       `Changed assumption: ${safeMarkdownText(comparisonBranch.changedAssumption || 'Not recorded.')}`,
       ...(Array.isArray(comparisonBranch.causalSteps) ? comparisonBranch.causalSteps.map((step, index) => `${index + 1}. ${safeMarkdownText(step)}`) : []),
       `Uncertainty: ${safeMarkdownText(comparisonBranch.uncertainty || 'Not recorded.')}`,

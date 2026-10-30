@@ -29,6 +29,7 @@ const APPROVED_HOSTS = new Set([
 ]);
 const MAX_SOURCE_BYTES = 1_000_000;
 const MAX_EXCERPT_CHARS = 1_600;
+const EXCERPT_FORMAT = 'complete-source-units-v1';
 
 function cleanHtml(html) {
   return html.replace(/<(script|style|noscript|svg)[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
@@ -39,11 +40,28 @@ function cleanHtml(html) {
     .replace(/\s+/g, ' ').trim();
 }
 
+function macTutorParagraphs(html, source) {
+  // This registry entry's biography uses paired br tags as paragraph markers,
+  // alongside incidental p elements elsewhere on the page. Accept only blocks
+  // bounded at BOTH ends by those explicit markers, outside p elements. A
+  // single br or a source-formatting blank line never divides a source unit.
+  if (source.id !== 'alex-aristarchus' || source.url !== 'https://mathshistory.st-andrews.ac.uk/Biographies/Aristarchus/') return [];
+  return html.split(/<p\b[^>]*>[\s\S]*?<\/p\s*>/gi).flatMap(outside => {
+    const boundaries = [...outside.matchAll(/<br\s*\/?\s*>\s*<br\s*\/?\s*>/gi)];
+    return boundaries.slice(1).map((boundary, index) => cleanHtml(outside.slice(boundaries[index].index + boundaries[index][0].length, boundary.index)));
+  });
+}
+
 function excerptFrom(html, prompt, source) {
   const sourceText = html.replace(/<(script|style|noscript|svg|nav|header|footer)[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ');
   const paragraphBlocks = [...sourceText.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p\s*>/gi)].map(match => cleanHtml(match[1]));
-  const brBlocks = sourceText.replace(/<br\s*\/?\s*>/gi, '\n\n').split(/\n\s*\n/).map(cleanHtml);
-  const candidates = [...new Set([...paragraphBlocks, ...brBlocks])].filter(text => text.length >= 80 && keywordCheck(text).allowed
+  // A unit is an entire source paragraph, including adjacent-sentence caveats.
+  // Without paragraph markup retain the entire text; line breaks (including br)
+  // are not reliable semantic boundaries. Never turn a clipped fragment into a
+  // quotable unit, even when that means this source is unavailable.
+  const explicitBlocks = [...paragraphBlocks, ...macTutorParagraphs(sourceText, source)];
+  const blocks = explicitBlocks.length ? explicitBlocks : [cleanHtml(sourceText)];
+  const candidates = [...new Set(blocks)].filter(text => text.length >= 80 && text.length <= MAX_EXCERPT_CHARS && keywordCheck(text).allowed
     && !/(back to .*home page|skip to main content|home page .* sources|^sources illustrations|^return to )/i.test(text));
   const stop = new Set(['what', 'when', 'where', 'which', 'while', 'would', 'could', 'should', 'this', 'that', 'these', 'those', 'from', 'with', 'into', 'then', 'than', 'have', 'had', 'were', 'been', 'will', 'your', 'about', 'their', 'there', 'them', 'they', 'some', 'more', 'make', 'made', 'does', 'did', 'over', 'under', 'after', 'before', 'never', 'than', 'would', 'ancient']);
   const promptTokens = (prompt.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []).filter(token => !stop.has(token));
@@ -58,10 +76,7 @@ function excerptFrom(html, prompt, source) {
   let excerpt = '';
   for (const item of relevant) {
     const next = excerpt ? `${excerpt}\n\n${item.text}` : item.text;
-    if (next.length > MAX_EXCERPT_CHARS) {
-      if (!excerpt && item.text.length > MAX_EXCERPT_CHARS) excerpt = item.text.slice(0, MAX_EXCERPT_CHARS);
-      break;
-    }
+    if (next.length > MAX_EXCERPT_CHARS) continue;
     excerpt = next;
   }
   return excerpt;
@@ -127,14 +142,14 @@ export async function resolveFreshEvidence(prompt, { fetchImpl = globalThis.fetc
       const excerpt = excerptFrom(body, prompt, source);
       if (!excerpt) throw new Error('no_relevant_policy_clear_excerpt');
       const retrievedAt = new Date().toISOString();
-      return { source: { ...source, date: retrievedAt.slice(0, 10), checkedDate: retrievedAt.slice(0, 10), checkedAt: retrievedAt, retrievalTimestamp: retrievedAt, fetchStatus: 'fetched', provenance: 'bounded-live-fetch', verificationMethod: 'retrieved_excerpt', contentSha256: createHash('sha256').update(text).digest('hex'), excerpt } };
+      return { source: { ...source, date: retrievedAt.slice(0, 10), checkedDate: retrievedAt.slice(0, 10), checkedAt: retrievedAt, retrievalTimestamp: retrievedAt, fetchStatus: 'fetched', provenance: 'bounded-live-fetch', verificationMethod: 'retrieved_excerpt', contentSha256: createHash('sha256').update(text).digest('hex'), excerptFormat: EXCERPT_FORMAT, excerpt } };
     } catch (error) {
       return { error: { sourceId: source.id, reason: error?.name === 'TimeoutError' || error?.name === 'AbortError' ? 'timeout' : String(error?.message ?? 'fetch_failed').slice(0, 80) } };
     }
   }));
   const sources = results.flatMap(result => result.source ? [result.source] : []);
   const errors = results.flatMap(result => result.error ? [result.error] : []);
-  return { status: sources.length ? 'retrieved' : 'unavailable', reason: sources.length ? null : 'all_sources_unavailable', topicId: topic.id, retrievedAt: new Date().toISOString(), sources, errors, method: { label: 'Bounded public source retrieval', scope: 'Fixed approved URLs selected from a topic registry; retrieved excerpts are source material, not independently verified claims.', scoreDisclaimer: 'Generation rankings are not factual confidence scores; generated baseline claims require human source review.' } };
+  return { status: sources.length ? 'retrieved' : 'unavailable', reason: sources.length ? null : 'all_sources_unavailable', topicId: topic.id, retrievedAt: new Date().toISOString(), sources, errors, method: { label: 'Bounded public source retrieval', scope: 'Fixed approved URLs selected from a topic registry; baselines copy complete retrieved source units, preserving their wording and qualifications. Retrieval and quotation are not independent factual verification.', scoreDisclaimer: 'Generation rankings are not factual confidence scores; model-selected baseline excerpts require human source review.' } };
 }
 
 function freshProjection(artifact) {
@@ -149,6 +164,13 @@ export function freshEvidenceDigest(artifact) {
 }
 
 function isText(value) { return typeof value === 'string' && value.trim().length > 0; }
+
+/** Whole retrieval-authored units only. Legacy excerpts may have been clipped. */
+export function freshSourceUnits(source) {
+  if (source?.excerptFormat !== EXCERPT_FORMAT || !isText(source.excerpt) || source.excerpt.length > MAX_EXCERPT_CHARS) return [];
+  const units = source.excerpt.split('\n\n');
+  return units.every(unit => isText(unit) && unit === unit.trim() && !/[\r\n]/.test(unit)) ? units : [];
+}
 function isDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -163,10 +185,14 @@ function safeRetrievedSource(source) {
       && isDate(source.date) && isDate(source.checkedDate) && source.checkedDate === source.date
       && source.verificationMethod === 'retrieved_excerpt' && source.fetchStatus === 'fetched'
       && source.provenance === 'bounded-live-fetch' && Number.isFinite(retrievedAt.getTime()) && source.date === retrievedAt.toISOString().slice(0, 10)
-      && /^[a-f0-9]{64}$/.test(source.contentSha256) && isText(source.excerpt) && source.excerpt.length <= MAX_EXCERPT_CHARS;
+      && /^[a-f0-9]{64}$/.test(source.contentSha256) && freshSourceUnits(source).length > 0;
   } catch { return false; }
 }
-export function isSafeGroundedBranch(branch, sourceIds) {
+export function isSafeGroundedBranch(branch, sourceById) {
+  // An ID proves only a link, not support. Requiring the entire quoted unit
+  // prevents paraphrases or substrings from dropping uncertainty, attribution,
+  // negation, ranges or disagreement. This checks fidelity, not factual truth.
+  if (!(sourceById instanceof Map)) return false;
   const textFields = ['title', 'changedAssumption', 'uncertainty', 'demonstrates', 'doesNotEstablish', 'discussionQuestion'];
   const place = branch?.place;
   const linkedIds = new Set(Array.isArray(branch?.baselineClaims) ? branch.baselineClaims.flatMap(claim => Array.isArray(claim?.sourceIds) ? claim.sourceIds : []) : []);
@@ -175,17 +201,17 @@ export function isSafeGroundedBranch(branch, sourceIds) {
     && Number.isInteger(branch.year) && place && isText(place.name) && Number.isFinite(place.lat) && place.lat >= -90 && place.lat <= 90 && Number.isFinite(place.lon) && place.lon >= -180 && place.lon <= 180
     && Array.isArray(branch.causalSteps) && branch.causalSteps.length >= 2 && branch.causalSteps.length <= 8 && branch.causalSteps.every(value => isText(value) && value.length <= 1_000)
     && Array.isArray(branch.unverifiedClaims) && branch.unverifiedClaims.length > 0 && branch.unverifiedClaims.length <= 12 && branch.unverifiedClaims.every(value => isText(value) && value.length <= 1_000)
-    && Array.isArray(branch.baselineClaims) && branch.baselineClaims.length > 0 && branch.baselineClaims.length <= 12 && branch.baselineClaims.every(claim => claim && isText(claim.text) && claim.text.length <= 1_000 && Array.isArray(claim.sourceIds) && claim.sourceIds.length > 0 && claim.sourceIds.length <= 4 && new Set(claim.sourceIds).size === claim.sourceIds.length && claim.sourceIds.every(id => sourceIds.has(id)))
-    && Array.isArray(branch.citations) && branch.citations.length > 0 && branch.citations.length <= 4 && new Set(branch.citations).size === branch.citations.length && branch.citations.every(id => sourceIds.has(id) && linkedIds.has(id))
+    && Array.isArray(branch.baselineClaims) && branch.baselineClaims.length > 0 && branch.baselineClaims.length <= 12 && branch.baselineClaims.every(claim => claim && isText(claim.text) && claim.text.length <= MAX_EXCERPT_CHARS && Array.isArray(claim.sourceIds) && claim.sourceIds.length === 1 && freshSourceUnits(sourceById.get(claim.sourceIds[0])).includes(claim.text))
+    && Array.isArray(branch.citations) && branch.citations.length > 0 && branch.citations.length <= 4 && new Set(branch.citations).size === branch.citations.length && branch.citations.every(id => sourceById.has(id) && linkedIds.has(id))
     && [...linkedIds].every(id => branch.citations.includes(id));
 }
 
 /** Keep only grounded branches with unambiguous IDs, matching the saved-run selector. */
-export function selectSafeGroundedBranches(branches, sourceIds) {
+export function selectSafeGroundedBranches(branches, sourceById) {
   if (!Array.isArray(branches) || branches.length > 8) return [];
   const idCounts = new Map();
   for (const branch of branches) if (typeof branch?.id === 'string') idCounts.set(branch.id, (idCounts.get(branch.id) ?? 0) + 1);
-  return branches.filter(branch => idCounts.get(branch?.id) === 1 && isSafeGroundedBranch(branch, sourceIds));
+  return branches.filter(branch => idCounts.get(branch?.id) === 1 && isSafeGroundedBranch(branch, sourceById));
 }
 
 /** Validate and normalize live evidence into the same envelope shape used by replay. */
@@ -200,7 +226,7 @@ export function selectFreshEvidence(runId, branchArtifact) {
     const sources = evidence.sources;
     if (sources.some(source => !safeRetrievedSource(source)) || new Set(sources.map(source => source.id)).size !== sources.length) return null;
     const sourceById = new Map(sources.map(source => [source.id, source]));
-    const safeBranches = selectSafeGroundedBranches(branchArtifact.branches, new Set(sourceById.keys()));
+    const safeBranches = selectSafeGroundedBranches(branchArtifact.branches, sourceById);
     if (safeBranches.length !== branchArtifact.branches.length) return null;
     for (const branch of safeBranches) {
       const linkedIds = new Set(branch.baselineClaims.flatMap(claim => claim.sourceIds));

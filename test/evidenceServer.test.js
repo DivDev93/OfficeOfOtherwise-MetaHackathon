@@ -21,7 +21,7 @@ async function start(t, { runsDir = actualRuns, evidencePath = actualEvidence, l
 function freshArtifact(runId) {
   const retrievedAt = new Date().toISOString();
   const date = retrievedAt.slice(0, 10);
-  const source = { id: 'alex-library', title: 'Library history', publisher: 'UChicago', url: 'https://penelope.uchicago.edu/~grout/encyclopaedia_romana/library.html', date, checkedDate: date, checkedAt: retrievedAt, retrievalTimestamp: retrievedAt, fetchStatus: 'fetched', provenance: 'bounded-live-fetch', verificationMethod: 'retrieved_excerpt', contentSha256: 'a'.repeat(64), excerpt: 'Retrieved source excerpt on the ancient Library of Alexandria.' };
+  const source = { id: 'alex-library', title: 'Library history', publisher: 'UChicago', url: 'https://penelope.uchicago.edu/~grout/encyclopaedia_romana/library.html', date, checkedDate: date, checkedAt: retrievedAt, retrievalTimestamp: retrievedAt, fetchStatus: 'fetched', provenance: 'bounded-live-fetch', verificationMethod: 'retrieved_excerpt', contentSha256: 'a'.repeat(64), excerptFormat: 'complete-source-units-v1', excerpt: 'The library was a Ptolemaic institution.' };
   const branch = { id: 'b1', title: 'The living library', year: 250, place: { name: 'Alexandria', lat: 31.2, lon: 29.9 }, summary: 'The library survives.', scene: 'A scroll room at dawn.', changedAssumption: 'The library survives.', causalSteps: ['More texts are copied.', 'Scholars exchange copies.'], baselineClaims: [{ text: 'The library was a Ptolemaic institution.', sourceIds: ['alex-library'] }], uncertainty: 'Its later institutional continuity is unknown.', citations: ['alex-library'], unverifiedClaims: ['It survives for centuries.'], demonstrates: 'Copying networks could expand.', doesNotEstablish: 'That this alternative occurred.', discussionQuestion: 'What records would demonstrate continuity?', score: 8 };
   const artifact = { runId, status: 'ok', divergence: 'What if the Library of Alexandria survived?', branches: [branch], evidence: { status: 'retrieved', topicId: 'alexandria-library', retrievedAt, method: { label: 'Bounded public source retrieval', scope: 'Fixed approved sources; excerpts are not independently verified claims.', scoreDisclaimer: 'Model scores are not factual confidence.' }, sources: [source] } };
   artifact.evidence.artifactSha256 = freshEvidenceDigest(artifact);
@@ -79,6 +79,20 @@ test('fresh evidence endpoint rejects stale digest and malformed or unsupported 
   artifact.evidence.artifactSha256 = freshEvidenceDigest(artifact);
   await (await post()).text();
   assert.equal((await fetch(`${url}/runs/${runId}/evidence`)).status, 404);
+  for (const mutate of [
+    data => { delete data.evidence.sources[0].excerptFormat; },
+    data => { data.branches[0].baselineClaims[0].text = 'The library was certainly a permanent institution.'; },
+    data => {
+      data.evidence.sources[0].excerpt += ' Its exact institutional structure remains disputed.';
+      // The original complete sentence is now an incomplete source unit.
+    },
+  ]) {
+    artifact = freshArtifact(runId);
+    mutate(artifact);
+    artifact.evidence.artifactSha256 = freshEvidenceDigest(artifact);
+    await (await post()).text();
+    assert.equal((await fetch(`${url}/runs/${runId}/evidence`)).status, 404, 'legacy or incomplete baseline quotes must fail even with a matching digest');
+  }
 });
 
 test('evidence endpoint serves only the matching cached run and its used sources', async t => {

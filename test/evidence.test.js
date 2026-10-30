@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { branchDigest, selectRunEvidence, validateEvidence } from '../src/evidence/index.js';
-import { freshEvidenceCoverage, freshEvidenceDigest, resolveFreshEvidence, selectFreshEvidence } from '../src/evidence/fresh.js';
+import { freshEvidenceCoverage, freshEvidenceDigest, resolveFreshEvidence, selectFreshEvidence, selectSafeGroundedBranches } from '../src/evidence/fresh.js';
 
 const dataset = JSON.parse(readFileSync(new URL('../demo/evidence/v1.json', import.meta.url), 'utf8'));
 const runIds = ['alexandria', 'beringia', 'green-sahara', 'mechanisms'];
@@ -74,7 +74,7 @@ test('fresh retrieval selects fixed approved source URLs for topic wording varia
   const evidence = await resolveFreshEvidence('Suppose the ancient Library in Alexandria survived', {
     fetchImpl: async (url, options) => {
       requests.push({ url, options });
-      return new Response('<html><script>ignore this</script><main>Alexandria library baseline. '.repeat(1000) + '</main></html>', { status: 200, headers: { 'content-type': 'text/html' } });
+      return new Response('<html><script>ignore this</script>' + '<p>The Library of Alexandria supported scholars who studied and copied texts in the Museum.</p>'.repeat(1000) + '</html>', { status: 200, headers: { 'content-type': 'text/html' } });
     },
   });
   assert.equal(evidence.status, 'retrieved');
@@ -138,7 +138,7 @@ test('fresh retrieval fails closed outside topic coverage and when all approved 
 
 test('fresh evidence selector returns the replay envelope only when source links and bound branch projection match', () => {
   const retrievedAt = '2026-10-29T12:00:00.000Z';
-  const source = { id: 'alex-library', title: 'Library history', publisher: 'UChicago', url: 'https://penelope.uchicago.edu/~grout/encyclopaedia_romana/library.html', date: '2026-10-29', checkedDate: '2026-10-29', checkedAt: retrievedAt, retrievalTimestamp: retrievedAt, fetchStatus: 'fetched', provenance: 'bounded-live-fetch', verificationMethod: 'retrieved_excerpt', contentSha256: 'a'.repeat(64), excerpt: 'A bounded retrieved excerpt.' };
+  const source = { id: 'alex-library', title: 'Library history', publisher: 'UChicago', url: 'https://penelope.uchicago.edu/~grout/encyclopaedia_romana/library.html', date: '2026-10-29', checkedDate: '2026-10-29', checkedAt: retrievedAt, retrievalTimestamp: retrievedAt, fetchStatus: 'fetched', provenance: 'bounded-live-fetch', verificationMethod: 'retrieved_excerpt', contentSha256: 'a'.repeat(64), excerptFormat: 'complete-source-units-v1', excerpt: 'The library existed.' };
   const branch = { id: 'b1', title: 'Library branches', year: 250, place: { name: 'Alexandria', lat: 31.2, lon: 29.9 }, summary: 'The library survives.', scene: 'A scroll catalog in the library.', changedAssumption: 'The library survives.', causalSteps: ['More copying.', 'Wider exchange.'], baselineClaims: [{ text: 'The library existed.', sourceIds: ['alex-library'] }], uncertainty: 'Continuity is unclear.', citations: ['alex-library'], unverifiedClaims: ['It survives.'], demonstrates: 'A path.', doesNotEstablish: 'A real event.', discussionQuestion: 'What records survive?', score: 8 };
   const artifact = { runId: '99', status: 'ok', divergence: 'What if Alexandria library survived?', branches: [branch], evidence: { status: 'retrieved', retrievedAt, method: { label: 'Bounded retrieval', scope: 'Fixed public sources.', scoreDisclaimer: 'Scores are not factual confidence.' }, sources: [source] } };
   artifact.evidence.artifactSha256 = freshEvidenceDigest(artifact);
@@ -153,4 +153,85 @@ test('fresh evidence selector returns the replay envelope only when source links
   unsupported.branches[0].citations = ['cached-source-from-another-prompt'];
   unsupported.evidence.artifactSha256 = freshEvidenceDigest(unsupported);
   assert.equal(selectFreshEvidence('99', unsupported), null);
+  const legacy = structuredClone(artifact);
+  delete legacy.evidence.sources[0].excerptFormat;
+  legacy.evidence.artifactSha256 = freshEvidenceDigest(legacy);
+  assert.equal(selectFreshEvidence('99', legacy), null, 'a legacy digest cannot certify complete source units');
+  const overstated = structuredClone(artifact);
+  overstated.branches[0].baselineClaims[0].text = 'The library certainly existed for centuries.';
+  overstated.evidence.artifactSha256 = freshEvidenceDigest(overstated);
+  assert.equal(selectFreshEvidence('99', overstated), null, 'a matching digest does not establish source support');
+});
+
+function extractiveBranch(text, sourceIds = ['source-one']) {
+  return { id: 'b1', title: 'A scholarly network', year: 250, place: { name: 'Alexandria', lat: 31.2, lon: 29.9 }, summary: 'The library survives.', scene: 'A scroll catalog.', changedAssumption: 'Teaching continues.', causalSteps: ['More copies circulate.', 'Teaching expands.'], baselineClaims: [{ text, sourceIds }], uncertainty: 'Continuity remains uncertain.', citations: sourceIds, unverifiedClaims: ['Teaching lasts for centuries.'], demonstrates: 'A possible network.', doesNotEstablish: 'A historical outcome.', discussionQuestion: 'What records survive?' };
+}
+
+test('fresh baseline validation preserves whole source uncertainty, negation, attribution, ranges and disagreement', () => {
+  const units = [
+    'Strato became head of the Lyceum at Alexandria in 287 BC and it is thought that Aristarchus studied with him there starting his studies shortly after that date.',
+    'Aristarchus studied with Strato in Alexandria. This remains a disputed reconstruction rather than an established event.',
+    'The device did not operate continuously, according to the surviving account; estimates range from 10 to 20 days.',
+    'One interpretation places the workshop in Alexandria; another places it on Rhodes, and neither location is established.',
+    'The catalog contains 24 entries.',
+    `The complete account contains ${'carefully attributed observations, '.repeat(35)}and its date remains uncertain.`,
+  ];
+  for (const unit of units) {
+    const sourceById = new Map([['source-one', { excerptFormat: 'complete-source-units-v1', excerpt: unit }]]);
+    assert.equal(selectSafeGroundedBranches([extractiveBranch(unit)], sourceById).length, 1, unit);
+    assert.equal(selectSafeGroundedBranches([extractiveBranch(unit)], new Set(['source-one'])).length, 0, 'IDs alone cannot validate support');
+  }
+  const sourceById = new Map([['source-one', { excerptFormat: 'complete-source-units-v1', excerpt: units.slice(0, 5).join('\n\n').slice(0, 1600) }]]);
+  const unsupported = [
+    'Aristarchus studied with Strato in Alexandria shortly after Strato became head of the Lyceum there in 287 BC.',
+    'Aristarchus studied with Strato in Alexandria.', // complete sentence, but removes the following caveat
+    'The device operated continuously, according to the surviving account; estimates range from 10 to 20 days.',
+    'The device did not operate continuously; estimates range from 10 to 20 days.',
+    'The device did not operate continuously, according to the surviving account; estimates are 15 days.',
+    'The workshop was in Alexandria.',
+    'The catalog contains 24 entries', // punctuation and whitespace changes also fail
+    ' The catalog contains 24 entries.',
+  ];
+  for (const claim of unsupported) assert.equal(selectSafeGroundedBranches([extractiveBranch(claim)], sourceById).length, 0, claim);
+  const otherSource = new Map([...sourceById, ['source-two', { excerptFormat: 'complete-source-units-v1', excerpt: 'An unrelated source.' }]]);
+  assert.equal(selectSafeGroundedBranches([extractiveBranch(units[4], ['source-two'])], otherSource).length, 0, 'quote must come from its cited source');
+  assert.equal(selectSafeGroundedBranches([extractiveBranch(units[4], ['source-one', 'source-two'])], otherSource).length, 0, 'a quote must identify exactly one supporting source');
+});
+
+test('fresh retrieval never clips a source paragraph or treats a line break as a safe claim boundary', async () => {
+  const long = `The Library of Alexandria supported ${'scholarly observations '.repeat(100)}but this account is disputed.`;
+  const complete = 'The Library of Alexandria supported scholars who studied and copied texts in the Museum, according to this account.';
+  for (const html of [`<p>${long}</p>`, `<main>${long}<br>The date remains uncertain.</main>`]) {
+    const evidence = await resolveFreshEvidence('What if the Library of Alexandria survived?', { fetchImpl: async () => new Response(html) });
+    assert.equal(evidence.status, 'unavailable');
+    assert.deepEqual(evidence.sources, []);
+  }
+  const evidence = await resolveFreshEvidence('What if the Library of Alexandria survived?', { fetchImpl: async () => new Response(`<p>${long}</p><p>${complete}</p>`) });
+  assert.equal(evidence.status, 'retrieved');
+  for (const source of evidence.sources) {
+    assert.equal(source.excerptFormat, 'complete-source-units-v1');
+    assert.equal(source.excerpt, complete);
+  }
+});
+
+test('MacTutor paired-break paragraphs retain complete outside-p biography context despite incidental p elements', async () => {
+  const biography = 'Aristarchus was a student of Strato of Lampsacus, who was head of the Lyceum founded by Aristotle. '
+    + 'However, it is thought that he studied with him in Alexandria rather than Athens. '
+    + 'Strato became head of the Lyceum at Alexandria in 287 BC and it is thought that Aristarchus studied with him there starting his studies shortly after that date.';
+  const formatted = biography.replace('However,', '<br/>\n\nHowever,');
+  const inParagraph = 'Aristarchus recorded astronomical observations at Alexandria. <br/>\n\n<br/>The chronology remains uncertain and is not established by this account.';
+  const html = `<html><main><br/>\n\n<br/>${formatted}<br/>\n\n<br/>An unrelated short footer.</main><p>${inParagraph}</p><p>Home page copyright and navigation.</p></html>`;
+  const evidence = await resolveFreshEvidence('What if the Library of Alexandria preserved Aristarchus studies?', { fetchImpl: async () => new Response(html) });
+  const source = evidence.sources.find(item => item.id === 'alex-aristarchus');
+  assert.ok(source);
+  const units = source.excerpt.split('\n\n');
+  assert.ok(units.includes(biography), 'single br and raw blank lines cannot cut the biography caveat');
+  assert.ok(units.includes('Aristarchus recorded astronomical observations at Alexandria. The chronology remains uncertain and is not established by this account.'), 'paired breaks inside p cannot cut its caveat');
+  assert.ok(!units.some(unit => unit === 'Aristarchus recorded astronomical observations at Alexandria.'));
+  const otherSource = evidence.sources.find(item => item.id === 'alex-library');
+  assert.ok(!otherSource?.excerpt.includes('Strato'), 'paired-break parsing is restricted to the fixed MacTutor registry entry');
+
+  const long = `Aristarchus studied in Alexandria ${'according to surviving accounts '.repeat(70)}but this is uncertain.`;
+  const oversized = await resolveFreshEvidence('What if Alexandria preserved Aristarchus studies?', { fetchImpl: async () => new Response(`<main><br/><br/>${long}<br/><br/></main><p>Home page copyright and navigation.</p>`) });
+  assert.equal(oversized.status, 'unavailable', 'even explicitly bounded biography paragraphs must never be clipped');
 });

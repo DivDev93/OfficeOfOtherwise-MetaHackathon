@@ -2,6 +2,8 @@
 
 The four sequential attempts were captured on the evening of October 29 in Toronto; their ledger timestamps are October 30 UTC. This is a manual review of saved artifacts and run ledgers, not an accuracy benchmark, peer review, user study, or evidence of learning outcomes. Generated scenarios and images remain counterfactual illustrations.
 
+This document retains the original four attempts as historical evidence, including the `final-4` grounding defect. The [2026-10-30 source-preservation record](2026-10-30-source-uncertainty.md) documents the implemented fix, 214 passing fixture tests, and the newer successful live run `1793334705465`; use that run as the current proof. These historical outputs and digests remain unchanged.
+
 ## Attempts and spend
 
 | Attempt | Saved report | Result | Elapsed | Recorded Meta estimate |
@@ -22,11 +24,15 @@ The final run retrieved one source excerpt from [MacTutor History of Mathematics
 
 | Saved branch | Baseline claim vs. retrieved excerpt | Counterfactual boundary |
 |---|---|---|
-| `b1` — Heliocentric Astronomy Taught Earlier | The excerpt says Aristarchus is *thought* to have studied with Strato in Alexandria shortly after 287 BC. The branch's baseline sentence states this directly, so it slightly overstates the source's uncertainty. | Continuous preservation, teaching, and earlier acceptance are scenario hypotheses; the branch labels accelerated acceptance as unverified and says the source cannot establish rapid acceptance. |
+| `b1` — Heliocentric Astronomy Taught Earlier | The excerpt says Aristarchus is *thought* to have studied with Strato in Alexandria shortly after 287 BC. The recorded branch drops that qualifier and overstates the source. This is a factual-grounding defect in the saved output, despite its pipeline `ok` result. | Continuous preservation, teaching, and earlier acceptance are scenario hypotheses; the branch labels accelerated acceptance as unverified and says the source cannot establish rapid acceptance. |
 | `b2` — Planetary Distances Measured Systematically | The excerpt supports the statement that Greeks called him “Aristarchus the mathematician” while historians often treated him primarily as an astronomer. | Transmission to Rhodes, standardized observations, and improved distances are hypothesized; the branch notes that the excerpt does not describe those methods or their transmission. |
 | `b3` — Alexandrian Mathematics Curriculum Endures | The excerpt supports the statement that historians gave Aristarchus too little attention partly because he was seen as an astronomer. | The library's holdings, teaching system, and later discoveries are not established by the excerpt; the branch identifies those gaps and frames outcomes as uncertain. |
 
 No obvious unsupported factual baseline claim appeared in the three saved branches beyond the noted hedge-strengthening in `b1`. This is a text-to-excerpt consistency check only; it does not establish the underlying historical claims, causal plausibility, or source completeness. The other branches from the proposal were not present in the saved final artifact.
+
+## Operator correction — 2026-10-30 UTC
+
+The original run is preserved as historical recording evidence and still contains the defective sentence. An explicitly operator-authored corrected brief and derivative artifact restore the source's uncertainty using the saved context block; see the [correction and provenance record](2026-10-30-source-uncertainty.md). These are local corrections, not a new model run, source fetch, or validated fresh-evidence generation. The original branch, trace, report, images, capture frames, and video remain unchanged. The recorded `ok` means the old pipeline completed; it does not mean the historical baseline claim passed this manual review.
 
 ## Final artifact digests
 
