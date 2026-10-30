@@ -13,9 +13,9 @@ Captured on 2026-10-29 from the local replay-only server at 1920×1080 and 390×
 | Globe CDN fallback | [Fallback](globe-fallback-1920.jpg) | [Fallback](globe-fallback-390.jpg) |
 | Reduced motion | [Reduced motion](reduced-motion-1920.jpg) | [Reduced motion](reduced-motion-390.jpg) |
 
-The `beringia-*`, `green-sahara-*`, and `mechanisms-*` files cover all three artifact views at both sizes. Each run loaded its saved model without a model error. Viewport checks found no horizontal overflow. The `before-*` files show the previous public deployment.
+The `beringia-*`, `green-sahara-*`, and `mechanisms-*` files cover all three artifact views at both sizes. Each run loaded its saved model without a model error. Viewport checks found no horizontal overflow. The `before-*` files preserve the earlier visual state for comparison.
 
-Verified keyboard tabs, pin/card selection, truthful alternate-path labels, arrow-key orbit/zoom/reset, automatic orbit, return focus, and reduced-motion behavior. Blocking the globe.gl CDN still allowed the independent model viewer to load a saved GLB. Existing replay, policy, spend gates and provenance remain in place. The Node 22 suite passes 148 tests.
+Verified keyboard tabs, pin/card selection, truthful alternate-path labels, arrow-key orbit/zoom/reset, automatic orbit, return focus, and reduced-motion behavior. Blocking the globe.gl CDN still allowed the independent model viewer to load a saved GLB. The original rehearsal report records replay, policy, spend-gate, and provenance checks at that time; its test count is historical, not a claim about the current suite.
 
 Production Chronos references and side-by-side comparisons are local-only under `docs/scouting/chronos-ref/` and its `comparisons/` directory, excluded from Git and release images. Home, history pins and Chronicle surfaces were inspected without signing in. The inspected production file required an account for 3D; its desktop access gate was captured, rather than starting generation or signing in. A genuine production 3D viewport comparison was therefore unavailable.
 

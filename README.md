@@ -1,64 +1,65 @@
 # Office of Otherwise
 
-**Ask "what if?" and walk into the answer.**
+**Ask “what if?” and follow the consequences across a map.**
 
-Office of Otherwise is the Meta-powered branching layer for [Chronos](#relationship-to-chronos), an alternate-history explorer. You give it a point of divergence. Meta's models branch the timeline, check that the branches hold together, render a scene for each one, and cut out the subject so the existing Chronos pipeline can turn it into a 3D object or a world you can explore.
+Office of Otherwise is a Meta-model experiment in geographically anchored counterfactual stories. A question about science, technology, culture, or geography becomes several possible paths with dates, places, short explanations, and an illustrated hero scene. The interface lets you compare paths on a globe, inspect the saved scene and subject cutout, and orbit a saved 3D object.
 
-Built for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026). Startups track.
+The impact hypothesis is that scenario creators can explore visual consequences of a what-if while keeping documented baseline facts separate from imagined outcomes. No user feedback has been collected. A small creator-usability protocol is in [docs/USER_VALIDATION.md](docs/USER_VALIDATION.md).
 
-> Status: local branch → image → subject cutout harness, validated with fixtures and live fresh-agent and saved-branch runs. Alexandria, Beringia, Green Sahara and Mechanisms now have separately generated SAM 3D Objects models; all four show `3D: Meta SAM 3D Objects (via Tattva Cloud Run)`. See [Built during the hackathon](#built-during-the-hackathon).
+The confirmed team is **Office of Otherwise**, with **Divakar Dev** as its sole contributor and representative, entering the **Startups Track** under **Build for Your World**. The operator confirmed the track's active-employee and authorized-representative condition. The project uses the Meta Model API for policy checks, branch proposals and review, image generation, and subject segmentation. It deliberately limits topics to science, technology, culture, and geography; political and war scenarios are out of scope.
 
-## Public demo
+## Current capabilities
 
-[Open the Office of Otherwise replay demo](https://office-otherwise-875096283797.northamerica-northeast2.run.app). The deployed revision, `office-otherwise-00001-84n`, is replay-only: live model generation is disabled. Explore the four cached 3D runs for Alexandria, Beringia, Green Sahara and Mechanisms; they do not make live Meta or 3D provider calls.
+The public repository contains four cached stories: Alexandria, Beringia, Green Sahara, and Antikythera-style mechanisms. Each has three reviewed branches. The replay demo serves saved artifacts and makes no Meta or 3D provider calls. The guardrail story is a labeled simulation of an unavailable classifier, not a recorded model result.
 
-## How it works
+Fresh model-assisted runs re-fetch public excerpts from a fixed registry for Alexandria, Beringia, Green Sahara climate, or ancient mechanisms before branch proposal/review. They do not perform arbitrary web searches. Baselines must quote one complete retrieved source unit exactly, with one matching source ID; runtime selection, saved evidence, UI, and brief export enforce that boundary. Complete units preserve source qualifiers and attribution; they do not independently verify historical truth. Legacy fresh excerpts fail closed, while curated replay evidence is unchanged. Alternate assumptions and outcomes remain hypothetical. Unsupported topics, complete retrieval failure, or no valid grounded branches stop before image/3D generation. See the [source-preservation record](docs/evaluation/2026-10-30-source-uncertainty.md).
 
-| Step | Meta model | Module |
+For new model-assisted runs, `src/demo/pipeline.js` routes prompt and branch topic checks to Muse Spark 1.3 by default, while `src/agents/branchAgent.js` uses Muse Wonder for branch proposals and review. Muse Image creates a hero image and SAM 3.1 produces a subject mask. The saved traces in `demo/runs/` are older: they attribute policy, proposal, and review calls to Muse Wonder. They contain no Muse Spark call. The project does not implement a streamed Muse Spark narration step.
+
+The cached 3D objects were generated separately and attached to the replay records. `scripts/attach-glb.js` validates and attaches a supplied GLB; it does not generate one. The offline replay entry point does not invoke a 3D provider. Chronos, including the pre-existing globe, account, credit, and world-rendering systems, is private and predates this hackathon. This repository contains no Chronos code.
+
+| Stage | Current implementation | Evidence and limits |
 |---|---|---|
-| Plan branches, check consistency, choose the hero scene | **Muse Wonder** | `src/agents/branchAgent.js` |
-| Narrate each branch (streamed) | **Muse Spark** | `src/providers/metaText.js` |
-| Keep branches out of war and political territory | Muse Wonder + rules | `src/guardrails/topicPolicy.js` |
-| Render the branch scene | **Muse Image** | `src/providers/metaImage.js` |
-| Cut out the subject for 3D | **SAM 3.1** | `src/providers/samMask.js` |
-| Generate 3D models for cached demos | **SAM 3D Objects** | Separately generated; GLBs attached by `scripts/attach-glb.js` and labeled in replay provenance. |
-| Image + mask → 3D object or world | *(existing Chronos pipeline, private)* | via `CHRONOS_3D_ENDPOINT` |
+| Topic policy | Muse Spark 1.3 plus keyword checks for new runs | Historical cached traces use Muse Wonder; the guardrail archive entry is simulated. |
+| Branches | Muse Wonder proposes, reviews, and selects a hero branch | Curated replays link sources for baseline facts; the changed timeline and causal chain remain hypothetical. |
+| Scene and cutout | Muse Image scene, SAM 3.1 subject mask | A cutout can omit thin or small elements; inspect the saved result. |
+| 3D replay | Separately generated SAM 3D Objects GLBs attached to saved runs | Unknown generation costs remain unknown; this repository does not provide the model-generation service. |
 
-Divergence points are drawn from science, technology, culture and geography. War and political scenarios are out of scope by design (see `src/guardrails/`).
+## Judge onboarding: offline replay
 
-## Run it
+A published replay is available at [Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app). The [2026-10-30 deployment proof](docs/deployment/2026-10-30.md) verifies implementation source `29b2741` on revision `office-otherwise-00009-t8f`, including replay onboarding, evidence-linked briefs and [self-service creator invitations](https://office-otherwise-875096283797.northamerica-northeast2.run.app/pilot.html). Create links yourself, share them privately, then import returned results and record observed sessions. No real creator results have been collected yet.
+
+Requirements: Node.js 22.9 or newer and npm.
 
 ```bash
-npm ci --ignore-scripts  # Node >=22.9.0 (CI uses Node 22)
-cp .env.example .env   # add META_API_KEY
+npm ci --ignore-scripts
 npm test
-npm run init-demo-budget  # once, before the first live task call
-npm run harness -- "What if the Library of Alexandria never burned?" --no-3d
-# Reuse a saved branch run without paying for the agent again:
-npm run harness -- --from out/branch-<timestamp>.json --no-3d
-# If the subject is not found, retry a saved branch using a concrete noun:
-npm run harness -- --from out/branch-<timestamp>.json --subject book --no-3d
-npm run demo           # local replay, http://localhost:3000
+npm run demo:replay
 ```
 
-The harness uses one metered Meta client and writes `branch.json`, `hero.png`, `mask.png`, `cutout.png`, and `trace.json` to `out/<timestamp>/`. It prints each step's timing and cost, and the selected mask's confidence. Saved branch traces remain available as provenance but are excluded from the new run's cost. An optional subject override is recorded in the trace and does not alter the saved branch. Reused content and any override get one fresh policy check before generation, billed separately. Blocked or empty branches stop before image generation.
+Open `http://127.0.0.1:3000`, open a cached story from **The Archive**, and inspect its branches, scene, cutout, and 3D object where available. Use Alexandria for the full branch-to-object story; then compare Beringia, Green Sahara, and Mechanisms. In a curated story, inspect **Evidence & brief**: linked sources ground the baseline only, while the changed assumption and causal chain are explicitly hypothetical. Open **Simulated guardrail** to see the labeled unavailable-classifier example. This dedicated replay command binds to loopback, forces replay-only mode, and does not load `.env`; it requires no API key or provider budget and makes no live model calls. See [docs/JUDGE_GUIDE.md](docs/JUDGE_GUIDE.md) for a short storyboard.
 
-The harness defaults to a 3D handoff and fails before Meta calls if verified Chronos configuration is unavailable; use `--no-3d` for local 2D-only runs. The deployed public demo is replay-only, with live model generation disabled. For local live generation, the demo server requires a configured access code, budget checkpoint and verified Chronos TRELLIS configuration. Alexandria, Beringia, Green Sahara and Mechanisms are completed 3D replays. The guardrail replay is a labeled simulation of an unavailable classifier, not a recorded model verdict. The four model files bring the cached demo archive to 46,343,279 bytes; the cache cap is 80 MB. See [deployment notes](docs/DEPLOY.md).
+## Optional fresh Meta run
 
-For a separately generated GLB, attach it to a provisional cached run with `npm run attach-glb -- <slug> <path-to-model.glb> --provider sam3dobjects --ms <actual-elapsed-ms>`. The command validates the GLB structure and records it as pre-generated, without claiming a live Chronos job. `sam3dobjects` displays the `3D: Meta SAM 3D Objects (via Tattva Cloud Run)` provenance badge; use it only when that provider produced the attached model. Omit `--ms` if the actual duration is unknown. The local demo cache is capped at 80 MB.
+Fresh text, image, and segmentation generation is a separate, metered path. It requires privately configured credentials and budget settings; never commit credentials. For a 2D-only harness run, use:
 
-Muse Image defaults to $0.01 per image. SAM defaults to a conservative estimated $0.05 per call; Meta now lists $2.50 per 1,000 images on its [SAM model page](https://dev.meta.ai/models/sam-3-1). The ledger records the configured estimate, not an invoice. Token estimates use Meta's published Wonder and Spark rates, but cannot guarantee that provider charges never exceed a reservation. An empty segmentation gets at most one retry with the subject's head noun. All calls use the persistent spend ledger and respect `META_SPEND_CAP_USD`; tests use fixtures and do not call Meta.
+```bash
+cp .env.example .env
+# Configure credentials and a spend cap privately before continuing.
+npm run init-demo-budget
+npm run harness -- "What if the Library of Alexandria never burned?" --no-3d
+```
 
-PNG encoding uses Node's built-in zlib; decoding uses MIT-licensed `pngjs`. SAM output decoding uses the unmodified `@meta-sam/parser` npm dependency under Meta's separate **SAM License**, including its use and redistribution restrictions. It is not covered by this repository's MIT license. See [third-party notices](THIRD_PARTY_NOTICES.md).
+The harness records model, timing, usage, and cost estimates. Estimates are not invoices. Calls go through the shared metered Meta client and respect `META_SPEND_CAP_USD`. Tests use recorded fixtures, not live calls. The dedicated offline replay entry point does not enable live generation.
 
-## Relationship to Chronos
+Source-preservation proof is available. The latest fresh run, `1793334705465`, completed on 2026-10-30 UTC in **58.666 seconds**, recording **US$0.2507162** in Meta ledger estimates. MacTutor was retrieved; the other Alexandria source timed out. All three saved baselines exactly match complete source units, and the saved selector accepts the run. It produced a scene and SAM mask/cutout, with no 3D call. None of the chosen baselines selects the specific “it is thought” study paragraph; offline fixtures cover that regression. The earlier run's dropped qualifier remains documented as a historical defect. Five attempts total US$0.95696825 in estimates. The [public review prerelease](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/releases/tag/hackathon-preview-2026-10-30) supplies the 178.733-second primary video, 80.333-second fresh-proof companion, judge package, original `925c110` source archive and supplemental `29b2741` implementation archive. Publication is not entry submission; PR #7 remains draft. See the [release manifest](docs/RELEASE_ARTIFACTS.md) for downloads and hashes and the [source-preservation record](docs/evaluation/2026-10-30-source-uncertainty.md) for fixture tests and generation limits.
 
-Chronos (globe, accounts, credits, 3D/world rendering) existed before this hackathon and stays private. Chronos uses this repo as a dependency through its provider registry, so this repo holds all of the hackathon work.
+## Build and provenance
 
-## Built during the hackathon
+The repository includes branch generation, topic guardrails, the shared Meta client, image and mask handling, the replay server/UI, cached artifacts, and GLB attachment/provenance tooling. Functional event-built work begins at `ba7110f` on October 26 at 13:38 EDT, after the noon kickoff; the pre-event `53a83c0` scaffold contains no functional code. The latest implementation source snapshot ends at `29b2741`; later receipt-only documentation records deployment and verification. Chronos is a separate, pre-existing private system excluded from this public source. A fresh 3D provider job is not part of replay, and an attached GLB must not be presented as a job run by this repository.
 
-Everything in this repository was written during the event window (first functional commit after 2026-10-26 12:00 PM ET). The day-by-day log is in [`docs/HACKATHON.md`](docs/HACKATHON.md).
+See [docs/SUBMISSION.md](docs/SUBMISSION.md) for submission facts and open checklist items, [docs/SUBMISSION_FIELDS.md](docs/SUBMISSION_FIELDS.md) for paste-ready form answers, [docs/HACKATHON.md](docs/HACKATHON.md) for the build log, [docs/USER_VALIDATION.md](docs/USER_VALIDATION.md) for the proposed creator-usability study, and [docs/EVALUATION.md](docs/EVALUATION.md) for the dry-run-first live evaluation preflight.
 
-## License
+## License and asset notices
 
-Application code: MIT. Dependencies retain their own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).
+Application code is MIT licensed. Dependencies, fonts, and map textures retain their own terms and attribution requirements; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The `@meta-sam/parser` package is under Meta's separate SAM License and is not covered by this repository's MIT license.

@@ -1,9 +1,18 @@
-import { retryPrompt, formatYear, modelCardSteps, replayTraceGroups, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from './logic.js';
+import { retryPrompt, formatYear, modelCardSteps, replayTraceGroups, parseSseBlock, availableView, completionStatus, freshRetrievalStatus, cachedRetryRun, suggestionAction, sourceVerificationLabel, lessonMarkdown, normalizeFreshEvidence, freshUnverifiedClaims, freshLessonMarkdown, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from './logic.js';
 const $ = id => document.getElementById(id);
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', globeApi = null, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0;
+let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', globeApi = null, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0, currentRunId = '', learningEvidence = null, freshEvidenceEnvelope = null, learningState = 'none', lessonExportContent = '', compareBranchId = '';
 const status = text => $('status').textContent = text;
 const setStageMessage = text => { const copy = $('stage-empty').querySelector('p'); if (copy) copy.textContent = text; };
+function setFreshRunStatus(message, { kind = 'progress', mapLabel = null, stageMessage = null } = {}) {
+  const host = $('fresh-run-status');
+  host.hidden = !message;
+  host.dataset.state = kind;
+  host.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  host.textContent = message;
+  if (mapLabel) $('map-status').textContent = mapLabel;
+  if (stageMessage) setStageMessage(stageMessage);
+}
 const asset = name => `${base}/${name}`;
 function applyServiceMode(mode) {
   serviceMode = mode;
@@ -19,6 +28,7 @@ async function loadServiceMode() {
     if (!response.ok) throw new Error('Health endpoint unavailable');
     applyServiceMode(liveAccessMode(await response.json()));
   } catch { applyServiceMode('unknown'); }
+  return serviceMode;
 }
 function setView(view) {
   view = availableView(view, {image:hasImage, cutout:hasCutout, model:hasModel && !!modelApi});
@@ -82,6 +92,198 @@ function renderBranches() {
   }
   globeApi?.setBranches(branchState.branches, branchState.heroId);
 }
+function textList(host, values, tag = 'li') {
+  host.replaceChildren();
+  for (const value of values) {
+    const item = document.createElement(tag);
+    item.textContent = value;
+    host.append(item);
+  }
+}
+function renderSourceFacts(host, ids, sources) {
+  host.replaceChildren();
+  const linked = ids.map(id => sources.find(item => item.id === id)).filter(Boolean);
+  if (!linked.length) {
+    const note = document.createElement('li'); note.textContent = 'No baseline sources are linked to this path.'; host.append(note);
+    return;
+  }
+  for (const source of linked) {
+    const item = document.createElement('li');
+    const fact = document.createElement('span'); fact.textContent = source.baselineParaphrase || 'Source recorded without a baseline summary.';
+    const link = document.createElement('a');
+    link.textContent = ` ${source.title || 'Source'}${source.publisher ? ` · ${source.publisher}` : ''}${source.checkedDate ? ` · checked ${source.checkedDate}` : ''} · ${sourceVerificationLabel(source.verificationMethod)}`;
+    try {
+      const url = new URL(source.url);
+      if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Unsupported source URL');
+      link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+    } catch { link.removeAttribute('href'); link.removeAttribute('target'); }
+    item.append(fact, link); host.append(item);
+  }
+}
+function appendFreshSourceClaim(host, claim, sources) {
+  const byId = new Map(sources.map(source => [source.id, source]));
+  const linked = claim.sourceIds.map(id => byId.get(id)).filter(Boolean);
+  if (!linked.length) return false;
+  const item = document.createElement('li');
+  const text = document.createElement('blockquote'); text.textContent = claim.text; item.append(text);
+  for (const source of linked) {
+    const citation = document.createElement('div'); citation.className = 'fresh-citation';
+    const link = document.createElement('a');
+    link.textContent = `${source.title || source.id}${source.publisher ? ` · ${source.publisher}` : ''}${source.checkedDate ? ` · checked ${source.checkedDate}` : ''} · Model-selected source text · human review required`;
+    try { const url = new URL(source.url); if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Unsupported source URL'); link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; }
+    catch { link.removeAttribute('href'); link.removeAttribute('target'); }
+    citation.append(link);
+    item.append(citation);
+  }
+  host.append(item);
+  return true;
+}
+function renderFreshLearning(branch, evidence) {
+  const clean = normalizeFreshEvidence(branch, evidence);
+  if (!clean) return false;
+  $('learning-content').hidden = true;
+  $('learning-score').hidden = true;
+  $('download-lesson').hidden = true;
+  $('learning-comparison').hidden = true;
+  lessonExportContent = '';
+  const topic = clean.topicId ? ` for ${clean.topicId}` : '';
+  if (clean.status !== 'retrieved') {
+    const details = (Array.isArray(clean.errors) ? clean.errors : []).map(error => typeof error === 'string' ? error : error?.message).filter(Boolean);
+    $('learning-status').textContent = `Fresh baseline retrieval unavailable${topic}. No retrieved source excerpts or source-backed claims are shown; this branch remains an imagined path.${details.length ? ` Retrieval detail: ${details.join('; ')}` : ''}`;
+    return true;
+  }
+  $('learning-status').textContent = `${freshRetrievalStatus(clean)}${topic}${clean.retrievedAt ? ` · retrieved ${clean.retrievedAt}` : ''} The alternate sequence is hypothetical.`;
+  const sources = clean.sources;
+  const claims = clean.baselineClaims;
+  const baseline = $('learning-baseline'); baseline.replaceChildren();
+  for (const claim of claims) {
+    appendFreshSourceClaim(baseline, claim, sources);
+  }
+  if (!baseline.childElementCount) { const item = document.createElement('li'); item.textContent = 'No baseline claim matches a complete source paragraph. Model claims are listed as unverified below.'; baseline.append(item); }
+  $('learning-assumption').textContent = branch.changedAssumption || 'No changed assumption was recorded.';
+  textList($('learning-steps'), Array.isArray(branch.causalSteps) ? branch.causalSteps : []);
+  $('learning-uncertainty').textContent = branch.uncertainty || 'Uncertainty was not recorded for this branch.';
+  const unverified = freshUnverifiedClaims(branch, clean);
+  textList($('learning-unverified'), unverified.length ? unverified : ['No explicit unverified-claims list was recorded.']);
+  $('learning-demonstrates').textContent = branch.demonstrates || 'The scene illustrates the selected imagined path.';
+  $('learning-limits').textContent = branch.doesNotEstablish || 'Retrieved excerpts do not establish that the imagined events occurred.';
+  $('learning-question').textContent = branch.discussionQuestion || 'Which assumption most changes the outcome, and what evidence could help test it?';
+
+  const alternates = branchState.branches.filter(item => item.id !== branch.id && Array.isArray(item.baselineClaims));
+  const comparison = $('learning-comparison');
+  comparison.hidden = alternates.length === 0; $('comparison-content').hidden = alternates.length === 0;
+  let comparisonBranch = null;
+  if (alternates.length) {
+    const select = $('compare-branch');
+    select.replaceChildren(...alternates.map(item => new Option(item.title, item.id)));
+    if (!alternates.some(item => item.id === compareBranchId)) compareBranchId = alternates[0].id;
+    select.value = compareBranchId;
+    comparisonBranch = alternates.find(item => item.id === compareBranchId);
+    const target = $('compare-baseline'); target.replaceChildren();
+    const comparisonEvidence = normalizeFreshEvidence(comparisonBranch, evidence);
+    for (const claim of comparisonEvidence?.baselineClaims || []) appendFreshSourceClaim(target, claim, comparisonEvidence.sources);
+    if (!target.childElementCount) { const item = document.createElement('li'); item.textContent = 'No baseline claim matches a complete source paragraph. Model claims are listed as unverified below.'; target.append(item); }
+    const comparisonUnverified = freshUnverifiedClaims(comparisonBranch, comparisonEvidence);
+    textList($('compare-unverified'), comparisonUnverified.length ? comparisonUnverified : ['No explicit unverified-claims list was recorded.']);
+    $('compare-assumption').textContent = comparisonBranch.changedAssumption || 'No changed assumption recorded.';
+    textList($('compare-steps'), Array.isArray(comparisonBranch.causalSteps) ? comparisonBranch.causalSteps : []);
+    $('compare-uncertainty').textContent = comparisonBranch.uncertainty || 'No uncertainty note recorded.';
+    $('compare-limits').textContent = comparisonBranch.doesNotEstablish || 'Retrieved excerpts do not establish that the imagined events occurred.';
+  }
+  $('learning-method').textContent = `Method: ${claims.some(claim => claim.sourceIds.length) ? 'Model-selected source text' : 'Unverified model claims; complete source text unavailable'}${clean.method?.label ? ` · ${clean.method.label}` : ''}. Human source review is still required. Retrieval does not constitute human verification.`;
+  lessonExportContent = freshLessonMarkdown({ run: { divergence: $('prompt').value }, branch, comparisonBranch, evidence: clean,
+    supportedTopics: Array.isArray(clean.supportedTopics) ? clean.supportedTopics : [] });
+  $('download-lesson').hidden = !lessonExportContent;
+  const citations = $('learning-sources'); citations.replaceChildren();
+  for (const source of sources.filter(source => claims.some(claim => claim.sourceIds.includes(source.id)))) {
+    const item = document.createElement('li'); const link = document.createElement('a'); link.textContent = source.title || source.id;
+    try { const url = new URL(source.url); if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Unsupported URL'); link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; } catch { link.textContent += ' (link unavailable)'; }
+    item.append(link); citations.append(item);
+  }
+  $('learning-content').hidden = false;
+  return true;
+}
+function renderLearningPanel() {
+  const panel = $('learning-panel');
+  const branch = branchState.branches.find(item => item.id === selectedBranchId);
+  panel.hidden = !branch;
+  $('show-evidence').hidden = !branch;
+  if (!branch) return;
+  $('learning-content').hidden = true;
+  $('learning-score').hidden = true;
+  $('download-lesson').hidden = true;
+  $('learning-comparison').hidden = true;
+  lessonExportContent = '';
+  if (renderFreshLearning(branch, freshEvidenceEnvelope)) return;
+  if (learningState === 'loading') {
+    $('learning-status').textContent = 'Loading the source notes for this saved story…';
+    return;
+  }
+  if (learningState !== 'ready' || !learningEvidence) {
+    $('learning-status').textContent = currentRunId
+      ? 'Source notes are not available for this saved story. The branch remains an imagined path; no historical sources are attached here.'
+      : 'Source notes are available for selected saved stories. This live exploration has no curated source set.';
+    return;
+  }
+  const run = learningEvidence.run;
+  const evidenceBranch = Array.isArray(run?.branches)
+    ? run.branches.find(item => item.branchId === branch.id)
+    : null;
+  if (!evidenceBranch) {
+    $('learning-status').textContent = 'No source notes are available for this branch. Its events remain imagined.';
+    return;
+  }
+  $('learning-status').textContent = `Selected branch: ${evidenceBranch.title || branch.title}. Historical notes and the imagined sequence are shown separately.`;
+  const alternateBranches = Array.isArray(run.branches) ? run.branches.filter(item => item.branchId !== branch.id) : [];
+  const comparison = $('learning-comparison');
+  comparison.hidden = alternateBranches.length === 0;
+  $('comparison-content').hidden = alternateBranches.length === 0;
+  let comparisonBranch = null;
+  if (alternateBranches.length) {
+    const compareSelect = $('compare-branch');
+    compareSelect.replaceChildren(...alternateBranches.map(item => new Option(item.title, item.branchId)));
+    if (!alternateBranches.some(item => item.branchId === compareBranchId)) compareBranchId = alternateBranches[0].branchId;
+    compareSelect.value = compareBranchId;
+    comparisonBranch = alternateBranches.find(item => item.branchId === compareBranchId);
+    renderSourceFacts($('compare-baseline'), comparisonBranch.baselineSourceIds || [], learningEvidence.sources || []);
+    $('compare-assumption').textContent = comparisonBranch.changedAssumption || 'No changed assumption recorded.';
+    textList($('compare-steps'), Array.isArray(comparisonBranch.causalSteps) ? comparisonBranch.causalSteps : []);
+    $('compare-uncertainty').textContent = comparisonBranch.uncertainty || 'No uncertainty note recorded.';
+  }
+  const sources = Array.isArray(learningEvidence.sources) ? learningEvidence.sources : [];
+  const baselineIds = Array.isArray(evidenceBranch.baselineSourceIds) ? evidenceBranch.baselineSourceIds : [];
+  const baselineItems = baselineIds.map(id => ({ id, source: sources.find(item => item.id === id) })).filter(item => item.source);
+  renderSourceFacts($('learning-baseline'), baselineIds, sources);
+  $('learning-assumption').textContent = evidenceBranch.changedAssumption || 'No changed assumption was recorded.';
+  textList($('learning-steps'), Array.isArray(evidenceBranch.causalSteps) ? evidenceBranch.causalSteps : []);
+  $('learning-uncertainty').textContent = evidenceBranch.uncertainty || 'Uncertainty was not recorded for this branch.';
+  textList($('learning-unverified'), Array.isArray(evidenceBranch.unverifiedClaims) && evidenceBranch.unverifiedClaims.length
+    ? evidenceBranch.unverifiedClaims
+    : ['No explicit unverified-claims list was recorded.']);
+  $('learning-demonstrates').textContent = evidenceBranch.demonstrates || 'The scene illustrates the selected imagined path.';
+  $('learning-limits').textContent = evidenceBranch.doesNotEstablish || 'This visualization is not evidence that the imagined events occurred.';
+  $('learning-question').textContent = evidenceBranch.discussionQuestion || 'Which assumption most changes the outcome, and what evidence could help test it?';
+  const score = Number.isFinite(branch.score) ? branch.score : Number.isFinite(evidenceBranch.modelReviewScore) ? evidenceBranch.modelReviewScore : null;
+  if (score !== null) {
+    $('learning-score').textContent = `Model review score: ${score}/10 · a ranking signal for this branch, not a probability that it would happen.`;
+    $('learning-score').hidden = false;
+  }
+  const method = learningEvidence.method;
+  $('learning-method').textContent = method?.label
+    ? `Method: ${method.label}${method.scope ? ` · ${method.scope}` : ''}${method.role ? ` · ${method.role}` : ''}${method.reviewedAgainst ? ` · reviewed against ${method.reviewedAgainst}` : ''}${method.scoreDisclaimer ? ` ${method.scoreDisclaimer}` : ''}`
+    : 'Historical sources establish the starting baseline; the changed path and its causal steps are hypothetical.';
+  lessonExportContent = lessonMarkdown({ run, branch, evidenceBranch, comparisonBranch, sources, method: learningEvidence.method, score });
+  $('download-lesson').hidden = !lessonExportContent;
+  const citations = $('learning-sources'); citations.replaceChildren();
+  for (const source of baselineItems.map(item => item.source)) {
+    const item = document.createElement('li');
+    const link = document.createElement('a'); link.textContent = source.title || source.id;
+    try { const url = new URL(source.url); if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Unsupported URL'); link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; }
+    catch { link.textContent += ' (link unavailable)'; }
+    item.append(link); citations.append(item);
+  }
+  $('learning-content').hidden = false;
+}
 function selectBranch(branch) {
   if (!branch?.id) return;
   selectedBranchId = branch.id;
@@ -100,6 +302,7 @@ function selectBranch(branch) {
     button.classList.toggle('selected', selected);
     button.setAttribute('aria-pressed', String(selected));
   }
+  renderLearningPanel();
 }
 function renderTrace() { renderHeroModels(); }
 function metricText(item, fallback = 'Not recorded in this replay') {
@@ -123,14 +326,26 @@ function renderHeroModels() {
     card.append(model, role, metrics); host.append(card);
   }
 }
-function reset() { replayRequest++; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; modelRequestId++; globeApi?.select(null); document.body.classList.remove('has-story', 'invitation-open'); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG TO EXPLORE'; $('hero-title').textContent = 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = 'The strongest branch becomes a scene, then a subject to explore in three dimensions.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage('A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
+function reset() { replayRequest++; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; currentRunId = ''; learningEvidence = null; freshEvidenceEnvelope = null; learningState = 'none'; lessonExportContent = ''; compareBranchId = ''; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; modelRequestId++; globeApi?.select(null); document.body.classList.remove('has-story', 'invitation-open'); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG TO EXPLORE'; setFreshRunStatus(''); $('hero-title').textContent = 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = 'The strongest branch becomes a scene, then a subject to explore in three dimensions.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); $('learning-panel').hidden = true; $('learning-comparison').open = false; $('show-evidence').hidden = true; $('download-lesson').hidden = true; setStageMessage('A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
 function setBranch(data, event = 'complete') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchPhaseLabel(branchState.phase);
-  if (branchState.phase === 'blocked') { showGuard(data); $('map-status').textContent = 'NO BRANCHES · REFRAME REQUIRED'; status('This question needs a reframe'); renderBranches(); return; }
+  if (branchState.phase === 'blocked') { showGuard(data); $('map-status').textContent = 'NO BRANCHES · REFRAME REQUIRED'; setFreshRunStatus('The prompt was stopped by topic policy before source retrieval. Reframe it or open a saved story.', { kind: 'error', stageMessage: 'This prompt was blocked before branch or image generation.' }); status('This question needs a reframe'); renderBranches(); return; }
+  if (['evidence-unavailable', 'ungrounded', 'empty'].includes(branchState.phase)) {
+    const message = branchState.phase === 'empty'
+      ? 'No suitable branches passed review. No image was generated. Try another supported prompt or open a saved story from the archive.'
+      : completionStatus(data.branch || data);
+    const mapLabel = branchState.phase === 'evidence-unavailable' ? 'FRESH EVIDENCE UNAVAILABLE' : branchState.phase === 'ungrounded' ? 'NO GROUNDED PATHS' : 'NO SUITABLE PATHS';
+    setFreshRunStatus(message, { kind: 'error', mapLabel, stageMessage: message });
+    $('hero-title').textContent = 'No path to render';
+    $('hero-description').textContent = message;
+    setStageMessage(message);
+    renderBranches(); renderLearningPanel(); status(message); return;
+  }
   renderBranches();
   const hero = branchState.branches.find(b => b.id === branchState.heroId);
   if (hero) { selectedBranchId = hero.id; $('hero-title').textContent = hero.title; $('hero-description').textContent = hero.summary; $('selected-branch-context').hidden = true; if (!hasImage) setStageMessage('Preparing the selected scene…'); syncBranchSelection(); globeApi?.focus(hero); }
+  renderLearningPanel();
 }
 function syncBranchSelection() {
   for (const button of $('branch-list').querySelectorAll('[data-branch-id]')) {
@@ -235,50 +450,89 @@ async function loadAssets(preferredView, request = null) {
   return true;
 }
 async function loadRun(id) {
-  if (!id) return; reset(); const request = replayRequest; base = `/runs/${encodeURIComponent(id)}`; status('Opening saved story…');
+  if (!id) return; reset(); const request = replayRequest; currentRunId = id; learningState = 'loading'; base = `/runs/${encodeURIComponent(id)}`; status('Opening saved story…');
   try {
-    const [branchResponse, traceResponse, manifestResponse] = await Promise.all([fetch(asset('branch.json')),fetch(asset('trace.json')),fetch(base)]);
+    const evidencePromise = fetch(`/runs/${encodeURIComponent(id)}/evidence`).then(async response => response.ok ? await response.json() : null).catch(() => null);
+    const [branchResponse, traceResponse, manifestResponse, evidence] = await Promise.all([fetch(asset('branch.json')),fetch(asset('trace.json')),fetch(base),evidencePromise]);
     if (request !== replayRequest) return;
     if (!branchResponse.ok) throw new Error('Could not load this cached story');
     const branch = await branchResponse.json(); const record = traceResponse.ok ? await traceResponse.json() : {};
     const manifest = manifestResponse.ok ? await manifestResponse.json() : {};
     if (request !== replayRequest) return;
+    learningEvidence = evidence;
+    learningState = evidence ? 'ready' : 'unavailable';
+    if (evidence?.run?.branches?.some(item => Array.isArray(item.baselineClaims))) {
+      // The endpoint returns a digest-checked projection; its presence is the
+      // authority for treating this replay envelope as retrieved evidence.
+      freshEvidenceEnvelope = { status: evidence.sources?.length ? 'retrieved' : 'unavailable', retrievedAt: evidence.authoredAt, sources: evidence.sources || [], method: evidence.method };
+    }
     $('prompt').value = branch.divergence || '';
     const records = record.steps || branch.trace || [];
     const focusTarget = branch.status === 'blocked' ? $('guardrail') : $('workspace');
     focusTarget.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
     await replaySavedBranches(branch, records, request);
     if (request !== replayRequest) return;
+    renderLearningPanel();
     if (!await loadAssets('scene', request) || request !== replayRequest) return;
     status(manifest.status === 'simulated' ? 'Simulated guardrail · no classifier was called' : branch.status === 'blocked' ? 'This question needs a reframe' : branch.renderStatus === '2d-only' ? completionStatus(branch) : manifest.status === 'provisional' ? '2D preview · 3D model not generated' : 'Saved story ready');
   } catch (e) { if (request === replayRequest) status(e.message); }
 }
 async function handleEvent(type, data) {
-  if (type === 'policy') { if (data.allowed === false || data.status === 'blocked') showGuard(data); status(data.allowed === false ? 'This question needs a reframe' : 'Policy checked'); }
-  if (type === 'propose' || type === 'review') { setBranch(data, type); if (type === 'propose' && branchState.branches.length) globeApi?.focus(branchState.branches[0]); status(type === 'propose' && branchState.phase === 'policy-checking' ? 'Topic policy checking · candidate text is not shown yet' : type === 'propose' && branchState.phase === 'empty' ? 'No suitable branches found' : type === 'propose' ? 'Policy-cleared paths · review in progress' : 'Hero selected · assets generating'); }
+  if (type === 'evidence') {
+    freshEvidenceEnvelope = data.evidence || data;
+    if (['retrieved', 'unavailable'].includes(freshEvidenceEnvelope.status)) {
+      const retrieved = freshEvidenceEnvelope.status === 'retrieved';
+      const message = freshRetrievalStatus(freshEvidenceEnvelope);
+      setFreshRunStatus(message, { kind: retrieved ? 'progress' : 'error', mapLabel: retrieved ? 'FETCHING BASELINE EVIDENCE' : 'FRESH EVIDENCE UNAVAILABLE', stageMessage: retrieved ? 'Retrieved excerpts are being checked against branch claims…' : message });
+      status(message);
+    }
+    renderLearningPanel();
+  }
+  if (type === 'policy') {
+    if (data.allowed === false || data.status === 'blocked') {
+      showGuard(data);
+      setFreshRunStatus('The prompt was stopped by topic policy before source retrieval. Reframe it or open a saved story.', { kind: 'error', mapLabel: 'NO BRANCHES · REFRAME REQUIRED', stageMessage: 'This prompt was blocked before branch or image generation.' });
+    } else setFreshRunStatus('Prompt passed topic policy; retrieving excerpts from the registered public sources…', { mapLabel: 'RETRIEVING BASELINE', stageMessage: 'Retrieving approved-source excerpts before branch generation…' });
+    status(data.allowed === false ? 'This question needs a reframe' : 'Policy checked');
+  }
+  if (type === 'propose' || type === 'review') {
+    setBranch(data, type);
+    if (type === 'propose' && branchState.phase === 'policy-checking') setFreshRunStatus('Checking topic policy before displaying candidate paths…', { mapLabel: 'CHECKING TOPIC POLICY', stageMessage: 'Checking candidate paths against topic policy…' });
+    else if (type === 'propose' && branchState.phase === 'provisional') setFreshRunStatus('Policy-cleared candidates are ready; branch review is in progress.', { mapLabel: 'REVIEWING PATHS', stageMessage: 'Reviewing grounded branch claims and causal consistency…' });
+    else if (type === 'review' && branchState.phase === 'reviewed') setFreshRunStatus('Branch review is complete; generating the selected scene.', { mapLabel: 'GENERATING SCENE', stageMessage: 'Generating the selected branch scene…' });
+    if (type === 'propose' && branchState.branches.length) globeApi?.focus(branchState.branches[0]);
+    status(type === 'propose' && branchState.phase === 'policy-checking' ? 'Topic policy checking · candidate text is not shown yet' : type === 'propose' && branchState.phase === 'empty' ? 'No suitable branches found' : type === 'propose' ? 'Policy-cleared paths · review in progress' : 'Hero selected · assets generating');
+  }
   if (data.trace) { trace = Array.isArray(data.trace) ? data.trace : data.trace.steps || trace; renderTrace(); }
   else if (data.ms != null || data.costUsd != null) { trace.push({ step: type, model: data.model, ms: data.ms, costUsd: data.costUsd }); renderTrace(); }
   if (data.runId || data.id && type === 'complete') base = `/runs/${encodeURIComponent(data.runId || data.id)}`;
   if (data.baseUrl) base = data.baseUrl;
-  if (type === 'image' || type === 'cutout' || type === '3d' || type === 'complete') { if (type === 'cutout') { const unavailable = data.status === 'unavailable'; $('generation').hidden = unavailable; if (unavailable) status(completionStatus({ renderStatus: '2d-only' })); } if (type === '3d' || type === 'complete') $('generation').hidden = true; await loadAssets(type === '3d' || (type === 'complete' && hasModel) ? 'model' : undefined); }
-  if (type === 'error') { if (branchState.phase === 'policy-checking') { branchState = { branches: [], heroId: null, phase: 'idle' }; $('hero-tag').textContent = branchPhaseLabel('idle'); renderBranches(); } $('generation').hidden = true; status(data.message || data.error || 'The run could not be completed'); }
-  else if (type === 'complete') { const result = data.branch || data; setBranch(result); status(completionStatus(result)); }
+  if (type === 'image' || type === 'cutout' || type === '3d' || type === 'complete') {
+    if (type === 'image') setFreshRunStatus('Hero scene generated; preparing subject segmentation…', { mapLabel: 'PREPARING CUTOUT', stageMessage: 'Preparing the SAM 3.1 subject mask…' });
+    if (type === 'cutout') { const unavailable = data.status === 'unavailable'; $('generation').hidden = unavailable; if (unavailable) status(completionStatus({ renderStatus: '2d-only' })); else setFreshRunStatus('Subject cutout is ready; finishing the run…', { mapLabel: 'FINISHING RUN', stageMessage: 'Subject cutout ready.' }); }
+    if (type === '3d' || type === 'complete') $('generation').hidden = true;
+    await loadAssets(type === '3d' || (type === 'complete' && hasModel) ? 'model' : undefined);
+  }
+  if (type === 'error') { if (branchState.phase === 'policy-checking') { branchState = { branches: [], heroId: null, phase: 'idle' }; $('hero-tag').textContent = branchPhaseLabel('idle'); renderBranches(); } $('generation').hidden = true; setFreshRunStatus('Live generation failed before a completed result was confirmed. Open a saved story from the archive.', { kind: 'error', stageMessage: 'Live generation did not complete.' }); status('The live run could not be completed. Open a saved story from the archive.'); }
+  else if (type === 'complete') { const result = data.branch || data; if (result.evidence?.status) freshEvidenceEnvelope = result.evidence; setBranch(result); renderLearningPanel(); if (result.status === 'ok' && result.evidence?.status === 'retrieved') setFreshRunStatus(`${freshRetrievalStatus(result.evidence)} Fresh branch generation is complete.`, { mapLabel: 'FRESH BRANCH READY', stageMessage: 'Fresh branch and scene are ready to explore.' }); status(completionStatus(result)); }
 }
 async function runPrompt(prompt) {
   if (!prompt.trim()) return; const code = $('access').value;
   if (serviceMode === 'replay-only') { status('Showing saved runs · live generation by invite'); return; }
   if (serviceMode !== 'live-enabled') { status('Service mode could not be confirmed · open a cached story below'); return; }
   if (!code) { status('Select a cached story, or enter a live access code.'); return; }
-  reset(); $('prompt').value = prompt; status('Checking your question…');
+  reset(); const request = replayRequest; $('prompt').value = prompt; setFreshRunStatus('Checking the prompt against topic policy…', { mapLabel: 'CHECKING TOPIC POLICY', stageMessage: 'Checking the prompt before source retrieval…' }); status('Checking your question…');
   try {
     const response = await fetch('/api/run', { method:'POST', headers:{'content-type':'application/json','x-demo-access-code':code}, body:JSON.stringify({divergence:prompt}) });
+    if (request !== replayRequest) return;
     if (!response.ok || !response.body) { let msg = `Unable to start (${response.status})`; try { const body = await response.json(); msg = body.error || msg; } catch {} throw new Error(msg); }
     const reader = response.body.getReader(), decoder = new TextDecoder(); let buffer = '';
     while (true) { const {value,done} = await reader.read(); buffer += decoder.decode(value || new Uint8Array(), {stream:!done}); let match;
-      while ((match = buffer.match(/\r?\n\r?\n/))) { const block = buffer.slice(0,match.index); buffer = buffer.slice(match.index + match[0].length); const e = parseSseBlock(block); if (e) await handleEvent(e.event, e.data); }
+      if (request !== replayRequest) return;
+      while ((match = buffer.match(/\r?\n\r?\n/))) { const block = buffer.slice(0,match.index); buffer = buffer.slice(match.index + match[0].length); const e = parseSseBlock(block); if (e && request === replayRequest) await handleEvent(e.event, e.data); }
       if (done) break;
     }
-  } catch(e) { status(e.message); $('generation').hidden = true; }
+  } catch(e) { if (request === replayRequest) { status(e.message); $('generation').hidden = true; } }
 }
 $('prompt-form').addEventListener('submit', e => { e.preventDefault(); runPrompt($('prompt').value); });
  $('show-invitation').addEventListener('click', () => {
@@ -288,7 +542,23 @@ $('prompt-form').addEventListener('submit', e => { e.preventDefault(); runPrompt
   } else $('show-invitation').setAttribute('aria-expanded', 'true');
   $('prompt').focus({ preventScroll: true });
  });
-document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { $('prompt').value = b.dataset.prompt; $('prompt').focus(); }));
+document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => {
+  const prompt = button.dataset.prompt;
+  const suggestion = suggestionAction(serviceMode, savedRuns, prompt);
+  if (suggestion.action === 'open-saved-run') {
+      $('runs').value = suggestion.run.id;
+      loadRun(suggestion.run.id);
+      return;
+  }
+  if (suggestion.action === 'no-saved-match') {
+    $('prompt').value = prompt;
+    status('No saved story matches this question yet. Choose another saved story below.');
+  } else {
+    $('prompt').value = prompt;
+    if (serviceMode === 'unknown') status('Service mode could not be confirmed · open a cached story below');
+  }
+  $('prompt').focus({ preventScroll: true });
+}));
 $('retry').addEventListener('click', () => {
   const prompt = $('retry').dataset.prompt; $('prompt').value = prompt;
   if ($('access').value) { runPrompt(prompt); return; }
@@ -297,6 +567,18 @@ $('retry').addEventListener('click', () => {
   else status('No cached story matches this suggestion; select another story or enter a live access code.');
 });
 $('load-run').addEventListener('click', () => loadRun($('runs').value));
+$('compare-branch').addEventListener('change', () => {
+  compareBranchId = $('compare-branch').value;
+  renderLearningPanel();
+});
+$('download-lesson').addEventListener('click', () => {
+  if (!lessonExportContent) return;
+  const title = branchState.branches.find(branch => branch.id === selectedBranchId)?.title || 'scenario-brief';
+  const filename = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'scenario-brief'}.md`;
+  const url = URL.createObjectURL(new Blob([lessonExportContent], { type: 'text/markdown;charset=utf-8' }));
+  const link = document.createElement('a'); link.href = url; link.download = filename; link.hidden = true; document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
 $('scene-view').addEventListener('click', () => setView('scene')); $('cutout-view').addEventListener('click', () => setView('cutout')); $('model-button').addEventListener('click', () => setView('model'));
 document.querySelector('[role="tablist"]').addEventListener('keydown', event => {
   const tabs = [...document.querySelectorAll('[role="tab"]')].filter(tab => !tab.disabled);
@@ -324,10 +606,57 @@ reducedMotion.addEventListener?.('change', () => {
   }
 });
 $('back-to-atlas').addEventListener('click', () => { setView('scene'); $('scene-view').focus({ preventScroll: true }); });
+$('show-evidence').addEventListener('click', () => {
+  setView('scene');
+  requestAnimationFrame(() => {
+    $('learning-panel').scrollIntoView({ behavior: reducedMotion.matches ? 'auto' : 'smooth', block: 'nearest' });
+    $('learning-title').tabIndex = -1;
+    $('learning-title').focus({ preventScroll: true });
+  });
+});
 $('retry-model').addEventListener('click', () => { loadedModelUrl = ''; loadingModelUrl = ''; modelError = false; requestModelLoad(); setView('model'); });
 reset();
-loadServiceMode();
-fetch('/runs').then(r => r.json()).then(data => { const runs = Array.isArray(data) ? data : data.runs || []; savedRuns = runs; $('runs').replaceChildren(); if (!runs.length) { $('runs').add(new Option('No saved stories yet', '')); return; } for (const run of runs) $('runs').add(new Option(replayLabel(run), run.id)); }).catch(() => { $('runs').replaceChildren(new Option('Archive unavailable', '')); });
+async function loadSavedRuns() {
+  const picker = $('runs');
+  try {
+    const response = await fetch('/runs');
+    if (!response.ok) throw new Error(`Archive unavailable (${response.status})`);
+    const data = await response.json();
+    const runs = (Array.isArray(data) ? data : Array.isArray(data?.runs) ? data.runs : [])
+      .filter(run => run && typeof run.id === 'string' && run.id);
+    savedRuns = runs;
+    picker.replaceChildren();
+    if (!runs.length) {
+      picker.add(new Option('No saved stories yet', ''));
+      $('archive-status').textContent = 'No saved stories are available right now.';
+      return;
+    }
+    picker.add(new Option('Choose a saved story…', ''));
+    for (const run of runs) picker.add(new Option(replayLabel(run), run.id));
+    $('archive-status').textContent = `${runs.length} saved ${runs.length === 1 ? 'entry' : 'entries'} ready to open.`;
+  } catch (error) {
+    savedRuns = [];
+    picker.replaceChildren(new Option('Archive unavailable', ''));
+    $('archive-status').textContent = 'Saved stories could not be reached. Try reloading the page.';
+    status(error.message || 'Saved stories could not be reached');
+  }
+}
+async function initializeEntryPoints() {
+  await Promise.all([loadServiceMode(), loadSavedRuns()]);
+  $('runs').disabled = savedRuns.length === 0;
+  $('load-run').disabled = savedRuns.length === 0;
+  for (const button of document.querySelectorAll('[data-prompt]')) button.disabled = false;
+  if (serviceMode === 'replay-only') {
+    $('archive-status').textContent = savedRuns.length
+      ? `${savedRuns.length} saved ${savedRuns.length === 1 ? 'entry' : 'entries'} ready · choose a question to open its story.`
+      : 'No saved stories are available right now.';
+  } else if (serviceMode === 'unknown') {
+    $('archive-status').textContent = savedRuns.length
+      ? `${savedRuns.length} saved ${savedRuns.length === 1 ? 'entry' : 'entries'} ready. Live access could not be confirmed.`
+      : 'Archive and live access could not be confirmed.';
+  }
+}
+initializeEntryPoints();
 import('./visuals.js').then(async ({createGlobe,createModelViewer}) => {
   // The independent model viewer can stay available if the globe CDN fails.
   try { modelApi = createModelViewer($('model-view')); setView(activeView); }

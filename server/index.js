@@ -3,6 +3,8 @@ import { readFile, readdir, stat, realpath } from 'node:fs/promises';
 import { resolve, join, extname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { selectRunEvidence } from '../src/evidence/index.js';
+import { selectFreshEvidence } from '../src/evidence/fresh.js';
 
 const assets = new Set(['branch.json', 'trace.json', 'hero.png', 'mask.png', 'cutout.png', 'model.glb', 'model.meshopt.glb']);
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.glb': 'model/gltf-binary', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
@@ -15,7 +17,7 @@ function renderMetadata(branch) {
     : {};
 }
 
-export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), runPipeline, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now } = {}) {
+export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), evidencePath = resolve('demo/evidence/v1.json'), runPipeline, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now } = {}) {
   let busy = false;
   const requests = new Map();
   const liveRoots = new Map();
@@ -67,8 +69,8 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     }
     return result.sort((a, b) => a.id.localeCompare(b.id));
   }
-  async function manifest(id) {
-    const roots = [runsRoot, liveRoots.get(id)].filter(Boolean);
+  async function manifest(id, { cachedOnly = false } = {}) {
+    const roots = [runsRoot, ...(cachedOnly ? [] : [liveRoots.get(id)])].filter(Boolean);
     for (const candidate of roots) {
       try {
         const actualRoot = await realpath(candidate);
@@ -113,6 +115,23 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       if ((req.method === 'GET' || req.method === 'HEAD') && path === '/runs') return json(res, 200, { runs: await listRuns() });
       if ((req.method === 'GET' || req.method === 'HEAD') && path.startsWith('/runs/')) {
         const segments = path.split('/');
+        if (segments.length === 4 && safeId(segments[2]) && segments[3] === 'evidence') {
+          // Curated notes belong only to exact cached branches. Fresh evidence is
+          // read from a registered live run and validated against its own artifact.
+          const saved = await manifest(segments[2], { cachedOnly: true });
+          let evidence = null;
+          if (saved?.status === 'ok') {
+            try {
+              const dataset = JSON.parse(await readFile(evidencePath, 'utf8'));
+              evidence = selectRunEvidence(dataset, segments[2], saved.branch);
+            } catch { /* missing, malformed, or stale notes must not appear as sourced evidence */ }
+          }
+          if (!saved && liveRoots.has(segments[2])) {
+            const fresh = await manifest(segments[2]);
+            if (fresh?.branch?.status === 'ok') evidence = selectFreshEvidence(segments[2], fresh.branch);
+          }
+          return evidence ? json(res, 200, evidence) : json(res, 404, { error: 'No valid evidence is available for this run.' });
+        }
         if (segments.length === 3 && safeId(segments[2])) {
           const data = await manifest(segments[2]);
           return data ? json(res, 200, data) : json(res, 404, { error: 'Not found' });
@@ -154,7 +173,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           const controller = new AbortController();
           res.on('close', () => { if (!res.writableEnded) controller.abort(); });
           const emit = (event, data) => { if (!res.destroyed && !res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(clean(data))}\n\n`); };
-          const allowed = new Set(['policy', 'propose', 'review', 'image', 'cutout', '3d']);
+          const allowed = new Set(['policy', 'evidence', 'propose', 'review', 'image', 'cutout', '3d']);
           try {
             const result = await runner({ divergence: input.divergence.trim(), signal: controller.signal, dailyCapUsd, onStep: event => { if (allowed.has(event?.step)) { if (safeId(event.runId ?? '')) liveRoots.set(event.runId, liveRoot); emit(event.step, event); } } });
             if (safeId(result?.runId ?? '')) liveRoots.set(result.runId, liveRoot);

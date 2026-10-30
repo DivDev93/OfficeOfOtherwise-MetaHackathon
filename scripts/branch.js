@@ -1,17 +1,23 @@
 // Live run of the branch agent: `npm run branch -- "What if ...?"`
-// Uses Muse Wonder for every step. Typically a few cents. Writes out/branch-<ts>.json.
+// Uses Spark policy checks and source-informed Wonder proposal/review.
+// Writes out/branch-<ts>.json; all model calls use the shared spend ledger.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createMetaClient } from '../src/lib/metaClient.js';
 import { fileLedger } from '../src/lib/spendLedger.js';
 import { taskSpendCap } from '../src/demo/budget.js';
 import { createTopicPolicy, createModelClassifier, categoriesFromEnv } from '../src/guardrails/topicPolicy.js';
 import { createBranchAgent } from '../src/agents/branchAgent.js';
+import { resolveFreshEvidence } from '../src/evidence/fresh.js';
 
 const divergence = process.argv.slice(2).join(' ') || 'What if the Library of Alexandria never burned?';
 const model = process.env.META_TEXT_MODEL_PLANNER || 'muse-wonder-1.0';
 const client = createMetaClient({ ledger: fileLedger('out/spend.json', { requireExisting: true }), spendCapUsd: taskSpendCap({}), dailyCapUsd: Number(process.env.DEMO_DAILY_CAP_USD ?? 3) });
-const policy = createTopicPolicy({ categories: categoriesFromEnv(), classify: createModelClassifier(client, { model, categories: categoriesFromEnv() }) });
-const agent = createBranchAgent({ client, policy, model });
+const categories = categoriesFromEnv();
+const policy = createTopicPolicy({ categories,
+  classifyPrompt: createModelClassifier(client, { model: process.env.META_TEXT_MODEL_POLICY_PROMPT || 'muse-spark-1.3', categories }),
+  classifyBranches: createModelClassifier(client, { model: process.env.META_TEXT_MODEL_POLICY_BRANCHES || 'muse-spark-1.3', categories }),
+});
+const agent = createBranchAgent({ client, policy, model, evidenceResolver: resolveFreshEvidence });
 
 console.log(`divergence: ${divergence}\n`);
 const out = await agent.run({ divergence, count: 3 });

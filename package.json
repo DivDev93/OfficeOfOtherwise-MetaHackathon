@@ -17,6 +17,7 @@
     "test": "node --test",
     "harness": "node --env-file-if-exists=.env harness/run.js",
     "demo": "node --env-file-if-exists=.env server/index.js",
+    "demo:replay": "node server/replay.js",
     "cache-demo": "node --env-file-if-exists=.env scripts/cache-demo.js",
     "cache-guardrail-fixture": "node scripts/cache-guardrail-fixture.js",
     "init-demo-budget": "node scripts/init-demo-budget.js",
