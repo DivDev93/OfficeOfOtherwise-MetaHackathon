@@ -1,4 +1,4 @@
-# Scenario-creator usability plan — proposal, no results yet
+# Scenario-creator usability pilot — ready to run, no results yet
 
 ## Impact hypothesis
 
@@ -19,6 +19,18 @@ Target task time: six minutes. Do not coach the participant through the interfac
 Recruit 3–5 adult creators for moderated usability sessions. This convenience sample can reveal navigation, comprehension, and export problems; it cannot establish market demand or represent all creators. No minors are part of this proposed study. Obtain consent to take notes and quote anonymized comments; do not collect identifying information unless separately consented. Participants can skip questions or stop.
 
 Run `npm run demo:replay`. It binds to loopback, forces replay-only mode, and does not load `.env`; the task uses cached files with no provider calls or paid generation. Identify the chosen story as a counterfactual. Explain that the linked sources ground baseline facts only; they do not establish the imagined path. The 3D object is a saved illustration, not a simulation.
+
+## Run the next session now
+
+The operator will create and share participant invitations themselves. A self-service pilot page is being implemented for 1–5 anonymous links, recipient consent and task instructions, downloadable participant results, and moderator import with observed rubric scoring. Treat this as work in progress until local/browser checks and the new deployment are recorded. Link creation and returned files alone do not establish consented observation or close the pilot. The current public deployment remains source `925c110`; no participant has completed a session.
+
+The facilitator can begin with 1–3 introductions to adult creators and continue until the planned 3–5 sessions are complete. One or two sessions are useful preliminary observations; they do not satisfy the pre-registered pilot sample. Keep the target and rubric below unchanged. A builder, agent, or scripted browser walkthrough is a technical rehearsal and does not count as a participant.
+
+Before the participant arrives, check the replay opens and download works. Record the tested Git commit, replay story, browser/device, and whether it is local or deployed. Keep the moderator's technical rehearsal separate from participant results. Use the [invitation text](user-validation/INVITATION.md), [participant task](user-validation/PARTICIPANT_TASK.md) and one copy of the [session record](user-validation/SESSION_TEMPLATE.md) per person. Store raw records and exported briefs privately under ignored `out/user-validation/`; publish only consented, anonymized summaries.
+
+Allow about ten minutes total: consent and context, a six-minute task, then two short reflection questions. Start the task timer after reading the task. Do not point at controls, choose a branch, supply an answer, or silently repair their brief. Record help requests and any assistance exactly. At six minutes, record what is complete; a participant may continue if willing, with any overrun reported separately. Six minutes is a target, not an extra pass/fail rule.
+
+Consent to notes and permission to publish an anonymized quotation are separate choices. If notes are declined, do not create a scored session record. No audio/video recording is required. A refusal, withdrawal, or skipped question is not a failure. Never fill a missing response with a plausible answer or a model-generated response.
 
 ## Success rubric
 
@@ -58,3 +70,7 @@ ____________________________________________________________
 ## Reporting
 
 Publish the task, rubric, participant count, completion times, scores, anonymized observations, and limitations only after sessions happen and consent permits it. Separate observed usability from stated intent to use the tool. Do not claim user feedback, market validation, or learning outcomes before there is evidence for them.
+
+For every published result, link its anonymized session code to the observed actions, rubric scores, elapsed time, and saved brief where sharing is permitted. Record what a person did separately from what they said they might do. Report the numerator and denominator for the 80% target, and any mistaken belief that sources verify the alternate outcome. If the target is missed, preserve the result, revise the design, and label any later round separately rather than replacing the first round.
+
+**Current result: zero completed participant sessions.** The pilot materials are preparation, not observed user validation. Improvement 2 remains open until actual task observations are recorded and assessed against the existing success criteria.

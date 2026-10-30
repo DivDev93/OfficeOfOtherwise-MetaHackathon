@@ -2,10 +2,14 @@
 
 | Project | Office of Otherwise |
 | --- | --- |
-| Draft track | Startup — confirm the registered entrant and eligibility before filing |
+| Team / representative | Office of Otherwise / Divakar Dev |
+| Contributors | Divakar Dev (sole contributor) |
+| Confirmed track | Startups Track; operator confirmed the active-employee and authorized-representative condition |
 | Theme | Build for Your World |
 
 **Repository:** [DivDev93/OfficeOfOtherwise-MetaHackathon](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon)
+
+**Paste-ready official form answers:** [SUBMISSION_FIELDS.md](SUBMISSION_FIELDS.md). No entry has been submitted, no form consent checkbox has been accepted, and PR #7 remains draft.
 
 ## Project description
 
@@ -15,7 +19,9 @@ Our impact hypothesis is that scenario creators can explore visual consequences 
 
 The project uses Meta Muse Wonder for branch proposals and review; Muse Spark 1.3 is the default model for topic-policy checks on fresh runs; Muse Image renders scenes; SAM 3.1 segments a subject. The four saved traces are historical records and attribute policy/proposal/review to Wonder, not Spark. None records Spark narration. Cached SAM 3D Objects models were generated separately and attached to replay runs; their costs are unknown. This repository provides GLB validation/attachment and replay provenance, not the 3D generation service.
 
-Chronos provides the pre-existing private product context and infrastructure. It is not the hackathon deliverable, and no private Chronos code or assets are included here. The official event details allow existing products when the hackathon contribution is clearly identified; the exact registered entrant remains unconfirmed. The [published replay](https://office-otherwise-875096283797.northamerica-northeast2.run.app) was verified as replay-only on 2026-10-29. This local evidence-and-brief batch is not deployed there; recheck its status before submission.
+Chronos provides pre-existing private product context and infrastructure; it is excluded from this public deliverable and source archive. The pre-event `53a83c0` scaffold (October 26, 09:17 EDT) contains README, license, CI secret scan and structure, with no functional code. Functional implementation starts at `ba7110f` (October 26, 13:38 EDT), after the noon kickoff, and the published implementation ends at `925c110` (October 30, 00:39 EDT). The [release manifest](RELEASE_ARTIFACTS.md#event-built-scope) records the exact boundary and source ZIP. Final integration provenance remains pending.
+
+The [published replay](https://office-otherwise-875096283797.northamerica-northeast2.run.app) serves `925c110` on revision `office-otherwise-00008-hkl`, including onboarding and evidence-linked briefs; see the [2026-10-30 deployment proof](deployment/2026-10-30.md). The [public review prerelease](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/releases/tag/hackathon-preview-2026-10-30) contains the 178.733-second primary video, 80.333-second fresh-proof companion, judge package, captions and exact source archive. Later self-service pilot changes are work in progress until separately validated and deployed. Publication does not submit the entry.
 
 ## Judge setup
 
@@ -31,7 +37,7 @@ Open `http://127.0.0.1:3000`, select a saved story in the archive, and inspect i
 
 Fresh model generation is optional and separate. It requires private credentials and a configured budget; it makes metered Meta calls. A fresh harness run can generate branches, an image, and a subject mask. A fresh 3D generation is not demonstrated by the public replay; saved models were generated separately. Do not put secrets in the repository or submission.
 
-Fresh retrieval precedes branch proposal/review; partial retrieval may continue, while unsupported topics, complete failure, or no valid whole-unit baselines stop before image/3D generation. The latest fresh run, `1793334705465`, completed on 2026-10-30 UTC in **58.666 seconds**, recording **US$0.2507162** in Meta ledger estimates. MacTutor was retrieved; the other Alexandria source timed out. All three saved baselines exactly match complete source units, and the saved selector accepts the run. It produced a scene and SAM mask/cutout, with no 3D call. None of the chosen baselines selects the specific “it is thought” study paragraph; offline fixtures cover that regression. The earlier run's dropped qualifier remains documented as a historical defect. Five attempts total US$0.95696825 in estimates. No capture has been uploaded or submitted; PR #7 remains draft. See the [source-preservation record](evaluation/2026-10-30-source-uncertainty.md) for 214 passing fixture tests, artifacts, hashes, and recording limits.
+Fresh retrieval precedes branch proposal/review; partial retrieval may continue, while unsupported topics, complete failure, or no valid whole-unit baselines stop before image/3D generation. The latest fresh run, `1793334705465`, completed on 2026-10-30 UTC in **58.666 seconds**, recording **US$0.2507162** in Meta ledger estimates. MacTutor was retrieved; the other Alexandria source timed out. All three saved baselines exactly match complete source units, and the saved selector accepts the run. It produced a scene and SAM mask/cutout, with no 3D call. None of the chosen baselines selects the specific “it is thought” study paragraph; offline fixtures cover that regression. The earlier run's dropped qualifier remains documented as a historical defect. Five attempts total US$0.95696825 in estimates. The fresh-proof capture is now published in the review prerelease; the entry is not submitted and PR #7 remains draft. See the [source-preservation record](evaluation/2026-10-30-source-uncertainty.md) for 214 passing fixture tests, artifacts, hashes, and recording limits.
 
 The bounded four-prompt evaluation completed on 2026-10-29 under a separately authorized allowance; see [docs/EVALUATION.md](EVALUATION.md) and its sanitized [evidence summary](evaluation/2026-10-29-live.md). It records pipeline completion and one 2D-only result, not source quality, product impact, or user feedback. The evaluator’s one-time scope is consumed and cannot be repeated.
 
@@ -41,9 +47,12 @@ The event waiver lists **Impact (30%)**, **Meta tooling (25%)**, **Demo (25%)**,
 
 ## Submission checklist
 
-- [ ] Recheck the published replay and enter its current URL in the official form. The existing URL was verified as replay-only on 2026-10-29, before this local evidence-and-brief batch.
-- [ ] Review and publish the locally assembled three-minute demo video by Nov 4, 2026, 9:00 PM ET; add its public video URL to the official entry. No upload or submission receipt is recorded here.
-- [ ] Confirm the legal/applicant name, track, and final code range against registration and the final integration commit. Git history identifies `DivDev93` as repository code author; it does not establish the official entrant, entity, team, or behalf-of relationship.
+- [x] Publish and HTTP-verify the evidence-and-brief replay at source `925c110`; preserve [deployment evidence](deployment/2026-10-30.md).
+- [x] Publish the primary demo, fresh companion, judge package and exact source archive; preserve [downloads and hashes](RELEASE_ARTIFACTS.md). Public binary downloads were independently fetched anonymously and hash-checked.
+- [x] Confirm Office of Otherwise, sole contributor/representative Divakar Dev, Startups Track and the applicable active-employee/authorized-representative condition directly with the operator.
+- [x] Prepare [paste-ready form answers](SUBMISSION_FIELDS.md), including the operator's future API-use and opinion selections.
+- [x] Verify video/audio decoding, unchanged narration, captions, encoded frames, public download access and artifact hashes. These checks do not claim subjective listening or judge acceptance.
+- [ ] Validate and deploy the self-service pilot changes, record shipped browser proof, and update final integration/source/deployment provenance. Keep PR #7 draft until the complete local batch passes its required checks.
 - [ ] Run the proposed creator-usability pilot or state explicitly in the entry that no user feedback has yet been collected.
-- [ ] Confirm whether Meta API credits were claimed in the official account/form; this repository does not establish that status.
 - [ ] Recheck topic policy, licenses, assets, and public repository scan before final submission.
+- [ ] Review any required legal/consent checkboxes personally and submit only under separate operator authorization. No checkbox is accepted and no entry submission is authorized by this package.

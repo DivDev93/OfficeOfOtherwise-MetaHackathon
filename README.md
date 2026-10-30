@@ -6,7 +6,7 @@ Office of Otherwise is a Meta-model experiment in geographically anchored counte
 
 The impact hypothesis is that scenario creators can explore visual consequences of a what-if while keeping documented baseline facts separate from imagined outcomes. No user feedback has been collected. A small creator-usability protocol is in [docs/USER_VALIDATION.md](docs/USER_VALIDATION.md).
 
-Draft materials list the **Startup track** and frame the project around **Build for Your World**; confirm the registered entrant and track eligibility before filing. The project uses the Meta Model API for policy checks, branch proposals and review, image generation, and subject segmentation. It deliberately limits topics to science, technology, culture, and geography; political and war scenarios are out of scope.
+The confirmed team is **Office of Otherwise**, with **Divakar Dev** as its sole contributor and representative, entering the **Startups Track** under **Build for Your World**. The operator confirmed the track's active-employee and authorized-representative condition. The project uses the Meta Model API for policy checks, branch proposals and review, image generation, and subject segmentation. It deliberately limits topics to science, technology, culture, and geography; political and war scenarios are out of scope.
 
 ## Current capabilities
 
@@ -27,7 +27,7 @@ The cached 3D objects were generated separately and attached to the replay recor
 
 ## Judge onboarding: offline replay
 
-A published replay is available at [Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app). The service was verified as replay-only on 2026-10-29; this local evidence-and-brief batch is not deployed there.
+A published replay is available at [Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app). The [2026-10-30 deployment proof](docs/deployment/2026-10-30.md) verifies source `925c110` on revision `office-otherwise-00008-hkl`, including replay onboarding and evidence-linked briefs. Later self-service pilot changes remain work in progress until separately validated and deployed.
 
 Requirements: Node.js 22.9 or newer and npm.
 
@@ -52,13 +52,13 @@ npm run harness -- "What if the Library of Alexandria never burned?" --no-3d
 
 The harness records model, timing, usage, and cost estimates. Estimates are not invoices. Calls go through the shared metered Meta client and respect `META_SPEND_CAP_USD`. Tests use recorded fixtures, not live calls. The dedicated offline replay entry point does not enable live generation.
 
-Local source-preservation proof is available. The latest fresh run, `1793334705465`, completed on 2026-10-30 UTC in **58.666 seconds**, recording **US$0.2507162** in Meta ledger estimates. MacTutor was retrieved; the other Alexandria source timed out. All three saved baselines exactly match complete source units, and the saved selector accepts the run. It produced a scene and SAM mask/cutout, with no 3D call. None of the chosen baselines selects the specific “it is thought” study paragraph; offline fixtures cover that regression. The earlier run's dropped qualifier remains documented as a historical defect. Five attempts total US$0.95696825 in estimates. No capture has been uploaded or submitted; PR #7 remains draft. See the [source-preservation record](docs/evaluation/2026-10-30-source-uncertainty.md) for 214 passing fixture tests, artifacts, hashes, and recording limits.
+Source-preservation proof is available. The latest fresh run, `1793334705465`, completed on 2026-10-30 UTC in **58.666 seconds**, recording **US$0.2507162** in Meta ledger estimates. MacTutor was retrieved; the other Alexandria source timed out. All three saved baselines exactly match complete source units, and the saved selector accepts the run. It produced a scene and SAM mask/cutout, with no 3D call. None of the chosen baselines selects the specific “it is thought” study paragraph; offline fixtures cover that regression. The earlier run's dropped qualifier remains documented as a historical defect. Five attempts total US$0.95696825 in estimates. The [public review prerelease](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/releases/tag/hackathon-preview-2026-10-30) supplies the 178.733-second primary video, 80.333-second fresh-proof companion, judge package and exact `925c110` source archive. Publication is not entry submission; PR #7 remains draft. See the [release manifest](docs/RELEASE_ARTIFACTS.md) for downloads and hashes and the [source-preservation record](docs/evaluation/2026-10-30-source-uncertainty.md) for fixture tests and generation limits.
 
 ## Build and provenance
 
-The repository includes branch generation, topic guardrails, the shared Meta client, image and mask handling, the replay server/UI, cached artifacts, and GLB attachment/provenance tooling. Chronos is a separate, pre-existing private system. A fresh 3D provider job is not part of replay, and an attached GLB must not be presented as a job run by this repository.
+The repository includes branch generation, topic guardrails, the shared Meta client, image and mask handling, the replay server/UI, cached artifacts, and GLB attachment/provenance tooling. Functional event-built work begins at `ba7110f` on October 26 at 13:38 EDT, after the noon kickoff; the pre-event `53a83c0` scaffold contains no functional code. The published source snapshot ends at `925c110`; the final integration commit remains pending. Chronos is a separate, pre-existing private system excluded from this public source. A fresh 3D provider job is not part of replay, and an attached GLB must not be presented as a job run by this repository.
 
-See [docs/SUBMISSION.md](docs/SUBMISSION.md) for submission facts and open checklist items, [docs/HACKATHON.md](docs/HACKATHON.md) for the build log, [docs/USER_VALIDATION.md](docs/USER_VALIDATION.md) for the proposed creator-usability study, and [docs/EVALUATION.md](docs/EVALUATION.md) for the dry-run-first live evaluation preflight.
+See [docs/SUBMISSION.md](docs/SUBMISSION.md) for submission facts and open checklist items, [docs/SUBMISSION_FIELDS.md](docs/SUBMISSION_FIELDS.md) for paste-ready form answers, [docs/HACKATHON.md](docs/HACKATHON.md) for the build log, [docs/USER_VALIDATION.md](docs/USER_VALIDATION.md) for the proposed creator-usability study, and [docs/EVALUATION.md](docs/EVALUATION.md) for the dry-run-first live evaluation preflight.
 
 ## License and asset notices
 

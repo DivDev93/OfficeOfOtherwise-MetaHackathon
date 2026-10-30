@@ -44,6 +44,19 @@ The Cloud Run runtime identity needs `roles/secretmanager.secretAccessor` on bot
 
 ## Deploy
 
+For an existing service, prefer an **image-only update** after local container tests pass. Inspect the current revision, traffic, runtime settings, secret references and IAM first, and preserve them. The provisioning example below is for initial setup: applying it to an existing service can replace environment settings, change instance limits or secret versions, and target the wrong region. Do not recreate resources, enable APIs, or reset budgets for a routine image update.
+
+```bash
+gcloud run services update office-otherwise \
+  --project="$PROJECT_ID" \
+  --region="$REGION" \
+  --image="$IMAGE"
+```
+
+Record the prior revision for rollback, then verify that the new revision is ready, receives the intended traffic, retains the existing configuration, and passes the public replay checks. An image update does not require a merge to the repository's default branch. The dated public verification receipt is in [deployment/2026-10-30.md](deployment/2026-10-30.md).
+
+For initial service provisioning only:
+
 ```bash
 META_KEY_ENV="META_API_KEY"
 gcloud run deploy office-otherwise \
