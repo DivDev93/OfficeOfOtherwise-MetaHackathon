@@ -1,5 +1,11 @@
 # Agent rules: Office of Otherwise
 
+## Submission freeze — operator instruction, 2026-10-30
+
+Through November 4, 2026 (America/Toronto), do not add features or continue pilot/feedback work. Make only fixes explicitly requested by the operator. Deploy only an exact committed `main` HEAD; do not deploy `develop`, a draft PR or an unmerged branch. Keep PR #7 open, draft and unmerged, parked until after the Meta hackathon submission. Preserve the pilot revision and its work; do not resume or submit the hackathon entry without a later operator instruction.
+
+For the October 30 rollback, the operator explicitly authorized recording the rollback directly on `main`, pushing it, and aligning the serving image with that `main` HEAD. This is a scoped exception to the usual develop-to-main integration workflow.
+
 This is a **public** repo submitted to the Meta Global AI Developer Hackathon. Everything committed here is visible to judges and the world.
 
 1. **No secrets, ever.** No API keys, no service account JSON, no `*.a.run.app` URLs, no GCS bucket names, no `TATTVA_*` values. Config comes from env; only `.env.example` is committed. CI runs gitleaks with `.gitleaks.toml`.
