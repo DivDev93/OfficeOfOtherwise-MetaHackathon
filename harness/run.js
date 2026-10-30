@@ -10,9 +10,10 @@ import { createSamMask } from '../src/providers/samMask.js';
 import { writeMaskPng, writeCutoutPng, decodePng } from '../src/lib/png.js';
 import { createChronos3dClient, chronosIdempotencyKey } from '../src/providers/chronos3d.js';
 import { taskSpendCap } from '../src/demo/budget.js';
+import { freshEvidenceDigest, resolveFreshEvidence } from '../src/evidence/fresh.js';
 
 /** Run the chain with a single metered client. Dependencies may be injected for tests. */
-export async function runHarness({ divergence, from, subjectOverride, client, agent, image, sam, policy, outputRoot = 'out', timestamp = Date.now(), log = console.log, apiCalls = [], onStep, chronos3d, no3d = true, signal }) {
+export async function runHarness({ divergence, from, subjectOverride, client, agent, image, sam, policy, outputRoot = 'out', timestamp = Date.now(), log = console.log, apiCalls = [], onStep, chronos3d, no3d = true, signal, requireEvidence = false }) {
   if (subjectOverride !== undefined && (!from || typeof subjectOverride !== 'string' || !subjectOverride.trim())) throw new Error('A nonempty subject override requires a saved branch');
   if (!no3d && typeof chronos3d?.generate !== 'function') throw new Error('Chronos 3D client is required');
   const throwIfAborted = () => { if (signal?.aborted) throw new Error('Run aborted'); };
@@ -34,7 +35,14 @@ export async function runHarness({ divergence, from, subjectOverride, client, ag
     persistTrace();
     throw error;
   }
-  if (!branch || !['ok', 'blocked', 'empty'].includes(branch.status)) throw new Error('Invalid saved branch status');
+  if (!branch || !['ok', 'blocked', 'empty', 'evidence_unavailable', 'ungrounded'].includes(branch.status)) throw new Error('Invalid saved branch status');
+  if (!from && requireEvidence && branch.status === 'ok' && (!branch.evidence || branch.evidence.status !== 'retrieved' || !Array.isArray(branch.evidence.sources) || !branch.evidence.sources.length)) {
+    branch = { ...branch, status: 'evidence_unavailable', reason: 'fresh_generation_requires_verified_sources', hero: null, branches: [] };
+  }
+  if (!from && branch.evidence) {
+    branch.runId = runId;
+    branch.evidence.artifactSha256 = freshEvidenceDigest(branch);
+  }
   writeFileSync(join(directory, 'branch.json'), JSON.stringify(branch, null, 2));
   // Agent policy traces are aggregate summaries; record each actual API call separately.
   trace.push(...apiCalls);
@@ -44,6 +52,7 @@ export async function runHarness({ divergence, from, subjectOverride, client, ag
   if (branch.status !== 'ok') {
     if (branch.reframe) log(`reframe: ${branch.reframe}`);
     if (branch.reason) log(`reason: ${branch.reason}`);
+    if (branch.status === 'evidence_unavailable' || branch.status === 'ungrounded') log('No image or 3D generation was started because fresh baseline evidence was unavailable or could not support the proposed branches.');
     for (const r of branch.rejected ?? []) log(`rejected: ${r.category ?? r.reason ?? 'off policy'}`);
     log(`run cost: $${(client.spent() - startedSpent).toFixed(5)} | saved: ${directory}`);
     return { directory, branch, trace, costUsd: client.spent() - startedSpent };
@@ -192,8 +201,8 @@ async function main() {
     classifyPrompt: createModelClassifier(agentClient, { model: promptPolicyModel, categories }),
     classifyBranches: createModelClassifier(agentClient, { model: branchPolicyModel, categories }),
   });
-  const agent = createBranchAgent({ client: agentClient, policy, model });
-  await runHarness({ divergence, from, subjectOverride, client, agent, image: createMetaImage({ client }), sam: createSamMask({ client }), policy, apiCalls, chronos3d, no3d });
+  const agent = createBranchAgent({ client: agentClient, policy, model, evidenceResolver: from ? undefined : resolveFreshEvidence });
+  await runHarness({ divergence, from, subjectOverride, client, agent, image: createMetaImage({ client }), sam: createSamMask({ client }), policy, apiCalls, chronos3d, no3d, requireEvidence: !from });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

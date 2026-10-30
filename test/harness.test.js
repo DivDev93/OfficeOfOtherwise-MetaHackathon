@@ -245,6 +245,20 @@ test('3D is opt-in for injected harness calls and missing client fails before ag
   assert.equal(called,false);
 });
 
+test('fresh runs requiring evidence stop before rendering when the agent has no retrieved sources', async () => {
+  const dir = temp();
+  let imageCalls = 0;
+  try {
+    const result = await runHarness({ divergence: 'What if Alexandria library survived?', requireEvidence: true, client: { spent: () => 0 },
+      agent: { run: async () => ({ status: 'ok', divergence: 'What if Alexandria library survived?', branches: [{ id: 'b1' }], hero: { imagePrompt: 'image', subject: 'object' }, trace: [] }) },
+      image: { generate: async () => { imageCalls++; } }, sam: { segment: async () => { throw new Error('must not segment'); } }, outputRoot: dir, timestamp: 88, log() {} });
+    assert.equal(result.branch.status, 'evidence_unavailable');
+    assert.equal(result.branch.hero, null);
+    assert.equal(imageCalls, 0);
+    assert.equal(JSON.parse(readFileSync(join(dir, '88', 'branch.json'))).status, 'evidence_unavailable');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('CLI refuses unconfirmed 3D before Meta work', () => {
   const dir=temp();
   try { const env={...process.env,CHRONOS_3D_CAPABILITY_CONFIRMED:'false'}; const script=fileURLToPath(new URL('../harness/run.js',import.meta.url));

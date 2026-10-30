@@ -22,6 +22,8 @@
         <form id="prompt-form">
           <label for="prompt">YOUR POINT OF DIVERGENCE</label>
           <div class="input-row"><textarea id="prompt" rows="2" required maxlength="500" placeholder="What if the Sahara had stayed green?" autocomplete="off"></textarea><button id="live-submit" class="primary" type="submit" disabled>Explore <span aria-hidden="true">↗</span></button></div>
+          <p id="fresh-evidence-scope" class="fresh-evidence-scope">Fresh evidence retrieval is limited to four registered topics: Alexandria, Beringia, the Green Sahara, and Antikythera-style mechanisms.</p>
+          <p id="fresh-run-status" class="fresh-run-status" role="status" aria-live="polite" hidden></p>
           <details id="live-access" hidden><summary>Live access</summary><label for="access">Demo access code</label><input id="access" type="password" autocomplete="off" placeholder="Required for live generation"><small>Without a code, select a cached story below.</small></details>
         </form>
         <div class="archive-picker"><label for="runs">THE ARCHIVE <span>· CACHED RUNS</span></label><p id="archive-status" class="archive-status" role="status" aria-live="polite">Checking saved stories…</p><div class="input-row"><select id="runs" disabled><option value="">Loading saved stories…</option></select><button id="load-run" class="outline" type="button" disabled>Open ↗</button></div></div>
@@ -65,6 +67,8 @@
                 <div><h4>Changed assumption</h4><p id="compare-assumption"></p></div>
                 <div><h4>How the path unfolds</h4><ol id="compare-steps"></ol></div>
                 <div><h4>Uncertainty</h4><p id="compare-uncertainty"></p></div>
+                <div><h4>Unverified claims</h4><ul id="compare-unverified"></ul></div>
+                <div><h4>What this path does not establish</h4><p id="compare-limits"></p></div>
               </div>
             </details>
             <section class="learning-block"><h4>Starting evidence</h4><ul id="learning-baseline"></ul></section>

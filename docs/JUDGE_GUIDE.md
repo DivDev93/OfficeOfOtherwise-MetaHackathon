@@ -12,7 +12,7 @@ npm test
 npm run demo:replay
 ```
 
-Open `http://127.0.0.1:3000`. In the invitation panel, scroll to **The Archive**, choose **Alexandria**, and select **Open**. This dedicated entry point binds to loopback, forces replay-only mode, and does not load `.env`; it does not require credentials or contact Meta or a 3D provider. The four complete saved stories are Alexandria, Beringia, Green Sahara, and Mechanisms. **Simulated guardrail** is a fixture, not an actual classifier result.
+Open `http://127.0.0.1:3000` and click the **Library of Alexandria** starter suggestion in the invitation panel; replay-only mode opens its matching cached story. This dedicated entry point binds to loopback, forces replay-only mode, and does not load `.env`; it does not require credentials or contact Meta or a 3D provider. The four complete saved stories are Alexandria, Beringia, Green Sahara, and Mechanisms. **Simulated guardrail** is a fixture, not an actual classifier result.
 
 ## Three-minute inspection
 
@@ -31,5 +31,11 @@ The recorded three-minute demo is assembled from saved local replay captures wit
 - The four saved 3D models were generated separately and attached to replay records. The attachment tool validates a supplied GLB; it does not generate a model.
 - The product’s value to writers, worldbuilders, and concept artists is an unvalidated hypothesis; no user feedback has been collected. Curated source notes link to baseline facts; counterfactual causal chains remain speculative, and the orbitable object does not establish them.
 - Chronos is pre-existing and private. No Chronos code is part of this public repository.
+
+## Fresh evidence path and limits
+
+Fresh model-assisted runs re-fetch public excerpts after prompt-policy approval and before branch proposal/review. Retrieval is restricted to a fixed registry for Alexandria, Beringia, Green Sahara climate, and ancient mechanisms; the prompt is never sent to an arbitrary search service. Some registered source fetches may fail while others succeed, in which case only successful excerpts are used and the failure is surfaced. If no source is retrieved, or no branch has valid source links and uncertainty fields, the run stops before image/3D generation.
+
+The retrieved text is baseline context, not independently verified evidence for every model-generated claim. The UI and exported brief label claims as model-derived. Sources do not prove a counterfactual outcome. Separately from the offline replay above, a local fresh-run capture completed on 2026-10-29 ET. Its final run took 73.146 seconds, retrieved one MacTutor Aristarchus excerpt while the other registered Alexandria source timed out, and produced three branches, a scene image, and a SAM 3.1 mask/cutout. No 3D provider was called. Manual text-to-excerpt review found branch b1 states too definitively a point that the source hedges as “is thought”; this does not independently validate the historical claim or source completeness. Four fresh-run attempts together recorded US$0.70625205 in shared-ledger cost estimates. The capture has not been uploaded or submitted. See the [fresh-evidence evaluation](evaluation/2026-10-29-fresh-evidence.md) and [fresh-run recording procedure](recording/FRESH_RUN.md).
 
 The event criteria published in the [official waiver](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/waiver) weight Impact 30%, Meta tooling 25%, Demo 25%, and Technical 20%. This submission should foreground a concrete creator task while being candid that user value has not yet been measured.

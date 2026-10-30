@@ -1,9 +1,18 @@
-import { retryPrompt, formatYear, modelCardSteps, replayTraceGroups, parseSseBlock, availableView, completionStatus, cachedRetryRun, suggestionAction, sourceVerificationLabel, lessonMarkdown, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from './logic.js';
+import { retryPrompt, formatYear, modelCardSteps, replayTraceGroups, parseSseBlock, availableView, completionStatus, freshRetrievalStatus, cachedRetryRun, suggestionAction, sourceVerificationLabel, lessonMarkdown, normalizeFreshEvidence, freshUnverifiedClaims, freshLessonMarkdown, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress } from './logic.js';
 const $ = id => document.getElementById(id);
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', globeApi = null, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0, currentRunId = '', learningEvidence = null, learningState = 'none', lessonExportContent = '', compareBranchId = '';
+let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', globeApi = null, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0, currentRunId = '', learningEvidence = null, freshEvidenceEnvelope = null, learningState = 'none', lessonExportContent = '', compareBranchId = '';
 const status = text => $('status').textContent = text;
 const setStageMessage = text => { const copy = $('stage-empty').querySelector('p'); if (copy) copy.textContent = text; };
+function setFreshRunStatus(message, { kind = 'progress', mapLabel = null, stageMessage = null } = {}) {
+  const host = $('fresh-run-status');
+  host.hidden = !message;
+  host.dataset.state = kind;
+  host.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  host.textContent = message;
+  if (mapLabel) $('map-status').textContent = mapLabel;
+  if (stageMessage) setStageMessage(stageMessage);
+}
 const asset = name => `${base}/${name}`;
 function applyServiceMode(mode) {
   serviceMode = mode;
@@ -111,6 +120,89 @@ function renderSourceFacts(host, ids, sources) {
     item.append(fact, link); host.append(item);
   }
 }
+function appendFreshSourceClaim(host, claim, sources) {
+  const linked = claim.sourceIds.map(id => sources.find(source => source.id === id)).filter(Boolean);
+  if (!linked.length) return false;
+  const item = document.createElement('li');
+  const text = document.createElement('p'); text.textContent = claim.text; item.append(text);
+  for (const source of linked) {
+    const citation = document.createElement('div'); citation.className = 'fresh-citation';
+    const link = document.createElement('a');
+    link.textContent = `${source.title || source.id}${source.publisher ? ` · ${source.publisher}` : ''}${source.checkedDate ? ` · checked ${source.checkedDate}` : ''} · Retrieved excerpt`;
+    try { const url = new URL(source.url); if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Unsupported source URL'); link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; }
+    catch { link.removeAttribute('href'); link.removeAttribute('target'); }
+    citation.append(link);
+    const excerpt = document.createElement('blockquote'); excerpt.textContent = source.excerpt; citation.append(excerpt);
+    item.append(citation);
+  }
+  host.append(item);
+  return true;
+}
+function renderFreshLearning(branch, evidence) {
+  const clean = normalizeFreshEvidence(branch, evidence);
+  if (!clean) return false;
+  $('learning-content').hidden = true;
+  $('learning-score').hidden = true;
+  $('download-lesson').hidden = true;
+  $('learning-comparison').hidden = true;
+  lessonExportContent = '';
+  const topic = clean.topicId ? ` for ${clean.topicId}` : '';
+  if (clean.status !== 'retrieved') {
+    const details = (Array.isArray(clean.errors) ? clean.errors : []).map(error => typeof error === 'string' ? error : error?.message).filter(Boolean);
+    $('learning-status').textContent = `Fresh baseline retrieval unavailable${topic}. No retrieved source excerpts or source-backed claims are shown; this branch remains an imagined path.${details.length ? ` Retrieval detail: ${details.join('; ')}` : ''}`;
+    return true;
+  }
+  $('learning-status').textContent = `${freshRetrievalStatus(clean)}${topic}${clean.retrievedAt ? ` · retrieved ${clean.retrievedAt}` : ''} The alternate sequence is hypothetical.`;
+  const sources = clean.sources;
+  const claims = clean.baselineClaims;
+  const baseline = $('learning-baseline'); baseline.replaceChildren();
+  for (const claim of claims) {
+    appendFreshSourceClaim(baseline, claim, sources);
+  }
+  if (!baseline.childElementCount) { const item = document.createElement('li'); item.textContent = 'No baseline claim has a valid source link.'; baseline.append(item); }
+  $('learning-assumption').textContent = branch.changedAssumption || 'No changed assumption was recorded.';
+  textList($('learning-steps'), Array.isArray(branch.causalSteps) ? branch.causalSteps : []);
+  $('learning-uncertainty').textContent = branch.uncertainty || 'Uncertainty was not recorded for this branch.';
+  const unverified = freshUnverifiedClaims(branch, clean);
+  textList($('learning-unverified'), unverified.length ? unverified : ['No explicit unverified-claims list was recorded.']);
+  $('learning-demonstrates').textContent = branch.demonstrates || 'The scene illustrates the selected imagined path.';
+  $('learning-limits').textContent = branch.doesNotEstablish || 'Retrieved excerpts do not establish that the imagined events occurred.';
+  $('learning-question').textContent = branch.discussionQuestion || 'Which assumption most changes the outcome, and what evidence could help test it?';
+
+  const alternates = branchState.branches.filter(item => item.id !== branch.id && Array.isArray(item.baselineClaims));
+  const comparison = $('learning-comparison');
+  comparison.hidden = alternates.length === 0; $('comparison-content').hidden = alternates.length === 0;
+  let comparisonBranch = null;
+  if (alternates.length) {
+    const select = $('compare-branch');
+    select.replaceChildren(...alternates.map(item => new Option(item.title, item.id)));
+    if (!alternates.some(item => item.id === compareBranchId)) compareBranchId = alternates[0].id;
+    select.value = compareBranchId;
+    comparisonBranch = alternates.find(item => item.id === compareBranchId);
+    const target = $('compare-baseline'); target.replaceChildren();
+    const comparisonEvidence = normalizeFreshEvidence(comparisonBranch, evidence);
+    for (const claim of comparisonEvidence?.baselineClaims || []) appendFreshSourceClaim(target, claim, comparisonEvidence.sources);
+    if (!target.childElementCount) { const item = document.createElement('li'); item.textContent = 'No baseline claim has a valid source link.'; target.append(item); }
+    const comparisonUnverified = freshUnverifiedClaims(comparisonBranch, comparisonEvidence);
+    textList($('compare-unverified'), comparisonUnverified.length ? comparisonUnverified : ['No explicit unverified-claims list was recorded.']);
+    $('compare-assumption').textContent = comparisonBranch.changedAssumption || 'No changed assumption recorded.';
+    textList($('compare-steps'), Array.isArray(comparisonBranch.causalSteps) ? comparisonBranch.causalSteps : []);
+    $('compare-uncertainty').textContent = comparisonBranch.uncertainty || 'No uncertainty note recorded.';
+    $('compare-limits').textContent = comparisonBranch.doesNotEstablish || 'Retrieved excerpts do not establish that the imagined events occurred.';
+  }
+  $('learning-method').textContent = `Method: Retrieved excerpt; model-derived claims${clean.method?.label ? ` · ${clean.method.label}` : ''}. Retrieval does not constitute human verification.`;
+  lessonExportContent = freshLessonMarkdown({ run: { divergence: $('prompt').value }, branch, comparisonBranch, evidence: clean,
+    supportedTopics: Array.isArray(clean.supportedTopics) ? clean.supportedTopics : [] });
+  $('download-lesson').hidden = !lessonExportContent;
+  const citations = $('learning-sources'); citations.replaceChildren();
+  for (const source of sources.filter(source => claims.some(claim => claim.sourceIds.includes(source.id)))) {
+    const item = document.createElement('li'); const link = document.createElement('a'); link.textContent = source.title || source.id;
+    try { const url = new URL(source.url); if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Unsupported URL'); link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; } catch { link.textContent += ' (link unavailable)'; }
+    item.append(link); citations.append(item);
+  }
+  $('learning-content').hidden = false;
+  return true;
+}
 function renderLearningPanel() {
   const panel = $('learning-panel');
   const branch = branchState.branches.find(item => item.id === selectedBranchId);
@@ -122,6 +214,7 @@ function renderLearningPanel() {
   $('download-lesson').hidden = true;
   $('learning-comparison').hidden = true;
   lessonExportContent = '';
+  if (renderFreshLearning(branch, freshEvidenceEnvelope)) return;
   if (learningState === 'loading') {
     $('learning-status').textContent = 'Loading the source notes for this saved story…';
     return;
@@ -233,11 +326,22 @@ function renderHeroModels() {
     card.append(model, role, metrics); host.append(card);
   }
 }
-function reset() { replayRequest++; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; currentRunId = ''; learningEvidence = null; learningState = 'none'; lessonExportContent = ''; compareBranchId = ''; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; modelRequestId++; globeApi?.select(null); document.body.classList.remove('has-story', 'invitation-open'); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG TO EXPLORE'; $('hero-title').textContent = 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = 'The strongest branch becomes a scene, then a subject to explore in three dimensions.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); $('learning-panel').hidden = true; $('learning-comparison').open = false; $('show-evidence').hidden = true; $('download-lesson').hidden = true; setStageMessage('A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
+function reset() { replayRequest++; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; currentRunId = ''; learningEvidence = null; freshEvidenceEnvelope = null; learningState = 'none'; lessonExportContent = ''; compareBranchId = ''; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; modelRequestId++; globeApi?.select(null); document.body.classList.remove('has-story', 'invitation-open'); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG TO EXPLORE'; setFreshRunStatus(''); $('hero-title').textContent = 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = 'The strongest branch becomes a scene, then a subject to explore in three dimensions.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); $('learning-panel').hidden = true; $('learning-comparison').open = false; $('show-evidence').hidden = true; $('download-lesson').hidden = true; setStageMessage('A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
 function setBranch(data, event = 'complete') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchPhaseLabel(branchState.phase);
-  if (branchState.phase === 'blocked') { showGuard(data); $('map-status').textContent = 'NO BRANCHES · REFRAME REQUIRED'; status('This question needs a reframe'); renderBranches(); return; }
+  if (branchState.phase === 'blocked') { showGuard(data); $('map-status').textContent = 'NO BRANCHES · REFRAME REQUIRED'; setFreshRunStatus('The prompt was stopped by topic policy before source retrieval. Reframe it or open a saved story.', { kind: 'error', stageMessage: 'This prompt was blocked before branch or image generation.' }); status('This question needs a reframe'); renderBranches(); return; }
+  if (['evidence-unavailable', 'ungrounded', 'empty'].includes(branchState.phase)) {
+    const message = branchState.phase === 'empty'
+      ? 'No suitable branches passed review. No image was generated. Try another supported prompt or open a saved story from the archive.'
+      : completionStatus(data.branch || data);
+    const mapLabel = branchState.phase === 'evidence-unavailable' ? 'FRESH EVIDENCE UNAVAILABLE' : branchState.phase === 'ungrounded' ? 'NO GROUNDED PATHS' : 'NO SUITABLE PATHS';
+    setFreshRunStatus(message, { kind: 'error', mapLabel, stageMessage: message });
+    $('hero-title').textContent = 'No path to render';
+    $('hero-description').textContent = message;
+    setStageMessage(message);
+    renderBranches(); renderLearningPanel(); status(message); return;
+  }
   renderBranches();
   const hero = branchState.branches.find(b => b.id === branchState.heroId);
   if (hero) { selectedBranchId = hero.id; $('hero-title').textContent = hero.title; $('hero-description').textContent = hero.summary; $('selected-branch-context').hidden = true; if (!hasImage) setStageMessage('Preparing the selected scene…'); syncBranchSelection(); globeApi?.focus(hero); }
@@ -357,6 +461,11 @@ async function loadRun(id) {
     if (request !== replayRequest) return;
     learningEvidence = evidence;
     learningState = evidence ? 'ready' : 'unavailable';
+    if (evidence?.run?.branches?.some(item => Array.isArray(item.baselineClaims))) {
+      // The endpoint returns a digest-checked projection; its presence is the
+      // authority for treating this replay envelope as retrieved evidence.
+      freshEvidenceEnvelope = { status: evidence.sources?.length ? 'retrieved' : 'unavailable', retrievedAt: evidence.authoredAt, sources: evidence.sources || [], method: evidence.method };
+    }
     $('prompt').value = branch.divergence || '';
     const records = record.steps || branch.trace || [];
     const focusTarget = branch.status === 'blocked' ? $('guardrail') : $('workspace');
@@ -369,31 +478,61 @@ async function loadRun(id) {
   } catch (e) { if (request === replayRequest) status(e.message); }
 }
 async function handleEvent(type, data) {
-  if (type === 'policy') { if (data.allowed === false || data.status === 'blocked') showGuard(data); status(data.allowed === false ? 'This question needs a reframe' : 'Policy checked'); }
-  if (type === 'propose' || type === 'review') { setBranch(data, type); if (type === 'propose' && branchState.branches.length) globeApi?.focus(branchState.branches[0]); status(type === 'propose' && branchState.phase === 'policy-checking' ? 'Topic policy checking · candidate text is not shown yet' : type === 'propose' && branchState.phase === 'empty' ? 'No suitable branches found' : type === 'propose' ? 'Policy-cleared paths · review in progress' : 'Hero selected · assets generating'); }
+  if (type === 'evidence') {
+    freshEvidenceEnvelope = data.evidence || data;
+    if (['retrieved', 'unavailable'].includes(freshEvidenceEnvelope.status)) {
+      const retrieved = freshEvidenceEnvelope.status === 'retrieved';
+      const message = freshRetrievalStatus(freshEvidenceEnvelope);
+      setFreshRunStatus(message, { kind: retrieved ? 'progress' : 'error', mapLabel: retrieved ? 'FETCHING BASELINE EVIDENCE' : 'FRESH EVIDENCE UNAVAILABLE', stageMessage: retrieved ? 'Retrieved excerpts are being checked against branch claims…' : message });
+      status(message);
+    }
+    renderLearningPanel();
+  }
+  if (type === 'policy') {
+    if (data.allowed === false || data.status === 'blocked') {
+      showGuard(data);
+      setFreshRunStatus('The prompt was stopped by topic policy before source retrieval. Reframe it or open a saved story.', { kind: 'error', mapLabel: 'NO BRANCHES · REFRAME REQUIRED', stageMessage: 'This prompt was blocked before branch or image generation.' });
+    } else setFreshRunStatus('Prompt passed topic policy; retrieving excerpts from the registered public sources…', { mapLabel: 'RETRIEVING BASELINE', stageMessage: 'Retrieving approved-source excerpts before branch generation…' });
+    status(data.allowed === false ? 'This question needs a reframe' : 'Policy checked');
+  }
+  if (type === 'propose' || type === 'review') {
+    setBranch(data, type);
+    if (type === 'propose' && branchState.phase === 'policy-checking') setFreshRunStatus('Checking topic policy before displaying candidate paths…', { mapLabel: 'CHECKING TOPIC POLICY', stageMessage: 'Checking candidate paths against topic policy…' });
+    else if (type === 'propose' && branchState.phase === 'provisional') setFreshRunStatus('Policy-cleared candidates are ready; branch review is in progress.', { mapLabel: 'REVIEWING PATHS', stageMessage: 'Reviewing grounded branch claims and causal consistency…' });
+    else if (type === 'review' && branchState.phase === 'reviewed') setFreshRunStatus('Branch review is complete; generating the selected scene.', { mapLabel: 'GENERATING SCENE', stageMessage: 'Generating the selected branch scene…' });
+    if (type === 'propose' && branchState.branches.length) globeApi?.focus(branchState.branches[0]);
+    status(type === 'propose' && branchState.phase === 'policy-checking' ? 'Topic policy checking · candidate text is not shown yet' : type === 'propose' && branchState.phase === 'empty' ? 'No suitable branches found' : type === 'propose' ? 'Policy-cleared paths · review in progress' : 'Hero selected · assets generating');
+  }
   if (data.trace) { trace = Array.isArray(data.trace) ? data.trace : data.trace.steps || trace; renderTrace(); }
   else if (data.ms != null || data.costUsd != null) { trace.push({ step: type, model: data.model, ms: data.ms, costUsd: data.costUsd }); renderTrace(); }
   if (data.runId || data.id && type === 'complete') base = `/runs/${encodeURIComponent(data.runId || data.id)}`;
   if (data.baseUrl) base = data.baseUrl;
-  if (type === 'image' || type === 'cutout' || type === '3d' || type === 'complete') { if (type === 'cutout') { const unavailable = data.status === 'unavailable'; $('generation').hidden = unavailable; if (unavailable) status(completionStatus({ renderStatus: '2d-only' })); } if (type === '3d' || type === 'complete') $('generation').hidden = true; await loadAssets(type === '3d' || (type === 'complete' && hasModel) ? 'model' : undefined); }
-  if (type === 'error') { if (branchState.phase === 'policy-checking') { branchState = { branches: [], heroId: null, phase: 'idle' }; $('hero-tag').textContent = branchPhaseLabel('idle'); renderBranches(); } $('generation').hidden = true; status(data.message || data.error || 'The run could not be completed'); }
-  else if (type === 'complete') { const result = data.branch || data; setBranch(result); status(completionStatus(result)); }
+  if (type === 'image' || type === 'cutout' || type === '3d' || type === 'complete') {
+    if (type === 'image') setFreshRunStatus('Hero scene generated; preparing subject segmentation…', { mapLabel: 'PREPARING CUTOUT', stageMessage: 'Preparing the SAM 3.1 subject mask…' });
+    if (type === 'cutout') { const unavailable = data.status === 'unavailable'; $('generation').hidden = unavailable; if (unavailable) status(completionStatus({ renderStatus: '2d-only' })); else setFreshRunStatus('Subject cutout is ready; finishing the run…', { mapLabel: 'FINISHING RUN', stageMessage: 'Subject cutout ready.' }); }
+    if (type === '3d' || type === 'complete') $('generation').hidden = true;
+    await loadAssets(type === '3d' || (type === 'complete' && hasModel) ? 'model' : undefined);
+  }
+  if (type === 'error') { if (branchState.phase === 'policy-checking') { branchState = { branches: [], heroId: null, phase: 'idle' }; $('hero-tag').textContent = branchPhaseLabel('idle'); renderBranches(); } $('generation').hidden = true; setFreshRunStatus('Live generation failed before a completed result was confirmed. Open a saved story from the archive.', { kind: 'error', stageMessage: 'Live generation did not complete.' }); status('The live run could not be completed. Open a saved story from the archive.'); }
+  else if (type === 'complete') { const result = data.branch || data; if (result.evidence?.status) freshEvidenceEnvelope = result.evidence; setBranch(result); renderLearningPanel(); if (result.status === 'ok' && result.evidence?.status === 'retrieved') setFreshRunStatus(`${freshRetrievalStatus(result.evidence)} Fresh branch generation is complete.`, { mapLabel: 'FRESH BRANCH READY', stageMessage: 'Fresh branch and scene are ready to explore.' }); status(completionStatus(result)); }
 }
 async function runPrompt(prompt) {
   if (!prompt.trim()) return; const code = $('access').value;
   if (serviceMode === 'replay-only') { status('Showing saved runs · live generation by invite'); return; }
   if (serviceMode !== 'live-enabled') { status('Service mode could not be confirmed · open a cached story below'); return; }
   if (!code) { status('Select a cached story, or enter a live access code.'); return; }
-  reset(); $('prompt').value = prompt; status('Checking your question…');
+  reset(); const request = replayRequest; $('prompt').value = prompt; setFreshRunStatus('Checking the prompt against topic policy…', { mapLabel: 'CHECKING TOPIC POLICY', stageMessage: 'Checking the prompt before source retrieval…' }); status('Checking your question…');
   try {
     const response = await fetch('/api/run', { method:'POST', headers:{'content-type':'application/json','x-demo-access-code':code}, body:JSON.stringify({divergence:prompt}) });
+    if (request !== replayRequest) return;
     if (!response.ok || !response.body) { let msg = `Unable to start (${response.status})`; try { const body = await response.json(); msg = body.error || msg; } catch {} throw new Error(msg); }
     const reader = response.body.getReader(), decoder = new TextDecoder(); let buffer = '';
     while (true) { const {value,done} = await reader.read(); buffer += decoder.decode(value || new Uint8Array(), {stream:!done}); let match;
-      while ((match = buffer.match(/\r?\n\r?\n/))) { const block = buffer.slice(0,match.index); buffer = buffer.slice(match.index + match[0].length); const e = parseSseBlock(block); if (e) await handleEvent(e.event, e.data); }
+      if (request !== replayRequest) return;
+      while ((match = buffer.match(/\r?\n\r?\n/))) { const block = buffer.slice(0,match.index); buffer = buffer.slice(match.index + match[0].length); const e = parseSseBlock(block); if (e && request === replayRequest) await handleEvent(e.event, e.data); }
       if (done) break;
     }
-  } catch(e) { status(e.message); $('generation').hidden = true; }
+  } catch(e) { if (request === replayRequest) { status(e.message); $('generation').hidden = true; } }
 }
 $('prompt-form').addEventListener('submit', e => { e.preventDefault(); runPrompt($('prompt').value); });
  $('show-invitation').addEventListener('click', () => {

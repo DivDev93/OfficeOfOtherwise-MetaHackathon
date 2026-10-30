@@ -138,3 +138,9 @@ body:has(.workspace.hero-focus) .intro{display:none}
 .learning-sources a{color:var(--cyan);text-decoration:underline;text-underline-offset:2px}
 .workspace.hero-focus .learning-panel{display:none}
 @media(max-width:700px){.learning-panel{margin-top:10px;padding:10px}.learning-heading h3{font-size:20px}.learning-block p,.learning-block li{font-size:9px}.learning-discussion p{font-size:14px}}
+.fresh-evidence-scope{margin:5px 0 0;color:var(--neutral-400);font-size:8px;line-height:1.4}
+.fresh-citation{margin-top:5px;padding:5px 7px;border-left:2px solid rgba(156,236,242,.35);background:rgba(65,177,190,.04)}
+.fresh-citation a{color:var(--cyan);font-size:9px;line-height:1.4;overflow-wrap:anywhere}
+.fresh-citation blockquote{margin:4px 0 0;color:var(--neutral-200);font-size:9px;line-height:1.45}
+.fresh-run-status{margin:8px 0 0;padding:7px 8px;border-left:2px solid var(--cyan);background:rgba(65,177,190,.07);color:var(--neutral-100);font-size:9px;line-height:1.45}
+.fresh-run-status[data-state="error"]{border-left-color:#e9a078;background:rgba(201,96,75,.1);color:var(--paper)}

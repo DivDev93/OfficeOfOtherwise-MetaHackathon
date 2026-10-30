@@ -129,7 +129,13 @@ export function createTopicPolicy({ classify, classifyPrompt = classify, classif
 
   /** Check proposed branches. Returns { kept, rejected }. Keyword layer is free; model layer runs only on survivors. */
   async function checkBranches(branches) {
-    const results = await Promise.all(branches.map(b => check(`${b.title ?? ''}\n${b.summary ?? ''}`, classifyBranches)));
+    const branchText = b => [
+      b.title, b.summary, b.scene, b.changedAssumption, b.uncertainty, b.demonstrates, b.doesNotEstablish, b.discussionQuestion,
+      ...(Array.isArray(b.causalSteps) ? b.causalSteps : []),
+      ...(Array.isArray(b.unverifiedClaims) ? b.unverifiedClaims : []),
+      ...(Array.isArray(b.baselineClaims) ? b.baselineClaims.map(claim => claim?.text) : []),
+    ].filter(value => typeof value === 'string').join('\n');
+    const results = await Promise.all(branches.map(b => check(branchText(b), classifyBranches)));
     const kept = [], rejected = [];
     branches.forEach((branch, i) => (results[i].allowed ? kept : rejected).push(results[i].allowed ? branch : { branch, ...results[i] }));
     return { kept, rejected };

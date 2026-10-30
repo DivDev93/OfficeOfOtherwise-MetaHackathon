@@ -44,6 +44,20 @@ test('Meta-only live runner does not require 3D configuration, but enabled 3D re
   await assert.rejects(with3d({ divergence: 'What if a library survived?' }), /confirmed Chronos/i);
 });
 
+test('one-run recording allowance requires an explicitly matching scope and preserves the default checkpoint', t => {
+  const root = mkdtempSync(join(tmpdir(), 'demo-recording-budget-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const checkpointPath = join(root, 'recording-budget.json');
+  writeFileSync(join(root, 'demo-task-budget.json'), JSON.stringify({ startingMetaSpendUsd: 0.5, taskBudgetUsd: 2 }));
+  writeFileSync(checkpointPath, JSON.stringify({ startingMetaSpendUsd: 3.75, taskBudgetUsd: 1 }));
+  writeFileSync(join(root, 'spend.json'), JSON.stringify({ totalUsd: 3.75, entries: [], reservations: {} }));
+  assert.throws(() => taskSpendCap({ outputRoot: root, checkpointPath, env: {} }), /Invalid/);
+  assert.equal(taskSpendCap({ outputRoot: root, checkpointPath, taskBudgetUsd: 1, env: {} }), 4.75);
+  assert.equal(taskSpendCap({ outputRoot: root, checkpointPath, taskBudgetUsd: 1, env: { META_SPEND_CAP_USD: '4' } }), 4);
+  assert.equal(taskSpendCap({ outputRoot: root, env: {} }), 2.5);
+  assert.throws(() => taskSpendCap({ outputRoot: root, checkpointPath, taskBudgetUsd: 3, env: {} }), /Invalid/);
+});
+
 test('initialization durably creates the ledger and never resets an existing checkpoint', t => {
   const root = mkdtempSync(join(tmpdir(), 'demo-init-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

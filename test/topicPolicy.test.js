@@ -88,6 +88,23 @@ test('checkBranches keeps clean branches and reports why others were rejected', 
   assert.deepEqual(rejected.map(r => [r.branch.title, r.layer]), [['Siege of the library', 'keyword'], ['Fight for the crown', 'model']]);
 });
 
+test('checkBranches scans every visible generated evidence field for blocked content', async () => {
+  const fields = ['scene', 'changedAssumption', 'uncertainty', 'demonstrates', 'doesNotEstablish', 'discussionQuestion', 'causalSteps', 'unverifiedClaims', 'baselineClaims'];
+  for (const field of fields) {
+    const branch = { id: 'b1', title: 'Quiet observatory', summary: 'Astronomers record comets.', scene: 'A brass telescope.', changedAssumption: 'Observations continue.', uncertainty: 'Cloud cover varies.', demonstrates: 'A research tradition.', doesNotEstablish: 'A proven event.', discussionQuestion: 'What records survive?', causalSteps: ['Observers meet.', 'Charts circulate.'], unverifiedClaims: ['The observatory lasts.'], baselineClaims: [{ text: 'The city has an observatory.', sourceIds: ['s1'] }] };
+    if (['causalSteps', 'unverifiedClaims'].includes(field)) branch[field] = ['An army advances.'];
+    else if (field === 'baselineClaims') branch.baselineClaims = [{ text: 'An army advances.', sourceIds: ['s1'] }];
+    else branch[field] = 'An army advances.';
+    const result = await createTopicPolicy().checkBranches([branch]);
+    assert.equal(result.kept.length, 0, `${field} must be scanned`);
+    assert.equal(result.rejected[0].category, 'war', `${field} must trigger the war rule`);
+  }
+  let modelInput = '';
+  const policy = createTopicPolicy({ classify: async text => { modelInput = text; return { verdict: 'allow' }; } });
+  await policy.checkBranches([{ title: 'Observatory', summary: 'Charts circulate.', scene: 'A brass telescope.', changedAssumption: 'Observations continue.', uncertainty: 'Weather varies.', demonstrates: 'A tradition.', doesNotEstablish: 'A proven event.', discussionQuestion: 'What records survive?', causalSteps: ['One step.', 'Another step.'], unverifiedClaims: ['It lasts.'], baselineClaims: [{ text: 'Source backed baseline.', sourceIds: ['s1'] }] }]);
+  for (const text of ['A brass telescope.', 'Observations continue.', 'Weather varies.', 'Source backed baseline.', 'One step.', 'It lasts.', 'A tradition.', 'A proven event.', 'What records survive?']) assert.ok(modelInput.includes(text));
+});
+
 test('parseVerdict tolerates prose around the JSON and rejects junk', () => {
   assert.deepEqual(parseVerdict('Sure! {"verdict":"block","category":"war","reason":"army"} done'), { verdict: 'block', category: 'war', reason: 'army' });
   assert.equal(parseVerdict('no json here'), null);
