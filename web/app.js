@@ -4,15 +4,16 @@ import { safeGeography, visibleChanges, createGeographyRenderer, drawGeographyCa
 import { REGIONS, GEOGRAPHY_STYLES } from './geographyRegions.js';
 import { geographyLabel, geographyKindLabel, geographyTechnicalDetails, geographyDisplayChanges } from './geographyLabels.js';
 import { createSavedPreviewPopover } from './savedPreview.js';
-import { createStarMap } from './starmap.js?v=event-preview-2';
+import { createAtlasController } from './atlas/controller.js';
 const $ = id => document.getElementById(id);
 const savedPreview = createSavedPreviewPopover(document.body, { document, viewport: () => ({ width:window.innerWidth || 1024, height:window.innerHeight || 768 }) });
 const voice = createVoiceInput({ prompt: $('prompt'), access: $('access'), controls: $('voice-controls'), record: $('voice-record'), stop: $('voice-stop'), cancel: $('voice-cancel'), message: $('voice-status') });
 let voiceEnabled = false, localReviewAccess = false;
 const hasLiveAccess = () => localReviewAccess || !!$('access').value;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', globeApi = null, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0;
+let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', atlasController = null, atlasInitPromise = null, atlasPreviewWorld = null, atlasAttachmentIntent = { mode:'current-world', parentId:null, divergenceYear:null }, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0;
 let expansionLimit = 20, serverExpansionUsed = 0, activeExpansion = null, preserveGraphUntilReady = false;
+let atlasGeographyOverride = null;
 const enteredNodes = new Set();
 const pendingExpansionNodes = new Set();
 function enterNode(runId, branchId) {
@@ -63,12 +64,26 @@ try {
 const navigation = createNavigationGuard();
 const knownRunMetadata = new Map();
 const knownRunManifests = new Map(), manifestRequests = new Map();
-let currentRunId = '', currentManifest = null, continuation = { path: [], children: [] }, streamBusy = false, selectedContext = null, continuationViewSelection = null;
+let currentRunId = '', currentManifest = null, continuation = { path: [], children: [] }, streamBusy = false, selectedContext = null, continuationViewSelection = null, atlasCurrentWorldRunId = '';
 let treeRenderRequest = 0, serviceModeReady = Promise.resolve(), rootGenerationActive = false;
 let lastHandledLocationHash = location.hash;
 let assetLoadRequest = 0, assetsLoading = false;
 let savedNavigationState = '';
-let starMapApi = null, starMapNodes = [];
+let atlasNodes = [];
+const ATLAS_QUESTION_ROOT_KEY = 'otherwise-atlas-question-roots';
+const ATLAS_QUESTION_ROOT_LIMIT = 12;
+const atlasQuestionRootIds = new Set();
+const atlasRootRequests = new Set();
+try {
+  const ids = JSON.parse(sessionStorage.getItem(ATLAS_QUESTION_ROOT_KEY) || '[]');
+  if (Array.isArray(ids)) for (const id of ids.slice(-ATLAS_QUESTION_ROOT_LIMIT)) if (typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(id)) atlasQuestionRootIds.add(id);
+} catch {}
+function rememberAtlasQuestionRoot(id) {
+  if (typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(id)) return;
+  atlasQuestionRootIds.delete(id); atlasQuestionRootIds.add(id);
+  while (atlasQuestionRootIds.size > ATLAS_QUESTION_ROOT_LIMIT) atlasQuestionRootIds.delete(atlasQuestionRootIds.values().next().value);
+  try { sessionStorage.setItem(ATLAS_QUESTION_ROOT_KEY, JSON.stringify([...atlasQuestionRootIds])); } catch {}
+}
 let surfaceGeography, surfaceGeographyRaw, surfaceMode = 'scenario', surfaceUnavailable = false;
 const eventWork = new Map();
 const eventQueue = [];
@@ -153,6 +168,18 @@ function localEventThumbnail(runId, branchId, manifest) {
   if (branchId === heroId && Array.isArray(manifest.assets) && manifest.assets.includes('hero.png')) return `${prefix}hero.png`;
   return undefined;
 }
+function atlasImageRefs(runId, branchId, manifest) {
+  const thumbnail = localEventThumbnail(runId, branchId, manifest);
+  const ids = { runId:String(runId), branchId:String(branchId) };
+  if (typeof thumbnail === 'string' && /^\/event-scenes\/[a-f0-9]{64}\.png$/i.test(thumbnail)) {
+    return { thumbnail, sceneRef:{ status:'complete', url:thumbnail, ...ids } };
+  }
+  const hero = manifest?.branch?.hero;
+  const heroId = manifest?.branch?.heroId || hero?.branchId || hero?.id;
+  const heroSelected = branchId === heroId && Array.isArray(manifest?.assets) && manifest.assets.includes('hero.png');
+  const heroRef = heroSelected ? { status:'complete', url:`/runs/${encodeURIComponent(runId)}/hero.png`, ...ids } : null;
+  return { thumbnail, ...(heroSelected ? { heroSelected:true, heroRef } : {}) };
+}
 function eventSceneStatus(runId, branch, manifest) {
   if (localEventThumbnail(runId, branch.id, manifest)) return 'Scene ready';
   const work = eventWork.get(eventKey(runId, branch.id));
@@ -172,25 +199,79 @@ function savedPreviewDetails(runId, branch, manifest) {
     location:typeof branch.location === 'string' ? branch.location : branch.location?.name || branch.place?.name || (typeof branch.place === 'string' ? branch.place : ''),
     summary:branch.summary || '', sceneStatus:eventSceneStatus(runId, branch, manifest), sceneReference };
 }
+function atlasBranchSemantics(branch) {
+  if (!branch || typeof branch !== 'object') return {};
+  const score = Number.isFinite(branch.score) && branch.score >= 0 && branch.score <= 10 ? branch.score : undefined;
+  const explicitBoldness = Number.isFinite(branch.boldness) && branch.boldness >= 0 && branch.boldness <= 1 ? branch.boldness : undefined;
+  const reviewScore = Number.isFinite(branch.reviewScore) && branch.reviewScore >= 0 ? branch.reviewScore : score;
+  return {
+    ...(typeof branch.theme === 'string' && branch.theme ? { theme:branch.theme } : {}),
+    ...(explicitBoldness !== undefined ? { boldness:explicitBoldness } : score !== undefined ? { boldness:score / 10 } : {}),
+    ...(reviewScore !== undefined ? { reviewScore } : {}),
+    ...(Number.isFinite(branch.score) ? { score:branch.score } : {}),
+  };
+}
 function showBranchPreview(runId, branch, manifest, anchor) {
   if (!branch || !anchor) return;
   const sourceBranch = manifest?.branch?.branches?.find(item => item.id === (branch.branchId || branch.id)) || branch;
   savedPreview.show(savedPreviewDetails(runId, sourceBranch, manifest), anchor);
 }
-function showGlobeBranchPreview(branch, anchor) {
-  if (!branch) { savedPreview.clear(anchor); return; }
-  const runId = branch.ancestorRunId || currentRunId;
+function showAtlasPreview(world, anchorInfo = null) {
+  atlasPreviewWorld = world || null;
+  if (!world) { savedPreview.clear(); return; }
+  const canvas = $('atlas-scene')?.querySelector('canvas');
+  const anchor = anchorInfo && Number.isFinite(anchorInfo.clientX) && Number.isFinite(anchorInfo.clientY)
+    ? {
+      getBoundingClientRect:() => ({ left:anchorInfo.clientX, top:anchorInfo.clientY, right:anchorInfo.clientX, bottom:anchorInfo.clientY, width:0, height:0 }),
+      getAttribute:name => canvas?.getAttribute(name) || '',
+      setAttribute:(name, value) => canvas?.setAttribute(name, value),
+      removeAttribute:name => canvas?.removeAttribute(name),
+    }
+    : $('atlas-preview-anchor');
+  if (!anchor) return;
+  if (world.role === 'root-question') {
+    savedPreview.show({ title:world.title || 'Root question', yearLabel:'Question', location:'', summary:world.prompt || world.summary || '', sceneStatus:'Saved story root', sceneReference:null }, anchor);
+    return;
+  }
+  const runId = world.runId || world.eventRef?.runId;
+  const branchId = world.branchId || world.eventRef?.branchId;
   const manifest = knownRunManifests.get(runId) || (runId === currentRunId ? currentManifest : null);
-  showBranchPreview(runId, branch, manifest, anchor);
+  const branch = manifest?.branch?.branches?.find(item => item.id === branchId);
+  if (branch) savedPreview.show(savedPreviewDetails(runId, branch, manifest), anchor);
+  else savedPreview.show({ title:world.title || 'Saved possibility', yearLabel:Number.isInteger(world.year) ? formatYear(world.year) : 'Year not saved', location:world.place?.name || world.location || '', summary:world.summary || '', sceneStatus:world.sceneRef?.status === 'complete' ? 'Scene ready' : 'Saved scene not checked', sceneReference:world.thumbnail || null }, anchor);
 }
 function buildStarMapNodes(rootManifest) {
   const output = [], visited = new Set();
   const rootNodeId = `root:${rootManifest?.id || ''}`;
   if (rootManifest?.id) output.push({
-    id: rootNodeId, rootNodeId, runId: rootManifest.id, role: 'root-question', title: rootManifest.divergence || rootManifest.branch?.divergence || rootManifest.title || 'Root question',
+    id: rootNodeId, rootNodeId, runId: rootManifest.id, questionId:rootManifest.questionAttachment?.questionId || rootManifest.continuation?.rootRunId || rootManifest.id, role: 'root-question', title: rootManifest.divergence || rootManifest.branch?.divergence || rootManifest.title || 'Root question',
     prompt: rootManifest.divergence || rootManifest.branch?.divergence || rootManifest.title || '', mapState: rootManifest.continuation?.children?.length ? 'explored' : 'saved-unexplored',
     parentId: null, lineageIds: [rootNodeId], ready: true, otherTree: false,
   });
+  const path = rootManifest?.continuation?.path || [];
+  const pathLineage = [];
+  for (const item of path) {
+    if (!item?.runId || !item?.branchId || output.length >= 80) continue;
+    const id = starNodeId(item.runId, item.branchId);
+    pathLineage.push(id);
+    if (output.some(node => node.id === id)) continue;
+    const manifest = knownRunManifests.get(item.runId);
+    const branch = manifest?.branch?.branches?.find(entry => entry.id === item.branchId) || item;
+    const preview = savedPreviewDetails(item.runId, branch, manifest);
+    const imageRefs = atlasImageRefs(item.runId, item.branchId, manifest);
+    const place = branch.place || item.place || {};
+    output.push({
+      id, rootNodeId, questionId:manifest?.questionAttachment?.questionId || manifest?.continuation?.rootRunId || item.runId,
+      runId:item.runId, branchId:item.branchId, role:'ancestor-world',
+      title:preview.title, year:branch.year, summary:preview.summary, location:preview.location,
+      ...(place.lat != null ? { lat:place.lat } : {}), ...(place.lon != null ? { lon:place.lon } : {}),
+      ...(branch.geography !== undefined ? { geography:branch.geography } : {}),
+      ...atlasBranchSemantics(branch),
+      scene:preview.sceneReference, thumbnail:preview.sceneReference, ...imageRefs, status:preview.sceneStatus,
+      sceneStatus:preview.sceneStatus, ready:!!preview.sceneReference, parentId:pathLineage.at(-2) || null,
+      lineageIds:[rootNodeId,...pathLineage], otherTree:false,
+    });
+  }
   const walk = (manifest, parentId = null, depth = 0) => {
     if (!manifest?.branch || !manifest.id || depth > 6 || visited.has(manifest.id) || output.length >= 80) return;
     visited.add(manifest.id);
@@ -199,17 +280,20 @@ function buildStarMapNodes(rootManifest) {
     for (const branch of manifest.branch.branches || []) {
       if (!branch?.id || output.length >= 80) continue;
       const preview = savedPreviewDetails(manifest.id, branch, manifest);
-      const thumbnail = preview.sceneReference;
+      const imageRefs = atlasImageRefs(manifest.id, branch.id, manifest);
+      const thumbnail = imageRefs.thumbnail;
       const sceneStatus = preview.sceneStatus;
       const consequences = consequenceState(manifest.id, branch.id, manifest);
       const work = eventWork.get(eventKey(manifest.id, branch.id));
       const savedEdge = manifest.continuation?.children?.find(item => item.branchId === branch.id);
       const hasSavedChildren = savedEdge?.status === 'complete' && !!savedEdge.runId || !!work?.childRunId || !!work?.children?.length;
       const questionRunId = manifest.continuation?.rootRunId || manifest.id;
+      const questionId = manifest.questionAttachment?.questionId || questionRunId;
       const nodeId = starNodeId(manifest.id, branch.id);
       output.push({
         id: nodeId,
         rootNodeId,
+        questionId,
         lineageIds: [...(manifest.continuation?.path || []).map(item => starNodeId(item.runId, item.branchId)), starNodeId(manifest.id, branch.id)].filter((id, index, ids) => id && ids.indexOf(id) === index),
         otherTree: questionRunId !== rootManifest.id,
         mapState: hasSavedChildren || consequences === 'complete' ? 'explored' : work?.childrenRunning || work?.childrenQueued ? 'generating' : ['needs-access', 'failed', 'uncertain'].includes(consequences) ? 'unavailable' : 'saved-unexplored',
@@ -219,12 +303,14 @@ function buildStarMapNodes(rootManifest) {
         year: branch.year,
         summary: preview.summary,
         causalLink: branch.causalLink || '',
+        ...atlasBranchSemantics(branch),
         location: preview.location,
         status: sceneStatus,
         sceneStatus,
         consequencesStatus: taskLabel(consequences),
         scene: thumbnail,
         thumbnail,
+        ...imageRefs,
         ready: !!thumbnail,
         parentId: branchParentId,
       });
@@ -255,21 +341,108 @@ function buildStarMapNodes(rootManifest) {
       const edge = manifest.continuation?.children?.find(item => item.branchId === branch.id);
       const child = edge?.status === 'complete' && edge.runId ? knownRunManifests.get(edge.runId) : null;
       if (child) walk(child, starNodeId(manifest.id, branch.id), depth + 1);
+      for (const attached of knownRunManifests.values()) {
+        const link = attached?.questionAttachment;
+        if (link?.parentRunId === manifest.id && link?.parentBranchId === branch.id) walk(attached, starNodeId(manifest.id, branch.id), depth + 1);
+      }
     }
   };
   walk(rootManifest, rootNodeId);
   return output;
 }
 function renderStarMap(rootManifest) {
-  starMapNodes = rootManifest ? buildStarMapNodes(rootManifest) : [];
+  const roots = new Map();
+  if (rootManifest?.branch) roots.set(rootManifest.id, rootManifest);
+  for (const id of atlasQuestionRootIds) {
+    const manifest = knownRunManifests.get(id);
+    if (manifest?.branch) roots.set(manifest.id, manifest);
+  }
+  atlasNodes = [...roots.values()].flatMap(manifest => buildStarMapNodes(manifest))
+    .filter((node, index, nodes) => nodes.findIndex(candidate => candidate.id === node.id) === index);
+  const atlasRunId = atlasCurrentWorldRunId || currentRunId;
+  const currentWorldId = atlasNodes.some(node => node.runId === atlasRunId && node.branchId === selectedBranchId)
+    ? starNodeId(atlasRunId, selectedBranchId)
+    : atlasNodes.find(node => node.runId === atlasRunId && node.branchId === branchState.heroId)?.id
+      || atlasNodes.find(node => node.role !== 'root-question' && node.runId === rootManifest?.id)?.id || null;
+  const activeQuestionId = currentManifest?.questionAttachment?.questionId
+    || currentManifest?.continuation?.rootRunId || rootManifest?.questionAttachment?.questionId
+    || rootManifest?.continuation?.rootRunId || rootManifest?.id || null;
+  const activeLineage = new Set(atlasNodes.find(node => node.id === currentWorldId)?.lineageIds || []);
+  for (const node of atlasNodes) {
+    node.otherTree = !!node.questionId && node.questionId !== activeQuestionId && !activeLineage.has(node.id) && !node.isExpansionPlaceholder;
+  }
+  const mapNodes = atlasNodes.map(node => {
+    const branch = node.runId && knownRunManifests.get(node.runId)?.branch?.branches?.find(item => item.id === node.branchId);
+    if (!branch) return node;
+    const place = branch.place || {};
+    return {
+      ...node,
+      ...(place.lat != null ? { lat:place.lat } : {}),
+      ...(place.lon != null ? { lon:place.lon } : {}),
+      ...(branch.geography !== undefined ? { geography:node.id === currentWorldId && surfaceMode === 'present' ? null : branch.geography } : {}),
+      ...atlasBranchSemantics(branch),
+    };
+  });
   const rootNodeId = rootManifest ? `root:${rootManifest.id}` : null;
-  const selectedId = starMapNodes.some(node => node.runId === currentRunId && node.branchId === selectedBranchId)
-    ? starNodeId(currentRunId, selectedBranchId) : null;
-  starMapApi?.setData({ nodes: starMapNodes, selectedId, rootNodeId });
-  if (rootManifest) checkHydratedEventScenes();
+  const rootRunId = activeQuestionId || rootManifest?.id || null;
+  const questions = new Map();
+  for (const manifest of roots.values()) {
+    const attachment = manifest.questionAttachment;
+    const questionId = String(attachment?.questionId || manifest.continuation?.rootRunId || manifest.id);
+    const parent = (manifest.continuation?.path || []).at(-1);
+    const divergenceYear = Number.isSafeInteger(attachment?.divergenceYear) ? attachment.divergenceYear
+      : Number.isSafeInteger(parent?.year) ? parent.year : Number.isSafeInteger(manifest.divergenceYear) ? manifest.divergenceYear : undefined;
+    questions.set(questionId, {
+      id:questionId, rootRunId:questionId,
+      question:manifest.divergence || manifest.branch?.divergence || manifest.title || '',
+      ...(divergenceYear ? { divergenceYear } : {}),
+      ...(attachment?.divergencePlace || parent?.place || manifest.divergencePlace ? { divergencePlace:attachment?.divergencePlace || parent?.place || manifest.divergencePlace } : {}),
+      ...(attachment?.mode ? { attachmentMode:attachment.mode } : {}),
+      ...(attachment?.parentWorldId ? { parentWorldId:attachment.parentWorldId } : {}),
+      ...(attachment?.parentRunId ? { parentRunId:attachment.parentRunId } : {}),
+      ...(attachment?.parentBranchId ? { parentBranchId:attachment.parentBranchId } : {}),
+    });
+  }
+  for (const manifest of knownRunManifests.values()) {
+    const attachment = manifest?.questionAttachment;
+    if (!attachment?.questionId || !attachment.mode) continue;
+    const questionId = String(attachment.questionId);
+    const parent = (manifest.continuation?.path || []).at(-1);
+    const divergenceYear = Number.isSafeInteger(attachment.divergenceYear) ? attachment.divergenceYear : Number.isSafeInteger(parent?.year) ? parent.year : undefined;
+    questions.set(questionId, {
+      id:questionId, rootRunId:questionId, question:manifest.divergence || manifest.branch?.divergence || manifest.title || '',
+      ...(divergenceYear ? { divergenceYear } : {}),
+      ...(attachment.divergencePlace || parent?.place ? { divergencePlace:attachment.divergencePlace || parent.place } : {}),
+      attachmentMode:attachment.mode,
+      ...(attachment.parentWorldId ? { parentWorldId:attachment.parentWorldId } : {}),
+      ...(attachment.parentRunId ? { parentRunId:attachment.parentRunId } : {}),
+      ...(attachment.parentBranchId ? { parentBranchId:attachment.parentBranchId } : {}),
+    });
+  }
+  const graph = { mapNodes, questions:[...questions.values()], rootManifest, rootRunId, currentRunId, selectedBranchId, currentWorldId };
+  atlasController?.setGraph(graph);
+  if (atlasPreviewWorld) showAtlasPreview(atlasPreviewWorld);
+  if (rootManifest) {
+    checkHydratedEventScenes();
+    for (const id of atlasQuestionRootIds) {
+      if (knownRunManifests.has(id) || atlasRootRequests.has(id)) continue;
+      atlasRootRequests.add(id);
+      treeManifest(id).then(manifest => {
+        if (!manifest) return;
+        const questionId = manifest.questionAttachment?.questionId || manifest.continuation?.rootRunId || manifest.id;
+        rememberAtlasQuestionRoot(questionId);
+        if (currentRunId && !preserveGraphUntilReady) {
+          const activeRootId = currentManifest?.continuation?.rootRunId || currentManifest?.questionAttachment?.questionId || currentManifest?.id;
+          const activeRoot = knownRunManifests.get(activeRootId) || currentManifest;
+          renderStarMap(activeRoot);
+          renderExplorationTree(true);
+        }
+      }).finally(() => atlasRootRequests.delete(id));
+    }
+  }
 }
 function checkHydratedEventScenes() {
-  for (const node of starMapNodes) {
+  for (const node of atlasNodes) {
     if (node.thumbnail) continue;
     const manifest = knownRunManifests.get(node.runId);
     const branch = manifest?.branch?.branches?.find(item => item.id === node.branchId);
@@ -331,7 +504,7 @@ function checkSavedEventScene(runId, branch, manifest) {
 }
 async function selectStarMapNode(id) {
   const nodeId = typeof id === 'object' && id ? id.id : id;
-  const node = starMapNodes.find(item => item.id === nodeId);
+  const node = atlasNodes.find(item => item.id === nodeId);
   if (!node || node.isExpansionPlaceholder || node.selectable === false) return;
   if (node.role === 'root-question') {
     if (node.runId !== currentRunId) await loadRun(node.runId, { animate: false, autoConsequences: false });
@@ -341,25 +514,99 @@ async function selectStarMapNode(id) {
   if (node.runId !== currentRunId) await loadRun(node.runId, { animate: false, autoConsequences: false, selectedBranchId: node.branchId });
   if (currentRunId !== node.runId) return;
   const branch = branchState.branches.find(item => item.id === node.branchId);
-  if (branch) activateBranch(branch);
+  if (branch) activateBranch(branch, false, { runId:node.runId, manifest:knownRunManifests.get(node.runId) });
 }
-function closeExplorationMap() {
-  const panel = $('exploration-map-panel');
-  try { if (panel?.matches?.(':popover-open')) panel.hidePopover(); } catch {}
-  $('open-exploration-map')?.focus({ preventScroll: true });
+function initializeAtlas() {
+  const container = $('atlas-scene'), toolbar = $('atlas-toolbar');
+  if (!container || atlasInitPromise) return atlasInitPromise;
+  atlasInitPromise = createAtlasController({
+    container, toolbarContainer:toolbar,
+    graph:{ mapNodes:atlasNodes, rootManifest:currentManifest, currentRunId, selectedBranchId },
+    reducedMotion:reducedMotion.matches,
+    onPreview:(world, anchor) => showAtlasPreview(world, anchor),
+    onQuestionPreview:(question, anchor) => showAtlasPreview(question ? {
+      role:'root-question', title:question.question || question.title || 'Saved question',
+      prompt:question.question || question.prompt || question.summary || '',
+    } : null, anchor),
+    onQuestionEnter:() => {},
+    onEnter:(world, detail) => handleAtlasWorldEnter(world, detail),
+    onLevelChange:level => {
+      const labels = { surface:'SURFACE · CURRENT WORLD', lift:'LIFT · FOLLOW A THREAD', orbit:'ORBIT · ALTERNATE WORLDS', atlas:'ATLAS · HISTORY AND POSSIBILITIES' };
+      container.dataset.atlasLevel = level?.level || 'unknown';
+      $('map-status').textContent = labels[level?.level] || 'ATLAS · POSSIBLE WORLDS';
+      applyAtlasGeographyLevel(level?.level);
+    },
+    onMetrics:metrics => {
+      container.dataset.atlasLevel = metrics?.level || container.dataset.atlasLevel || 'unknown';
+      for (const [key, value] of Object.entries({ fps:metrics?.fps, sceneCount:metrics?.sceneCount, cameraCount:metrics?.cameraCount, rendererCount:metrics?.rendererCount, worldCount:metrics?.worldCount })) {
+        if (Number.isFinite(value)) container.dataset[`atlas${key[0].toUpperCase()}${key.slice(1)}`] = String(value);
+      }
+    },
+    onAttachmentIntent:intent => { atlasAttachmentIntent = intent; },
+  }).then(controller => {
+    atlasController = controller;
+    compactAtlasToolbar(toolbar);
+    applyAtlasGeographyLevel(container.dataset.atlasLevel || 'surface');
+    const canvas = container.querySelector('canvas');
+    if (canvas) {
+      canvas.setAttribute('aria-label', 'Atlas scene. Hover or focus to preview. Click or press Enter to enter a saved world, open present-day Earth, or unfold a question chip. Use plus and minus to zoom; Escape moves out one level.');
+      canvas.setAttribute('aria-describedby', 'branch-list');
+      canvas.setAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight Enter Escape + -');
+    }
+    renderStarMap(continuation.rootRunId ? knownRunManifests.get(continuation.rootRunId) || currentManifest : currentManifest);
+    return controller;
+  }).catch(() => { $('globe-fallback').hidden = false; return null; });
+  return atlasInitPromise;
 }
-document.addEventListener('keydown', event => {
-  if (event.key !== 'Escape') return;
-  const panel = $('exploration-map-panel');
-  if (!panel?.matches?.(':popover-open')) return;
-  event.preventDefault(); event.stopPropagation(); closeExplorationMap();
-});
-$('close-exploration-map')?.addEventListener('click', () => setTimeout(() => $('open-exploration-map')?.focus({ preventScroll: true }), 0));
-function initializeStarMap() {
-  const container = $('starmap');
-  if (!container) return;
-  try { starMapApi = createStarMap(container, { nodes: starMapNodes, selectedId: null, rootNodeId: starMapNodes.find(node => node.role === 'root-question')?.id, onSelect: selectStarMapNode }); }
-  catch { starMapApi = null; }
+function handleAtlasWorldEnter(world, detail = {}) {
+  if (detail.source === 'present-day-question') {
+    atlasAttachmentIntent = detail.attachmentIntent || { mode:'present-day', parentId:null, divergenceYear:world?.year || 2026 };
+    setAtlasFocused(false);
+    $('prompt').value = '';
+    setInvitationOpen(true);
+    $('prompt').focus({ preventScroll:true });
+    status('Write a question to explore from present-day Earth.');
+    return;
+  }
+  if (world?.id) selectStarMapNode(world.id);
+}
+function compactAtlasToolbar(toolbar) {
+  if (!toolbar || toolbar.dataset.atlasCompacted === 'true') return;
+  const controls = [...toolbar.children];
+  if (controls.length < 4) return;
+  const quick = document.createElement('div'); quick.className = 'atlas-quick-controls'; quick.setAttribute('aria-label', 'Quick Atlas controls');
+  const options = document.createElement('details'); options.className = 'atlas-view-options';
+  const summary = document.createElement('summary'); summary.textContent = 'View options';
+  const panel = document.createElement('div'); panel.className = 'atlas-view-options-panel';
+  for (const control of controls.slice(0, 3)) quick.append(control);
+  for (const control of controls.slice(3)) panel.append(control);
+  const geographyToggle = document.createElement('button');
+  geographyToggle.type = 'button'; geographyToggle.id = 'atlas-geography-toggle'; geographyToggle.className = 'atlas-geography-toggle';
+  geographyToggle.addEventListener('click', toggleAtlasGeographyPanel);
+  panel.append(geographyToggle);
+  options.append(summary, panel);
+  toolbar.replaceChildren(quick, options);
+  toolbar.dataset.atlasCompacted = 'true';
+}
+function applyAtlasGeographyLevel(level = 'surface') {
+  const panel = $('geography-panel'), toggle = $('atlas-geography-toggle');
+  if (!panel) return;
+  const automatic = level === 'surface' || level === 'lift' || level === 'unknown';
+  const visible = atlasGeographyOverride === null ? automatic : atlasGeographyOverride;
+  panel.hidden = !visible;
+  if (toggle) {
+    toggle.textContent = visible ? 'Hide Earth comparison' : 'Show Earth comparison';
+    toggle.setAttribute('aria-pressed', String(visible));
+  }
+}
+function toggleAtlasGeographyPanel() {
+  atlasGeographyOverride = $('geography-panel').hidden;
+  applyAtlasGeographyLevel($('atlas-scene').dataset.atlasLevel || 'surface');
+}
+function setAtlasFocused(focused) {
+  document.body.classList.toggle('atlas-focused', focused);
+  $('atlas-reopen-controls').hidden = !focused;
+  $('focus-atlas')?.setAttribute('aria-pressed', String(focused));
 }
 function renderExplorationTree(hydrate = false) {
   const host = $('exploration-tree-status');
@@ -425,7 +672,7 @@ function renderExplorationTree(hydrate = false) {
           if (currentRunId !== manifest.id) return;
         }
         const selected = branchState.branches.find(item => item.id === branch.id);
-        if (selected) activateBranch(selected);
+        if (selected) activateBranch(selected, false, { runId:manifest.id, manifest });
       });
       const statusNode = document.createElement('small'); statusNode.className = 'tree-status'; statusNode.dataset.state = state; statusNode.textContent = taskLabel(state);
       item.append(event, statusNode);
@@ -443,6 +690,15 @@ function renderExplorationTree(hydrate = false) {
         } else {
           const saved = document.createElement('small'); saved.className = 'tree-edge'; saved.dataset.state = 'complete'; saved.textContent = 'Saved consequence'; item.append(saved);
         }
+      }
+      for (const attached of knownRunManifests.values()) {
+        const link = attached?.questionAttachment;
+        if (link?.parentRunId !== manifest.id || link?.parentBranchId !== branch.id || rendered.has(attached.id)) continue;
+        const label = document.createElement('small'); label.className = 'tree-edge authored-question';
+        label.textContent = `Your question · ${attached.divergence || attached.branch?.divergence || attached.title || 'Saved exploration'}`;
+        item.append(label);
+        const childNode = renderRun(attached, depth + 1);
+        if (childNode) item.append(childNode);
       }
       branches.append(item);
     }
@@ -466,6 +722,17 @@ async function treeManifest(runId) {
 }
 async function hydrateExplorationTree(rootManifest, request) {
   const visited = new Set(), budget = { nodes: 1 };
+  const knownAttachments = parentRunId => {
+    const found = new Map();
+    for (const manifest of knownRunManifests.values()) {
+      if (manifest?.questionAttachment?.parentRunId === parentRunId) found.set(manifest.id, manifest);
+    }
+    for (const saved of savedRuns) {
+      const attachment = saved?.questionAttachment;
+      if (saved?.id && attachment?.parentRunId === parentRunId && !found.has(saved.id)) found.set(saved.id, null);
+    }
+    return [...found];
+  };
   const walk = async (manifest, depth) => {
     if (!manifest || depth >= 6 || budget.nodes >= 80 || visited.has(manifest.id)) return;
     visited.add(manifest.id);
@@ -474,8 +741,28 @@ async function hydrateExplorationTree(rootManifest, request) {
       const child = await treeManifest(edge.runId);
       if (child) { budget.nodes++; await walk(child, depth + 1); }
     }
+    for (const [runId, known] of knownAttachments(manifest.id)) {
+      if (budget.nodes >= 80 || visited.has(runId)) continue;
+      const child = known || await treeManifest(runId);
+      if (child) { budget.nodes++; await walk(child, depth + 1); }
+    }
   };
   await walk(rootManifest, 0);
+  // Rebuild every question the browser has already opened after reload. Fetches
+  // are read-only manifests; they never select a world or trigger a continuation.
+  const questionRoots = new Set(atlasQuestionRootIds);
+  for (const saved of savedRuns) {
+    const id = saved?.questionAttachment?.questionId || saved?.continuation?.rootRunId || saved?.rootRunId
+      || (!saved?.parentRunId ? saved?.id : null);
+    if (typeof id === 'string' && id) questionRoots.add(id);
+  }
+  for (const id of questionRoots) {
+    if (id === rootManifest.id || budget.nodes >= 80) continue;
+    const root = await treeManifest(id);
+    if (!root || visited.has(root.id)) continue;
+    budget.nodes++;
+    await walk(root, 0);
+  }
   if (request === treeRenderRequest && (continuation.rootRunId || currentRunId) === rootManifest.id) {
     renderExplorationTree(false);
   }
@@ -522,7 +809,7 @@ function renderGeography() {
   }
   $('geography-detail').hidden = !changes.some(change => change.region === 'ram-setu');
   const mode = changes.length ? surfaceMode : 'present';
-  globeApi?.setGeography(surfaceGeography, mode);
+  renderStarMap(continuation.rootRunId ? knownRunManifests.get(continuation.rootRunId) || currentManifest : currentManifest);
   insetRenderer.set(surfaceGeography, mode);
 }
 const status = text => $('status').textContent = text;
@@ -580,11 +867,18 @@ async function loadServiceMode() {
   } catch { voiceEnabled = false; localReviewAccess = false; voice.setLocalAccess?.(false); voice.setEnabled(false); applyServiceMode('unknown'); }
 }
 function setInvitationOpen(open) {
+  if (open) setAtlasFocused(false);
   document.body.classList.toggle('invitation-open', open);
   const hasStory = document.body.classList.contains('has-story');
   $('show-invitation').setAttribute('aria-expanded', String(!hasStory || open));
   const disclosure = $('voice-disclosure');
   if (disclosure) disclosure.open = voiceEnabled && open;
+}
+function openNewExploration() {
+  const opening = !document.body.classList.contains('invitation-open');
+  if (opening) $('prompt').value = '';
+  setInvitationOpen(opening);
+  if (opening) $('prompt').focus({ preventScroll:true });
 }
 function setView(view, userSelected = false) {
   if (userSelected) continuationViewSelection = view;
@@ -675,16 +969,17 @@ function renderBranches() {
     button.setAttribute('aria-label', `${button.textContent}${b.place?.name ? ` · ${b.place.name}` : ''}`);
     button.addEventListener('click', () => activateBranch(b)); $('branch-list').append(button);
   }
-  globeApi?.setBranches(branchState.branches, branchState.heroId, null, continuation.path || []);
   renderExplorationTree();
 }
-function selectBranch(branch, { persistLocation = true } = {}) {
+function selectBranch(branch, { persistLocation = true, runId = currentRunId } = {}) {
   if (!branch?.id) return;
   if (branch.ancestorRunId) { openAncestor(branch.ancestorRunId, branch.branchId); return; }
   if (streamBusy || replayActive) return;
   savedPreview.clear();
+  atlasCurrentWorldRunId = runId || currentRunId;
+  if (atlasCurrentWorldRunId) atlasController?.scene?.enterWorld?.(starNodeId(atlasCurrentWorldRunId, branch.id), { zoom:0 });
   selectedBranchId = branch.id;
-  if (persistLocation && currentRunId) updateRunLocation(currentRunId, branch.id);
+  if (persistLocation && atlasCurrentWorldRunId) updateRunLocation(atlasCurrentWorldRunId, branch.id);
   viewStatus('');
   showGeography(branch);
   document.body.classList.add('has-story');
@@ -699,7 +994,6 @@ function selectBranch(branch, { persistLocation = true } = {}) {
   setView(continuationViewSelection || 'scene');
   renderTrace();
   renderEventWork();
-  globeApi?.select(branch);
   for (const button of $('branch-list').querySelectorAll('[data-branch-id]')) {
     const selected = button.dataset.branchId === selectedBranchId;
     button.classList.toggle('selected', selected);
@@ -820,7 +1114,7 @@ function prefetchEventScenes(branches, runId, manifest) {
 function activateBranch(branch, retry = false, { background = false, sceneOnly = false, runId: targetRunId = currentRunId, manifest: targetManifest, persistSelection = true } = {}) {
   if (!branch?.id || streamBusy || replayActive) return;
   if (branch.ancestorRunId) { openAncestor(branch.ancestorRunId, branch.branchId); return; }
-  if (!background && targetRunId === currentRunId) selectBranch(branch, { persistLocation: persistSelection });
+  if (!background && targetRunId === currentRunId) selectBranch(branch, { persistLocation: persistSelection, runId:targetRunId });
   if (!targetRunId) return;
   const runId = targetRunId, key = eventKey(runId, branch.id);
   const ownerManifest = targetManifest || (runId === currentRunId ? currentManifest : knownRunManifests.get(runId));
@@ -1189,7 +1483,14 @@ async function refreshHistory() {
   // Manifests already opened in this document are richer than ID-only local history.
   // Read this map after the fetches finish so a slower archive response cannot erase them.
   for (const [id, metadata] of knownRunMetadata) merged.set(id, metadata);
-  savedRuns = [...merged.values()]; renderArchive();
+  savedRuns = [...merged.values()];
+  for (const run of savedRuns) {
+    const questionRootId = run.questionAttachment?.questionId || run.continuation?.rootRunId || run.rootRunId
+      || (!run.parentRunId ? run.id : null);
+    if (typeof questionRootId === 'string') rememberAtlasQuestionRoot(questionRootId);
+  }
+  renderArchive();
+  if (currentManifest?.branch && !preserveGraphUntilReady) renderExplorationTree(true);
 }
 function renderTrace() { renderHeroModels(); }
 function metricText(item, fallback = 'Not recorded in this replay') {
@@ -1213,15 +1514,17 @@ function renderHeroModels() {
     card.append(model, role, metrics); host.append(card);
   }
 }
-function reset({ preservePanel = false, preserveExpansion = false } = {}) { savedPreview.clear(); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; starMapNodes = starMapNodes.filter(node => !node.isExpansionPlaceholder); if (preservePanel) { const selectedId = starMapNodes.some(node => node.runId === currentRunId && node.branchId === selectedBranchId) ? starNodeId(currentRunId, selectedBranchId) : null; starMapApi?.setData({ nodes: starMapNodes, selectedId, rootNodeId: starMapNodes.find(node => node.role === 'root-question')?.id }); } } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { globeApi?.select(null); starMapApi?.setData({ nodes: starMapNodes, selectedId: null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
-function setBranch(data, event = 'complete') {
+function reset({ preservePanel = false, preserveExpansion = false } = {}) { savedPreview.clear(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
+function setBranch(data, event = 'complete', preferredBranchId = '') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchState.phase === 'final' ? (continuation.path?.length ? 'POSSIBLE CONSEQUENCE' : 'SELECTED EVENT') : branchPhaseLabel(branchState.phase);
   if (branchState.phase === 'blocked') { showGeography(null); showGuard(data); $('map-status').textContent = 'NO BRANCHES · REFRAME REQUIRED'; status('This question needs a reframe'); renderBranches(); return; }
-  renderBranches();
   const hero = branchState.branches.find(b => b.id === branchState.heroId);
-  if (!hero && event === 'complete') showGeography(null);
-  if (hero) { showGeography(hero); if (event === 'complete') selectedContext = null; selectedBranchId = hero.id; $('hero-title').textContent = hero.title; $('hero-description').textContent = `${hero.summary}${hero.causalLink ? ` Speculative cause: ${hero.causalLink}` : ''}`; $('selected-branch-context').hidden = !selectedContext; if (selectedContext) $('selected-branch-context').textContent = `Speculative consequences of ${formatYear(selectedContext.year)} · ${selectedContext.title}. ${selectedContext.summary || ''}`; if (!hasImage) setStageMessage('Preparing the selected scene…'); syncBranchSelection(); globeApi?.focus(hero); }
+  const selected = event === 'complete' && preferredBranchId
+    ? branchState.branches.find(branch => branch.id === preferredBranchId) || hero
+    : hero;
+  if (!selected && event === 'complete') showGeography(null);
+  if (selected) { showGeography(selected); if (event === 'complete') selectedContext = null; selectedBranchId = selected.id; $('hero-title').textContent = selected.title; $('hero-description').textContent = `${selected.summary}${selected.causalLink ? ` Speculative cause: ${selected.causalLink}` : ''}`; $('selected-branch-context').hidden = !selectedContext; if (selectedContext) $('selected-branch-context').textContent = `Speculative consequences of ${formatYear(selectedContext.year)} · ${selectedContext.title}. ${selectedContext.summary || ''}`; if (!hasImage) setStageMessage('Preparing the selected scene…'); syncBranchSelection();  }
   renderBranches();
 }
 function syncBranchSelection() {
@@ -1303,7 +1606,7 @@ async function replaySavedBranches(branch, records = [], request = replayRequest
     $('map-status').textContent = `CACHED REPLAY · ${i} OF ${branches.length} PATHS`;
     status(`Replaying saved branches · ${i} of ${branches.length}`);
     renderBranches();
-    globeApi?.focus(arriving);
+
     if (i < branches.length && !await pause(2200)) return;
   }
   if (request !== replayRequest) return;
@@ -1359,16 +1662,23 @@ async function loadRun(id, { animate = true, autoConsequences = true, selectedBr
     const fragmentRunId = runIdFromHash(location.hash);
     if (!requestedBranchId && fragmentRunId === id) requestedBranchId = eventIdFromHash(location.hash);
     if (!branch.branches?.some(item => item.id === requestedBranchId)) requestedBranchId = '';
-    currentRunId = id; continuation = manifest.continuation || { rootRunId: id, path: [], children: [] }; updateRunLocation(id, requestedBranchId); renderAncestry();
+    currentRunId = id; atlasCurrentWorldRunId = id; continuation = manifest.continuation || { rootRunId: id, path: [], children: [] };
+    // Set the requested saved-tree event before ancestry rendering. That render
+    // rebuilds the Atlas graph synchronously, so leaving the previous run's
+    // selectedBranchId in place can briefly make this run's hero look current.
+    if (requestedBranchId) selectedBranchId = requestedBranchId;
+    updateRunLocation(id, requestedBranchId); renderAncestry();
     currentManifest = { ...manifest, id, branch, continuation };
     knownRunManifests.set(id, currentManifest);
+    rememberAtlasQuestionRoot(currentManifest.questionAttachment?.questionId || continuation.rootRunId || id);
+    if (currentManifest.questionAttachment?.questionId) rememberAtlasQuestionRoot(currentManifest.questionAttachment.questionId);
     learnRunMetadata(id, branch, manifest);
     $('prompt').value = branch.divergence || '';
     const records = record.steps || branch.trace || [];
     const focusTarget = branch.status === 'blocked' ? $('guardrail') : $('workspace');
     focusTarget.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
     if (animate) await replaySavedBranches(branch, records, request);
-    else { replayLoaded = true; savedTrace = records.filter(step => !step.summary); trace = savedTrace; setBranch(branch); renderTrace(); }
+    else { replayLoaded = true; savedTrace = records.filter(step => !step.summary); trace = savedTrace; setBranch(branch, 'complete', requestedBranchId); renderTrace(); }
     if (request !== replayRequest) return;
     savedNavigationState = '';
     renderBranches();
@@ -1415,7 +1725,7 @@ async function handleEvent(type, data, request) {
     if (stage) updateRootGenerationProgress(stage);
   }
   if (type === 'policy') { if (data.allowed === false || data.status === 'blocked') showGuard(data); status(data.allowed === false ? 'This question needs a reframe' : 'Policy checked'); }
-  if (type === 'propose' || type === 'review') { setBranch(data, type); if (type === 'propose' && branchState.branches.length) globeApi?.focus(branchState.branches[0]); status(type === 'propose' && branchState.phase === 'policy-checking' ? 'Topic policy checking · candidate text is not shown yet' : type === 'propose' && branchState.phase === 'empty' ? 'No suitable branches found' : type === 'propose' ? 'Policy-cleared paths · review in progress' : 'Hero selected · assets generating'); }
+  if (type === 'propose' || type === 'review') { setBranch(data, type); status(type === 'propose' && branchState.phase === 'policy-checking' ? 'Topic policy checking · candidate text is not shown yet' : type === 'propose' && branchState.phase === 'empty' ? 'No suitable branches found' : type === 'propose' ? 'Policy-cleared paths · review in progress' : 'Hero selected · assets generating'); }
   if (data.trace) { trace = Array.isArray(data.trace) ? data.trace : data.trace.steps || trace; renderTrace(); }
   else if (data.ms != null || data.costUsd != null) { trace.push({ step: type, model: data.model, ms: data.ms, costUsd: data.costUsd }); renderTrace(); }
   if (data.runId || data.id && type === 'complete') base = `/runs/${encodeURIComponent(data.runId || data.id)}`;
@@ -1433,7 +1743,7 @@ async function handleEvent(type, data, request) {
   else if (type === 'complete') {
     const result = data.branch || data; setBranch(result);
     if (rootGenerationActive) finishRootGenerationProgress(branchState.phase === 'blocked' ? 'This question needs a reframe' : '');
-    currentRunId = data.runId || data.id || currentRunId;
+    currentRunId = data.runId || data.id || currentRunId; atlasCurrentWorldRunId = currentRunId;
     if (data.continuation) continuation = data.continuation;
     if (currentRunId) {
       updateRunLocation(currentRunId);
@@ -1493,14 +1803,25 @@ async function runPrompt(prompt) {
   if (serviceMode === 'replay-only') { status('Saved stories · run locally with your own Meta API key for fresh exploration'); return; }
   if (serviceMode !== 'live-enabled') { status('Service mode could not be confirmed · open a saved world below'); return; }
   if (!hasLiveAccess()) { status('Select a saved world, or enter a live access code.'); return; }
-  viewStatus(''); reset(); history.pushState(null, '', location.pathname + location.search); $('prompt').value = prompt; status('Checking your question…');
-  await streamRun('/api/run', {divergence:prompt}, replayRequest);
+  const atlasData = atlasController?.getData?.();
+  const intent = atlasController?.getAttachmentIntent?.() || atlasAttachmentIntent;
+  let attachment;
+  if (intent?.mode === 'current-world' && intent.currentWorldId) {
+    const world = atlasData?.worlds?.find(item => item.id === intent.currentWorldId);
+    const ref = world?.eventRef || (world?.runId && world?.branchId ? { runId:world.runId, branchId:world.branchId } : null);
+    if (!ref?.runId || !ref?.branchId) { status('Enter a saved event before attaching a question to the current world.'); return; }
+    attachment = { mode:'current-world', parentRunId:ref.runId, parentBranchId:ref.branchId };
+  } else {
+    attachment = { mode:'present-day', divergenceYear:intent?.divergenceYear || 2026 };
+  }
+  viewStatus(''); reset({ preservePanel:true }); history.pushState(null, '', location.pathname + location.search); $('prompt').value = prompt; status('Checking your question…');
+  await streamRun('/api/run', { divergence:prompt, attachment }, replayRequest);
 }
 $('prompt-form').addEventListener('submit', e => { e.preventDefault(); runPrompt($('prompt').value); });
- $('show-invitation').addEventListener('click', () => {
-  setInvitationOpen(!document.body.classList.contains('invitation-open'));
-  $('prompt').focus({ preventScroll: true });
- });
+$('focus-atlas')?.addEventListener('click', () => { setAtlasFocused(true); atlasController?.scene?.setZoom?.(0.78); $('atlas-scene')?.focus({ preventScroll:true }); });
+$('atlas-show-tree')?.addEventListener('click', () => { setAtlasFocused(false); $('exploration-tree')?.scrollIntoView({ behavior:'smooth', block:'nearest' }); });
+$('atlas-show-selected')?.addEventListener('click', () => { setAtlasFocused(false); $('chronicle')?.scrollIntoView({ behavior:'smooth', block:'nearest' }); });
+ $('show-invitation').addEventListener('click', openNewExploration);
 document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { voice.cancel(); $('prompt').value = b.dataset.prompt; if (b.dataset.run) loadRun(b.dataset.run); else $('prompt').focus(); }));
 $('retry').addEventListener('click', () => {
   voice.cancel(); const prompt = $('retry').dataset.prompt; $('prompt').value = prompt;
@@ -1633,19 +1954,11 @@ sceneImage.addEventListener('keydown', event => {
 $('scene-lightbox-close').addEventListener('click', () => sceneLightbox.close());
 sceneLightbox.addEventListener('click', event => { if (event.target === sceneLightbox) sceneLightbox.close(); });
 reset();
-initializeStarMap();
+initializeAtlas();
 serviceModeReady = loadServiceMode();
 refreshHistory().catch(() => { $('runs').replaceChildren(new Option('Archive unavailable', '')); });
 const linkedRun = runIdFromHash(location.hash); if (linkedRun) loadRun(linkedRun, { animate: false, selectedBranchId: eventIdFromHash(location.hash) });
-import('./visuals.js').then(async ({createGlobe,createModelViewer}) => {
-  // The independent model viewer can stay available if the globe CDN fails.
+import('./visuals.js').then(async ({createModelViewer}) => {
   try { modelApi = createModelViewer($('model-view')); setView(activeView); }
   catch { modelApi = null; setView(activeView); }
-  try {
-    globeApi = await createGlobe($('globe'), activateBranch, (branch, anchor) => showGlobeBranchPreview(branch, anchor));
-    renderGeography();
-    renderBranches();
-    const visibleBranch = branchState.phase === 'replay' ? branchState.branches.at(-1) : branchState.branches.find(branch => branch.id === branchState.heroId);
-    if (visibleBranch) globeApi.focus(visibleBranch);
-  } catch { $('globe-fallback').hidden = false; }
-}).catch(() => { $('globe-fallback').hidden = false; });
+}).catch(() => { modelApi = null; setView(activeView); });

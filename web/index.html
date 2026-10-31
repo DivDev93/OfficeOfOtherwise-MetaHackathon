@@ -46,11 +46,9 @@
     <section id="exploration-tree" class="exploration-tree glass-panel" aria-label="Exploration tree">
       <div class="exploration-tree-heading">
         <div><p class="eyebrow">YOUR STORY</p><h2>Exploration tree</h2></div>
-        <button id="open-exploration-map" class="map-open-action" type="button" popovertarget="exploration-map-panel" aria-controls="exploration-map-panel">
-          <span class="map-open-icon" aria-hidden="true">✳</span><span>Exploration map</span><span class="map-open-arrow" aria-hidden="true">↗</span>
-        </button>
+        <button id="focus-atlas" class="map-open-action" type="button" aria-controls="atlas-scene"><span class="map-open-icon" aria-hidden="true">✳</span><span>Focus atlas</span><span class="map-open-arrow" aria-hidden="true">↗</span></button>
       </div>
-      <p class="exploration-tree-help">Choose a possibility from this list, or open the spatial map to see how paths connect.</p>
+      <p class="exploration-tree-help">Choose a possibility here or enter it on the atlas. Both views stay linked.</p>
       <div id="root-generation-status" class="root-generation-status" role="status" aria-live="polite" hidden><span id="root-generation-indicator" class="activity-indicator" aria-hidden="true"></span><span id="root-generation-message"></span></div>
       <div id="exploration-tree-status" aria-live="polite"></div>
       <nav id="world-navigation" class="world-navigation" aria-label="Chosen speculative history" hidden><button id="world-back" class="outline" type="button" hidden>← Previous world</button><div id="world-path"></div><small>Speculative causes and consequences · generated possibilities, not historical facts. Choose a path to expand; saved futures reopen without generation.</small></nav>
@@ -59,26 +57,20 @@
     </section>
     </aside>
 
-    <section id="exploration-map-panel" class="exploration-map-panel" popover="manual" aria-labelledby="exploration-map-title">
-      <div class="exploration-map-shell">
-        <header class="exploration-map-heading">
-          <div><p class="eyebrow">POSSIBLE PATHS</p><h2 id="exploration-map-title">Exploration map</h2><p class="exploration-map-help">The map defaults to a flat timeline, with older events on the left and later events on the right. Use Flat or Orbit to change the layout. In Orbit mode, drag or use the arrow keys to turn, Shift-drag to pan, + / − to zoom, and Home to reset. Hover to preview; click or press Enter to open a story node. Press Escape to dismiss a preview or close the map.</p></div>
-          <button id="close-exploration-map" class="map-close-action" type="button" popovertarget="exploration-map-panel" popovertargetaction="hide" aria-label="Close exploration map"><span aria-hidden="true">×</span><span class="map-close-label">Close</span></button>
-        </header>
-        <div id="starmap" class="starmap-host" role="region" aria-label="Spatial map of exploration paths" aria-describedby="exploration-map-instructions"></div>
-        <p id="exploration-map-instructions" class="visually-hidden">The map defaults to a flat left-to-right timeline from older to later events. Use the Flat or Orbit buttons to change the layout. In Orbit mode, drag or use the arrow keys to turn, hold Shift while dragging to pan, press + or minus to zoom, and Home to reset the view. Hover over a node to preview it without opening the story. Click a node or focus it and press Enter to open its story. Press Escape to dismiss the preview or close the map. Use the exploration tree list to navigate if the map is unavailable.</p>
-        <div class="exploration-map-footer"><span>Selection stays linked to the story and globe.</span><span>Press Escape to close</span></div>
-      </div>
-    </section>
-
     <section id="guardrail" class="guardrail glass-panel" hidden role="alert"><div><span class="eyebrow">A DIFFERENT DIRECTION</span><h2>Let's reframe that question.</h2><p id="reason"></p><p id="reframe"></p></div><button id="retry" class="outline" type="button">Try the suggestion ↗</button></section>
 
     <section id="workspace" class="workspace" aria-label="Possible worlds workspace">
 
       <section class="map-panel" aria-labelledby="atlas-title">
-        <div class="panel-head glass-veil"><div><p class="eyebrow">POSSIBLE PATHS</p><h2 id="atlas-title">The branching atlas</h2></div><span id="map-status" class="muted map-status" aria-live="polite">DRAG · SCROLL TO ZOOM</span></div>
-        <div id="globe" aria-label="Interactive Earth globe showing branch pins and possible paths" aria-describedby="branch-list"></div>
-        <p id="globe-fallback" class="muted fallback-note" hidden>Globe unavailable; explore branches using the list.</p>
+        <div class="panel-head glass-veil"><div><p class="eyebrow">POSSIBLE PATHS</p><h2 id="atlas-title">The branching atlas</h2></div><span id="map-status" class="muted map-status" aria-live="polite">ATLAS · POSSIBLE WORLDS</span></div>
+        <div id="atlas-toolbar" class="atlas-toolbar" role="toolbar" aria-label="Atlas controls"></div>
+        <div id="atlas-reopen-controls" class="atlas-reopen-controls" hidden aria-label="Open story panels">
+          <button id="atlas-show-tree" type="button">Story tree</button>
+          <button id="atlas-show-selected" type="button">Selected world</button>
+        </div>
+        <div id="atlas-scene" tabindex="0" aria-label="Continuous Atlas scene: hover or focus to preview; click or press Enter to enter a world or unfold a question chip" aria-describedby="branch-list"></div>
+        <div id="atlas-preview-anchor" class="atlas-preview-anchor" aria-hidden="true"></div>
+        <p id="globe-fallback" class="muted fallback-note" hidden>Atlas scene unavailable; explore stories using the tree.</p>
         <section id="geography-panel" class="geography-panel glass-vault" aria-label="Scenario geography">
           <div class="geography-heading"><strong>Earth surface</strong><div role="group" aria-label="Earth surface comparison"><button id="geography-present" type="button" class="outline" aria-pressed="false">Present day</button><button id="geography-scenario" type="button" class="outline" aria-pressed="true">Scenario</button></div></div>
           <p id="geography-status" role="status">Present-day reference · no scenario geography recorded.</p>
@@ -102,6 +94,6 @@
   </main>
   <dialog id="scene-lightbox" class="scene-lightbox" aria-label="Enlarged scene image"><button id="scene-lightbox-close" class="outline" type="button" aria-label="Close enlarged image">Close <span aria-hidden="true">×</span></button><img id="scene-lightbox-image" alt=""></dialog>
   <footer><span>OFFICE OF OTHERWISE</span><span id="footer-service-mode">Saved stories · run locally with your own Meta API key for fresh exploration</span></footer>
-  <script type="module" src="/app.js?v=saved-preview-surfaces-1"></script>
+  <script type="module" src="/app.js?v=atlas-p4-product-1"></script>
 </body>
 </html>
