@@ -6,6 +6,11 @@ export const SURFACE_LABEL_LEVEL = 3;
 export const ORBIT_UNFOLDED_LEVEL = 2;
 export const SURFACE_CAMERA_DISTANCE = 2.9;
 export const ATLAS_CAMERA_DISTANCE = 12.2;
+export const ATLAS_PIN_GEOMETRY_RADIUS = 0.037;
+export const SURFACE_PIN_SCALE = 0.12;
+export const LIFTED_PIN_SCALE = 1;
+export const ATLAS_PIN_SCALE_GAIN = 4.5;
+export const SURFACE_RING_CENTER_OFFSET = 0.00025;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const smooth = value => {
@@ -79,6 +84,44 @@ export function worldRadiusForScreenPixels(distance, fovDegrees, viewportHeight,
   if (![d, fov, height, size].every(Number.isFinite) || d <= 0 || height <= 0 || !(fov > 0 && fov < 180) || size <= 0) return 0;
   const visibleHeight = 2 * d * Math.tan(fov * Math.PI / 360);
   return visibleHeight * size / (2 * height);
+}
+
+/** Keep event pins as surface dots, then inflate them into mini-Earths only during Lift. */
+export function surfacePinScale(lift) {
+  const progress = clamp(Number(lift) || 0, 0, 1);
+  return SURFACE_PIN_SCALE + (LIFTED_PIN_SCALE - SURFACE_PIN_SCALE) * progress;
+}
+
+/** Place a spherical marker so its lower pole touches the scaled Earth surface. */
+export function surfacePinAnchorRadius(earthRadius, pinScale) {
+  return Math.max(0, Number(earthRadius) || 0) + ATLAS_PIN_GEOMETRY_RADIUS * Math.max(0, Number(pinScale) || 0);
+}
+
+/** Preserve the previous Orbit-to-Atlas sphere growth curve. */
+export function atlasPinScale(atlas) {
+  return 1 + ATLAS_PIN_SCALE_GAIN * clamp(Number(atlas) || 0, 0, 1);
+}
+
+export function pinScaleAtPresentation(lift, atlas) {
+  return surfacePinScale(lift) * atlasPinScale(atlas);
+}
+
+/** Shared rendered and hit-test center radius for the Surface ring and Lift spheres. */
+export function pinAnchorRadiusAtPresentation(earthRadius, lift, atlas) {
+  return Number(lift) <= 0 ? Math.max(0, Number(earthRadius) || 0) + SURFACE_RING_CENTER_OFFSET
+    : surfacePinAnchorRadius(earthRadius, pinScaleAtPresentation(lift, atlas));
+}
+
+/** Whether a geodetic surface marker lies on the camera-facing hemisphere. */
+export function isSurfaceNormalVisible(normal, towardCamera, horizonMargin = 0.02) {
+  const vector = value => {
+    const x = Number(value?.x), y = Number(value?.y), z = Number(value?.z);
+    const length = Math.hypot(x, y, z);
+    return length > 1e-10 && Number.isFinite(length) ? { x: x / length, y: y / length, z: z / length } : null;
+  };
+  const surface = vector(normal), view = vector(towardCamera);
+  if (!surface || !view) return false;
+  return surface.x * view.x + surface.y * view.y + surface.z * view.z > Number(horizonMargin || 0);
 }
 
 /** Clamp a projected label center so its entire pixel rectangle stays on the canvas. */

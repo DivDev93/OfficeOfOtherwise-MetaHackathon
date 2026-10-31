@@ -8,7 +8,10 @@ import {
   slerpUnitVector, selectSurfaceWorldLabelIds, worldRadiusForScreenPixels, cappedTextureSize,
   fitCameraDistance, layoutOrbitNeighborhood, zoomForAltitude,
   appendContinuousFrame, atlasPresentationState,
-  clampScreenRectCenter,
+  clampScreenRectCenter, isSurfaceNormalVisible,
+  ATLAS_PIN_GEOMETRY_RADIUS, ATLAS_PIN_SCALE_GAIN, LIFTED_PIN_SCALE, SURFACE_PIN_SCALE,
+  atlasPinScale, pinAnchorRadiusAtPresentation, pinScaleAtPresentation,
+  surfacePinAnchorRadius, surfacePinScale,
 } from '../web/atlasLayout.js';
 
 test('normalized zoom and camera altitude are continuous inverses', () => {
@@ -151,6 +154,42 @@ test('surface label rectangles clamp fully inside compact and desktop canvas bou
   }
 });
 
+test('surface markers sit at Earth radius and their mini-Earth representations inflate only across Lift', () => {
+  assert.equal(surfacePinScale(0), SURFACE_PIN_SCALE);
+  assert.equal(surfacePinScale(1), LIFTED_PIN_SCALE);
+  assert.ok(surfacePinScale(0.5) > SURFACE_PIN_SCALE && surfacePinScale(0.5) < LIFTED_PIN_SCALE);
+  assert.equal(atlasPinScale(0), 1, 'Orbit pins retain the original size');
+  assert.equal(atlasPinScale(1), 1 + ATLAS_PIN_SCALE_GAIN, 'Atlas retains the previous 1 + 4.5×atlas size curve');
+  assert.equal(pinScaleAtPresentation(1, 0), 1, 'Lift ends at the existing Orbit pin size');
+  assert.equal(pinScaleAtPresentation(1, 1), 1 + ATLAS_PIN_SCALE_GAIN, 'only Atlas applies the old 1 + 4.5× growth');
+  assert.equal(pinAnchorRadiusAtPresentation(1, 0, 0), 1 + 0.00025, 'surface hit targets share the exact rendered ring center');
+  assert.ok(Math.abs(pinAnchorRadiusAtPresentation(0.34, 0.5, 0)
+    - surfacePinAnchorRadius(0.34, pinScaleAtPresentation(0.5, 0))) < 1e-12, 'Lift hit targets share the rendered sphere center');
+  const surfaceScale = surfacePinScale(0);
+  const surfaceAnchor = surfacePinAnchorRadius(1, surfaceScale);
+  assert.ok(Math.abs((surfaceAnchor - ATLAS_PIN_GEOMETRY_RADIUS * surfaceScale) - 1) < 1e-12, 'marker lower pole rests at the exact unit Earth surface');
+  const liftedScale = surfacePinScale(1) * atlasPinScale(0);
+  const shrunkEarth = atlasZoomState(0.57).earthScale;
+  const liftedAnchor = surfacePinAnchorRadius(shrunkEarth, liftedScale);
+  assert.ok(Math.abs((liftedAnchor - ATLAS_PIN_GEOMETRY_RADIUS * liftedScale) - shrunkEarth) < 1e-12, 'Lift keeps the expanding pin tangent to the shrinking globe source');
+});
+
+test('negative-latitude/longitude surface markers remain on the unit Earth and cull with the horizon', () => {
+  const entry = layoutAtlasWorlds([{ id: 'negative-geo', lat: -33.9, lon: -151.2 }], 'negative-geo')[0];
+  const unitLength = Math.hypot(entry.globe.x, entry.globe.y, entry.globe.z);
+  const actualSurfacePoint = { x: entry.globe.x / unitLength, y: entry.globe.y / unitLength, z: entry.globe.z / unitLength };
+  assert.ok(Math.abs(Math.hypot(actualSurfacePoint.x, actualSurfacePoint.y, actualSurfacePoint.z) - 1) < 1e-12);
+  assert.ok(isSurfaceNormalVisible(entry.globe, entry.globe), 'the event is visible when its normal faces the camera');
+  assert.equal(isSurfaceNormalVisible(entry.globe, { x: -entry.globe.x, y: -entry.globe.y, z: -entry.globe.z }), false, 'the same event is hidden on the far hemisphere');
+  const scale = surfacePinScale(0);
+  assert.ok(Math.abs(surfacePinAnchorRadius(1, scale) - ATLAS_PIN_GEOMETRY_RADIUS * scale - 1) < 1e-12);
+  const source = readFileSync(new URL('../web/atlas/scene.js', import.meta.url), 'utf8');
+  assert.match(source, /new THREE\.RingGeometry\(/, 'surface uses flat tangent ring markers');
+  assert.match(source, /setFromUnitVectors\(new THREE\.Vector3\(0, 0, 1\)/, 'ring normals align to each geographic normal');
+  assert.match(source, /vertexColors: false/, 'instance colors do not require missing geometry vertex colors');
+  assert.match(source, /surfacePinInstances\.setColorAt/, 'each tangent marker still receives its world color');
+});
+
 test('surface arc interpolation stays finite for coincident, near-coincident and antipodal nodes', () => {
   const cases = [
     [{ x: 0, y: 1, z: 0 }, { x: 0, y: 1, z: 0 }, 0.5],
@@ -223,6 +262,13 @@ test('reduced-motion Lift fades between fixed surface and Orbit snapshots withou
   const ordinary = atlasPresentationState(0.395, false);
   assert.equal(ordinary.opacity, 1);
   assert.ok(ordinary.state.lift > 0 && ordinary.state.lift < 1, 'default motion keeps continuous Lift');
+});
+
+test('perspective horizon hides an oblique surface anchor even on the front hemisphere', () => {
+  const view = { x: 0, y: 0, z: 3 };
+  const threshold = 1 / 3;
+  assert.equal(isSurfaceNormalVisible({ x: Math.sqrt(0.96), y: 0, z: 0.2 }, view, threshold), false);
+  assert.equal(isSurfaceNormalVisible({ x: Math.sqrt(0.75), y: 0, z: 0.5 }, view, threshold), true);
 });
 
 test('scene foundation uses one renderer, scene, camera and no timed camera tween', () => {

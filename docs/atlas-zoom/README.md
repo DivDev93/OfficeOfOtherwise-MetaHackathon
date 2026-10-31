@@ -44,6 +44,14 @@ Additional captures show [Atlas options](screenshots/atlas-options-1440.jpg), a 
 
 ## Validation
 
-Automated tests use local fixtures and recorded outputs. The final explicit Node 22.23.3 run covered 46 `test/*.test.js` files: **420 passed, 0 failed** (7.70 seconds). The raw TAP output is in the ignored local QA artifact `out/atlas-product-qa/restart-final-suite.log`.
+Automated tests use local fixtures and recorded outputs. The initial P4 explicit Node 22.23.3 run covered 46 `test/*.test.js` files: **420 passed, 0 failed** (7.70 seconds). Its raw TAP output is in the ignored local QA artifact `out/atlas-product-qa/restart-final-suite.log`.
 
-Gitleaks 8.30.1 found **0 findings** in both the current public-source export (382 files, 41.43 MB; `.env`, `node_modules`, and ignored `out` excluded) and the `6900..HEAD` history range (4 commits, 372.64 KB). The screenshot and cadence metadata document this capture session only, not cross-device acceptance.
+The initial P4 Gitleaks 8.30.1 checks found **0 findings** in both the public-source export (382 files, 41.43 MB; `.env`, `node_modules`, and ignored `out` excluded) and the then-current source history range (4 commits, 372.64 KB). The screenshot and cadence metadata document that capture session only, not cross-device acceptance.
+
+## Surface anchoring review — October 31
+
+Surface event markers are now tangent, depth-tested geographic rings. They become mini-Earths during Lift; the parent remains a navigation label and trail until its mini-Earth appears during Lift. Labels use the same geographic anchor, recompute during dragging, and disappear beyond the perspective horizon. Lift click/preview centers share the rendered positions, and Orbit/Atlas sphere sizing remains unchanged.
+
+Current screenshots: [before panning](screenshots/surface-pins-fixed-1544.jpg) and [after panning](screenshots/surface-pins-panned-1544.jpg), both at 1544×822. The earlier four-level capture set and P1 recording remain the original checkpoint evidence and predate this correction.
+
+The review update passed **423/423 tests** on Node 22.23.3 (46 files, 8.14 seconds). Raw output: ignored local artifact `out/atlas-surface-anchor-review/full-suite-final.log`. The local keyless walkthrough made zero generation POSTs or external model calls.
