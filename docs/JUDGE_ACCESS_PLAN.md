@@ -1,12 +1,12 @@
 # Judge access and 3D scope
 
-## Public replay demo
+## Local saved replay
 
-The public judge demo is the [Office of Otherwise replay app](https://office-otherwise-875096283797.northamerica-northeast2.run.app). It exposes saved worlds in replay-only mode without credentials or model spend. The submission also includes a public GitHub repository and a video release asset; the official form has no hosted-app URL field.
+Judges clone the public repository and run `npm ci --ignore-scripts` followed by `npm run demo` on Node 22.9.0 or newer. Opening `http://127.0.0.1:3000` displays packaged saved worlds without credentials or model spend. No hosted app is required or authorized; the former Office service and its dedicated image repository have been removed. The submission also includes the public repository and a video release asset.
 
 ## Fresh Meta exploration
 
-The public repository supports credential-free saved replay. For local fresh branching, consequences, event scenes, SAM 3.1 cutouts, and optional voice transcription, a judge can clone the repository, place their own Meta Model API key in the ignored server-side `.env`, review the configured spend ceilings, and run `npm run demo` on loopback. The browser does not receive the Meta API key. See [the README setup](../README.md#run-it-locally).
+For local fresh branching, consequences, event scenes, SAM 3.1 cutouts, and optional voice transcription, a judge can place their own Meta Model API key in the ignored server-side `.env`, review the configured spend ceilings, and run `npm run demo` on loopback. The browser does not receive the Meta API key. See [the README setup](../README.md#run-it-locally).
 
 ## SAM 3D Objects boundary
 

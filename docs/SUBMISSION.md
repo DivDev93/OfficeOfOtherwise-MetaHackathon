@@ -6,10 +6,10 @@
 - **Intended theme:** Build for Your World
 - **Submission deadline:** November 4, 2026, 9:00 PM America/Toronto
 - **Public repository:** [DivDev93/OfficeOfOtherwise-MetaHackathon](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon)
-- **Public replay demo:** [Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app)
+- **Local judge access:** Credential-free saved replay from a repository clone; use your own server-side Meta API key for fresh Meta functionality.
 - **3-minute video:** [Download the v2 submission video](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/releases/download/hackathon-submission-2026-10-31/office-of-otherwise-submission-1080p-v2.mp4)
 
-The public repository, replay demo, and v2 video are the judge-facing release artifacts. The hackathon entry remains unsubmitted and consent unchecked. PR #7 remains open, draft, and unmerged; the parked `develop` pilot work remains intact.
+The public repository and v2 video are the judge-facing release artifacts. The replay runs locally; no hosted app is required or authorized. The hackathon entry remains unsubmitted and consent unchecked. PR #7 remains open, draft, and unmerged; the parked `develop` pilot source remains intact.
 
 ## Primary use and product story
 
@@ -61,12 +61,11 @@ The following figures are the Argon-reported pre-takeover sample from October 30
 
 ## Judge setup
 
-1. **Public replay demo:** Open [Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app) to inspect saved worlds without credentials in replay-only mode.
-2. **Local credential-free replay & tests:** On Node `>= 22.9.0`, run `npm ci --ignore-scripts`, `npm test`, and `npm run demo` (`http://127.0.0.1:3000`).
-3. **Local live Meta exploration:** Copy `.env.example` to your ignored local `.env`, set `META_API_KEY` (and optional `META_SPEND_CAP_USD` / `DEMO_DAILY_CAP_USD`), and run `npm run demo` on `127.0.0.1`.
+1. **Credential-free saved replay:** Clone the public repository. On Node `>= 22.9.0`, run `npm ci --ignore-scripts` and `npm run demo`, then open `http://127.0.0.1:3000`. This reads the packaged records and makes no model calls.
+2. **Fresh Meta exploration (optional):** Copy `.env.example` to an ignored local `.env`, set your own server-side `META_API_KEY`, review the configured `META_SPEND_CAP_USD` and optional `DEMO_DAILY_CAP_USD`, and run `npm run demo` on loopback. The key is not sent to the browser. No private Tattva credentials are included or needed for these Meta features.
 
 ## Release provenance
 
-The final submission release was integrated through one PR from `codex/meta-submission-release` to `main`, as an exception to the usual `develop` → `main` path. The exact resulting `main` HEAD is deployed in replay-only mode. PR #7 remains open, draft, and unmerged; `develop` and its parked pilot work remain intact.
+The implementation release was integrated through PR #8; the corrective source release documents local judge access. The release verification asset records the exact current source commit and package hash. The immutable October 31 video tag and its earlier capture provenance remain unchanged. PR #7 stays open, draft and unmerged, with the parked pilot source on `develop` preserved. The former cloud service and dedicated image repository were removed; no hosted app is required.
 
 The corrected video is published as `office-of-otherwise-submission-1080p-v2.mp4` under release tag `hackathon-submission-2026-10-31`. Its SHA-256 is `0C72D0DDE6E25AAF601ECAA80DFB313E55D59317B8B7773703B4EA95221D7F9E`. The hackathon entry has not been submitted.
