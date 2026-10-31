@@ -340,3 +340,21 @@ test('geography free text cannot bypass keyword or model policy, including inher
   assert.equal(blocked.status, 'blocked');
   assert.equal(noCalls.calls.length, 0);
 });
+
+test('branch schema accepts optional Atlas theme and question divergence metadata while old fixtures still infer defaults', async () => {
+  const themed = { ...BRANCHES[0], theme: 'science-medicine' };
+  const client = fakeClient({ propose: JSON.stringify([themed]), review: { scores: [{ id: 'b1', score: 8, boldness: 0.8, note: 'strong' }], hero: REVIEW.hero } });
+  const out = await createBranchAgent({ client, policy: allowAll }).run({
+    divergence: 'What if the Library of Alexandria never burned?', divergenceYear: -300, divergencePlace: { name: 'Alexandria', lat: 31.2, lon: 29.9 },
+  });
+  assert.equal(out.branches[0].theme, 'science-medicine');
+  assert.equal(out.branches[0].boldness, 0.8);
+  assert.deepEqual(out.question, { divergenceYear: -300, divergencePlace: { name: 'Alexandria', lat: 31.2, lon: 29.9 } });
+  assert.ok(client.calls.every(call => call.input.includes('"divergenceYear":-300')));
+
+  const legacyClient = fakeClient({ propose: JSON.stringify([BRANCHES[0]]), review: REVIEW });
+  const legacyOut = await createBranchAgent({ client: legacyClient, policy: allowAll }).run({ divergence: 'What if the Library of Alexandria never burned?' });
+  assert.equal(legacyOut.branches[0].theme, 'science-medicine');
+  assert.equal(legacyOut.branches[0].boldness, 0.9);
+  assert.equal('question' in legacyOut, false);
+});

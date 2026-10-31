@@ -19,6 +19,7 @@
     "demo": "node --env-file-if-exists=.env server/index.js",
     "cache-demo": "node --env-file-if-exists=.env scripts/cache-demo.js",
     "cache-guardrail-fixture": "node scripts/cache-guardrail-fixture.js",
+    "migrate-atlas-worlds": "node scripts/migrate-atlas-worlds.js",
     "models": "node --env-file-if-exists=.env scripts/models.js",
     "smoke": "node --env-file-if-exists=.env scripts/smoke.js",
     "branch": "node --env-file-if-exists=.env scripts/branch.js",

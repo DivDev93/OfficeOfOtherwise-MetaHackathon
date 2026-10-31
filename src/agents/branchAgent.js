@@ -12,6 +12,7 @@
 
 import { extractJson } from '../lib/json.js';
 import { normalizeGeography, withGeographyPrompt, GEOGRAPHY_REGION_KINDS } from '../../web/geography.js';
+import { ATLAS_THEMES, deriveTheme } from '../../web/atlas/worldModel.js';
 
 const PROPOSE_INSTRUCTIONS = `You design alternate-history timelines for an exploration app.
 Given a point of divergence, propose distinct, plausible branches that follow from it.
@@ -22,6 +23,7 @@ Reply with ONLY a JSON array, no prose. Each item:
 {"id":"b1","title":"<6 words max>","year":<integer, negative for BCE>,"place":{"name":"<city or region>","lat":<number>,"lon":<number>},
  "summary":"<2 sentences: what changed and why it follows from the divergence>",
  "scene":"<1 sentence describing one striking, concrete visual moment in that world>",
+ "theme":"<one of ${ATLAS_THEMES.join(', ')}>",
  "geography":{"version":1,"changes":[{"id":"<stable lowercase-hyphen id>","kind":"land|vegetation|lake|ice","region":"<supported region>","intensity":<0..1>,"assumption":"<explicit hypothetical physical condition, max 500 characters>","uncertainty":"<limits and uncertainty, max 500 characters>"}]}}
 Use geography for physical changes relevant to this scenario. Supported curated display regions and allowed kinds ONLY: ${JSON.stringify(GEOGRAPHY_REGION_KINDS)}.
 These masks are illustrative, not reconstructed terrain or exact boundaries. Do not invent regions or claim a physical simulation.
@@ -36,7 +38,7 @@ or machine that can be cut out and turned into a 3D model). Name that subject us
 that a segmentation model can recognize (for example, "book" rather than "anatomical atlas on a lectern").
 The image must preserve the hero's full geography state, including inherited physical assumptions and their uncertainty. Do not depict present-day coastlines or desert where its scenario changes them.
 Reply with ONLY a JSON object, no prose:
-{"scores":[{"id":"b1","score":<0-10>,"note":"<under 15 words>"}],
+ {"scores":[{"id":"b1","score":<0-10>,"boldness":<score divided by 10, from 0 to 1>,"note":"<under 15 words>"}],
  "hero":{"id":"<branch id>","imagePrompt":"<one paragraph>","subject":"<few words, e.g. 'brass steam orrery'>"}}`;
 
 function now() { return Number(process.hrtime.bigint() / 1000000n); }
@@ -92,6 +94,7 @@ function cleanBranch(b, inherited) {
   const geography = normalizeGeography(b.geography, { inherited });
   return { id: b.id, title: b.title, year: b.year, place: { name: b.place.name, lat: b.place.lat, lon: b.place.lon }, summary: b.summary,
     ...(typeof b.scene === 'string' ? { scene: b.scene } : {}), ...(typeof b.causalLink === 'string' ? { causalLink: b.causalLink.trim() } : {}),
+    theme: ATLAS_THEMES.includes(b.theme) ? b.theme : deriveTheme(b),
     ...(geography !== undefined ? { geography } : {}) };
 }
 
@@ -119,12 +122,19 @@ export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' })
    * @param {{ divergence: string, count?: number }} input
    * @returns {Promise<{ status:'ok'|'blocked'|'empty', divergence, branches, rejected, hero, reframe?, trace, costUsd }>}
    */
-  async function run({ divergence, count = 3, onStep, signal, continuation }) {
+  async function run({ divergence, count = 3, onStep, signal, continuation, divergenceYear, divergencePlace }) {
     const context = normalizeContinuation(continuation);
+    const question = {
+      ...(Number.isSafeInteger(divergenceYear) && divergenceYear !== 0 ? { divergenceYear } : {}),
+      ...(divergencePlace && typeof divergencePlace === 'object' && Number.isFinite(divergencePlace.lat) && Number.isFinite(divergencePlace.lon)
+        && divergencePlace.lat >= -90 && divergencePlace.lat <= 90 && divergencePlace.lon >= -180 && divergencePlace.lon <= 180
+        ? { divergencePlace: { ...(typeof divergencePlace.name === 'string' ? { name: divergencePlace.name } : {}), lat: divergencePlace.lat, lon: divergencePlace.lon } } : {}),
+    };
+    const questionInput = Object.keys(question).length ? `\nRoot question metadata: ${JSON.stringify(question)}` : '';
     const ancestryInput = context ? `\nContinuation scenario (original root and ordered chosen events, including selected parent):\n${JSON.stringify(context)}` : '';
     const trace = [];
     const startSpent = client.spent();
-    const done = extra => ({ divergence, ...(context ? { continuation: context } : {}), branches: [], rejected: [], hero: null, ...extra, trace, costUsd: client.spent() - startSpent });
+    const done = extra => ({ divergence, ...(Object.keys(question).length ? { question } : {}), ...(context ? { continuation: context } : {}), branches: [], rejected: [], hero: null, ...extra, trace, costUsd: client.spent() - startSpent });
 
     // 1. policy on the prompt
     const t0 = now();
@@ -138,7 +148,7 @@ export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' })
     // 2. propose (over-generate so policy + review have room to drop some)
     const proposed = await step(trace, 'propose', {
       instructions: PROPOSE_INSTRUCTIONS + (context ? `\n${CONTINUATION_INSTRUCTIONS}${context.path.at(-1).geography?.version === 2 ? `\n${V2_CONTINUATION_INSTRUCTIONS}` : ''}` : ''),
-      input: `Point of divergence: ${divergence}${ancestryInput}\nPropose ${count + 2} branches.`,
+      input: `Point of divergence: ${divergence}${questionInput}${ancestryInput}\nPropose ${count + 2} branches.`,
       maxOutputTokens: 6000,
     }, signal);
     throwIfAborted(signal);
@@ -163,7 +173,7 @@ export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' })
     });
     const reviewRun = step(trace, 'review', {
       instructions: REVIEW_INSTRUCTIONS + (context ? `\n${CONTINUATION_INSTRUCTIONS}${context.path.at(-1).geography?.version === 2 ? `\n${V2_CONTINUATION_INSTRUCTIONS}` : ''}` : ''),
-      input: `Point of divergence: ${divergence}${ancestryInput}\nBranches:\n${JSON.stringify(candidates, null, 1)}`,
+      input: `Point of divergence: ${divergence}${questionInput}${ancestryInput}\nBranches:\n${JSON.stringify(candidates, null, 1)}`,
       maxOutputTokens: 5000,
     }, signal);
     // Both calls are already in flight; settle them before reporting cost or errors.
@@ -178,7 +188,12 @@ export function createBranchAgent({ client, policy, model = 'muse-wonder-1.0' })
     const review = reviewResult.value;
     const scoreOf = new Map((review?.scores ?? []).map(s => [s.id, s]));
     const ranked = kept
-      .map(b => ({ ...b, score: Number(scoreOf.get(b.id)?.score ?? 0), reviewNote: scoreOf.get(b.id)?.note ?? '' }))
+      .map(b => {
+        const reviewScore = Number(scoreOf.get(b.id)?.score ?? 0);
+        const reviewedBoldness = Number(scoreOf.get(b.id)?.boldness);
+        return { ...b, score: reviewScore, boldness: Number.isFinite(reviewedBoldness) && reviewedBoldness >= 0 && reviewedBoldness <= 1 ? reviewedBoldness : reviewScore / 10,
+          reviewNote: scoreOf.get(b.id)?.note ?? '' };
+      })
       .sort((a, b) => b.score - a.score)
       .slice(0, count);
     const heroId = ranked.some(b => b.id === review?.hero?.id) ? review.hero.id : ranked[0].id;
