@@ -18,7 +18,7 @@ export function unwrapRing(ring) {
   });
 }
 export function safeGeography(value) {
-  try { return normalizeGeography(value); } catch { return undefined; }
+  try { const normalized = normalizeGeography(value); return normalized?.version === 1 ? normalized : undefined; } catch { return undefined; }
 }
 export function visibleChanges(value, mode = 'scenario') {
   return mode === 'scenario' ? (safeGeography(value)?.changes || []).filter(change => change.intensity > 0) : [];

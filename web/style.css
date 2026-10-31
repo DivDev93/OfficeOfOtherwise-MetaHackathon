@@ -29,6 +29,7 @@ details{margin-top:9px;color:var(--neutral-200);font-size:10px}details summary{c
 .glass-veil{border-color:rgba(236,228,212,.12);background:rgba(245,242,237,.035);backdrop-filter:blur(12px)}
 .glass-panel{backdrop-filter:blur(20px)}
 .glass-vault{border:1px solid rgba(236,228,212,.16);background:linear-gradient(150deg,rgba(19,15,15,.94),rgba(7,6,7,.94));backdrop-filter:blur(28px);box-shadow:0 22px 68px rgba(0,0,0,.5)}
+.saved-event-preview{position:fixed;z-index:40;display:grid;gap:6px;box-sizing:border-box;max-width:calc(100vw - 16px);max-height:min(190px,calc(100vh - 16px));overflow:hidden;padding:11px 13px;border:1px solid #a18a66;border-radius:11px;background:linear-gradient(145deg,rgba(29,25,21,.98),rgba(16,14,12,.98));box-shadow:0 14px 32px #000c;color:var(--parchment);pointer-events:none;backdrop-filter:blur(10px)}.saved-event-preview[hidden]{display:none}.saved-event-preview strong{font:600 15px/1.25 var(--serif);color:#f4eee2}.saved-event-preview small{color:var(--neutral-300);font-size:10px;line-height:1.4}.saved-event-preview p{max-height:68px;overflow:hidden;margin:0;color:var(--neutral-200);font-size:12px;line-height:1.45}.saved-event-preview .saved-preview-scene{color:var(--gold)}
 .header-actions .glass-veil,.panel-head.glass-veil,.view-switch.glass-veil{backdrop-filter:blur(12px)}
 .brand>span:nth-child(2){font:500 19px/1 var(--serif);letter-spacing:.16em}
 .brand small{font-size:11px;letter-spacing:.05em}
@@ -151,6 +152,7 @@ body:not(.has-story) .geography-panel{display:none}
 
 /* Compact start controls and the navigable branch tree share one rail. */
 .exploration-rail{position:fixed;z-index:9;top:88px;bottom:16px;left:18px;display:flex;flex-direction:column;gap:9px;width:min(320px,calc(34vw - 12px));min-width:270px;pointer-events:auto}
+.has-story:not(.invitation-open) .exploration-rail #invitation{display:none}
 .exploration-rail #invitation.intro{position:relative;inset:auto;width:100%;max-height:48%;overflow:auto;padding:12px;border-radius:12px}
 .exploration-rail .intro-copy{margin-bottom:8px}.exploration-rail .intro-copy h1{font-size:22px;line-height:1.02}.exploration-rail .intro-copy h1 br{display:none}.exploration-rail .intro-copy .eyebrow{margin-bottom:2px}
 .exploration-rail .lede{font-size:10px}.exploration-rail .input-panel textarea{height:48px;min-height:48px;padding:8px 9px;font-size:11px}.exploration-rail .primary{flex-basis:68px;font-size:10px}
@@ -292,3 +294,59 @@ body:not(.has-story) .geography-panel{display:none}
   .exploration-map-footer span:first-child{max-width:22ch}
 }
 @media(prefers-reduced-motion:reduce){.map-open-action,.map-close-action{transition:none}}
+
+/* Readable atlas controls and secondary geography details. */
+body{font-size:14px}
+.exploration-tree-help,.geography-panel,.geography-panel p,.geography-panel li{font-size:14px;line-height:1.45}
+.geography-caution,.geography-panel small{color:var(--neutral-200);font:italic 14px/1.45 var(--serif)}
+.geography-heading button{min-width:44px;min-height:44px;font-size:12px}
+.voice-disclosure{margin:10px 0 0;border-top:1px solid var(--line)}
+.voice-disclosure summary{min-height:44px;font-size:13px}
+.voice-controls{font-size:13px}
+.voice-controls small{color:var(--neutral-200);font:italic 14px/1.45 var(--serif)}
+.geography-technical{margin-top:5px;color:var(--neutral-200);font-size:12px;overflow-wrap:anywhere}
+.geography-technical span{display:block}
+.exploration-tree #exploration-tree-status .tree-root-title,
+.exploration-tree #exploration-tree-status .tree-event,
+.exploration-tree #exploration-tree-status .tree-status,
+.exploration-tree #exploration-tree-status .tree-stage,
+.exploration-tree #exploration-tree-status .tree-edge,
+.exploration-tree #branch-list button,
+.exploration-tree .world-navigation small,
+.exploration-tree #map-empty{font-size:12px;line-height:1.45}
+.exploration-tree #world-path button,.exploration-tree .map-open-action{min-height:44px;font-size:12px}
+@media(max-width:700px){
+  .exploration-tree-help{font-size:12px}
+  .exploration-rail{max-height:43dvh}
+  .exploration-rail #invitation.intro,.exploration-tree{max-height:43dvh}
+  .exploration-rail .intro-copy h1{font-size:21px}
+  .exploration-rail .lede{display:block;font-size:12px}
+  .exploration-rail .input-panel label,.exploration-rail .archive-picker label{font-size:12px}
+  .exploration-rail .input-panel textarea{min-height:54px;height:54px;font-size:12px}
+  .exploration-rail .primary,.exploration-rail .starter-block summary,.exploration-rail .starter-rows button,
+  .exploration-rail .archive-picker select,.exploration-rail .archive-picker .outline,
+  .exploration-tree #world-path button,.exploration-tree #branch-list button{font-size:12px}
+  .exploration-tree .world-navigation small{font-size:12px}
+  .exploration-tree #map-empty{font-size:12px}
+  .exploration-tree-heading .eyebrow{font-size:12px}
+  .geography-caution,.geography-panel small,.voice-controls small{font-size:12px}
+  .geography-panel{max-height:24dvh}
+}
+@media(max-width:400px){
+  .exploration-rail{top:118px;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px}
+  .exploration-rail #invitation.intro,.exploration-tree{padding:7px}
+  .exploration-rail .intro-copy h1{font-size:18px}
+  .exploration-rail .starter-rows{grid-template-columns:1fr}
+  .exploration-tree-heading h2{font-size:17px}
+  .exploration-tree .map-open-action{font-size:12px}
+}
+
+/* Keep the mobile story rail, Earth legend, and selected scene in separate readable bands. */
+@media(max-width:700px){
+  body.has-story:not(.invitation-open){overflow-y:auto;overscroll-behavior-y:contain}
+  .has-story:not(.invitation-open) .exploration-rail{top:118px;right:9px;bottom:auto;left:9px;display:block;width:auto;max-height:33dvh}
+  .has-story:not(.invitation-open) .exploration-rail .exploration-tree{max-height:33dvh;overflow:auto}
+  .has-story:not(.invitation-open) .geography-panel{top:calc(118px + 33dvh + 8px);right:9px;bottom:auto;left:9px;width:auto;max-height:16dvh;overflow:auto}
+  .has-story:not(.invitation-open) .hero-panel{top:auto;right:9px;bottom:10px;left:9px;max-height:calc(100dvh - 118px - 33dvh - 16dvh - 36px);overflow:auto}
+  .has-story:not(.invitation-open) .stage{height:clamp(112px,15dvh,150px);min-height:112px}
+}

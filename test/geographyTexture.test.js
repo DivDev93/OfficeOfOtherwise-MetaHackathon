@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectCoordinate, unwrapRing, visibleChanges, paintGeography, drawGeographyCanvas, createGeographyRenderer } from '../web/geographyTexture.js';
+import { projectCoordinate, unwrapRing, safeGeography, visibleChanges, paintGeography, drawGeographyCanvas, createGeographyRenderer } from '../web/geographyTexture.js';
 import { REGIONS } from '../web/geographyRegions.js';
 
 const change = (region = 'sahara', kind = 'vegetation') => ({ id: `${region}-${kind}`, region, kind, intensity: 0.8, assumption: 'Illustrative local condition persists.', uncertainty: 'Location and coverage are approximate.' });
@@ -13,6 +13,11 @@ test('equirectangular projection aligns poles, equator and regional bounds', () 
   assert.deepEqual(projectCoordinate([0,0], 360,180), [180,90]);
   assert.deepEqual(projectCoordinate([180,-90], 360,180), [360,180]);
   assert.deepEqual(projectCoordinate([79.6,9.6], 180,180, REGIONS['ram-setu'].bounds).map(Math.round), [90,90]);
+});
+test('v2 ancestry is never passed to the v1 atlas renderer', () => {
+  const v2={version:2,seaLevelMeters:-120,continentalTransforms:[],changes:[{id:'shelf',kind:'vegetation',intensity:0.7,bounds:[-2,50,8,58.5],assumption:'Marshes persist.',uncertainty:'Coverage varies.'}]};
+  assert.equal(safeGeography(v2),undefined);
+  assert.deepEqual(visibleChanges(v2),[]);
 });
 test('Beringia crosses the dateline with short local edges and both map margins', () => {
   const ring = unwrapRing(REGIONS.beringia.polygons[0]);

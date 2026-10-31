@@ -47,10 +47,15 @@ test('exposes an unauthenticated health endpoint for container probes', async t 
   const url = await fixture(t);
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { status: 'ok', replayOnly: false, voiceEnabled: false });
+  assert.deepEqual(await response.json(), { status: 'ok', replayOnly: false, voiceEnabled: false, expansionLimit: 20, expansionUsed: 0 });
+  assert.match(response.headers.get('set-cookie'), /HttpOnly; SameSite=Strict/);
+  assert.doesNotMatch(response.headers.get('set-cookie'), /Max-Age|Expires/i);
+  assert.equal(response.headers.get('set-cookie').split(';')[0].startsWith('otherwise_session='), true);
   assert.equal((await fetch(`${url}/health`, { method: 'HEAD' })).status, 200);
   const noAccessCode = await fixture(t, { env: {} });
-  assert.deepEqual(await (await fetch(`${noAccessCode}/health`)).json(), { status: 'ok', replayOnly: true, voiceEnabled: false });
+  assert.deepEqual(await (await fetch(`${noAccessCode}/health`)).json(), { status: 'ok', replayOnly: true, voiceEnabled: false, expansionLimit: 20, expansionUsed: 0 });
+  const configured = await fixture(t, { env: { DEMO_ACCESS_CODE: 'private-code', DEMO_MAX_EXPANSIONS_PER_SESSION: '4' } });
+  assert.equal((await (await fetch(`${configured}/health`)).json()).expansionLimit, 4);
 });
 
 test('live gate defaults to replay and refuses runners without daily-cap enforcement', async t => {
@@ -68,7 +73,7 @@ test('replay-only mode refuses a configured live runner before invoking it', asy
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: 'Live generation is disabled. Use replay mode.' });
   assert.equal(called, false);
-  assert.deepEqual(await (await fetch(`${url}/health`)).json(), { status: 'ok', replayOnly: true, voiceEnabled: false });
+  assert.deepEqual(await (await fetch(`${url}/health`)).json(), { status: 'ok', replayOnly: true, voiceEnabled: false, expansionLimit: 20, expansionUsed: 0 });
 });
 
 test('replay JSON redacts rejected branch text and keeps only safe rejection metadata', async t => {

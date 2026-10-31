@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, cp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createConfiguredDemoServer } from '../server/index.js';
 
 const chain = [
@@ -11,12 +13,23 @@ const chain = [
 ];
 
 async function startReplay(t) {
+  const outputRoot = await mkdtemp(join(tmpdir(), 'office-replay-history-'));
+  const liveRunsDir = join(outputRoot, 'replay-history');
+  await cp(new URL('../demo/replay-history', import.meta.url), liveRunsDir, {
+    recursive: true,
+    filter: source => !source.endsWith('.expansion-sessions.json'),
+  });
   const { server, replayOnly } = createConfiguredDemoServer({
+    outputRoot,
+    liveRunsDir,
     env: { DEMO_3D_ENABLED: 'false', HOST: '127.0.0.1', PORT: '0' },
   });
   assert.equal(replayOnly, true);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+  t.after(async () => {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    await rm(outputRoot, { recursive: true, force: true });
+  });
   return `http://127.0.0.1:${server.address().port}`;
 }
 

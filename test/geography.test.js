@@ -32,6 +32,34 @@ test('effective geography inherits all conditions and forbids loss, replacement 
   }
 });
 
+test('bounded v2 geography normalizes, contributes policy text, and remains a full inherited state', () => {
+  const state = { version:2, seaLevelMeters:-120, continentalTransforms:[], changes:[{ id:'doggerland-wetland-plain', kind:'vegetation', intensity:0.75,
+    bounds:[-2,50,8,58.5], assumption:'Exposed shelf supports marsh, grassland, and mixed woodland.', uncertainty:'Vegetation density varies locally with rivers, soils, and climate.' }] };
+  assert.deepEqual(normalizeGeography(state), state);
+  assert.match(geographyText(state), /Global sea level relative to present day: -120 m/);
+  assert.match(geographyText(state), /within \[-2, 50, 8, 58\.5\]/);
+  const continuation = { version:2, seaLevelMeters:-120, continentalTransforms:[], changes:[...state.changes,
+    { id:'doggerland-wetland-expansion', kind:'vegetation', intensity:0.8, bounds:[-2,50,8,58.5], assumption:'The exposed shelf remains productive.', uncertainty:'Vegetation density varies locally with rivers, soils, and climate.' }] };
+  assert.deepEqual(normalizeGeography(continuation,{inherited:state}),continuation);
+  assert.throws(()=>normalizeGeography({version:1,changes:[]},{inherited:state}),/cannot downgrade/);
+  assert.throws(()=>normalizeGeography({...continuation,seaLevelMeters:-115},{inherited:state}),/inherited global state/);
+});
+
+test('bounded v2 lake parameters preserve an in-bounds saved seed while rejecting out-of-bounds inputs', () => {
+  const lake = { id:'doggerland-reserve-lake', bounds:[1,52,4,54], kind:'lake', intensity:0.8,
+    waterLevelMeters:-70, seed:[2.5,53],
+    assumption:'Low embankments retain river water in a shallow basin above the lowered global sea level.',
+    uncertainty:'Lake extent varies with rainfall, river inflow, embankment maintenance, and sedimentation.' };
+  const state = { version:2, seaLevelMeters:-120, continentalTransforms:[], changes:[lake],
+    assumption:'Global sea level remains approximately 120 metres below present day.',
+    uncertainty:'Exact coastlines and lake extents are approximate.' };
+  assert.deepEqual(normalizeGeography(state), state, 'the recorded 1968 lake change remains valid');
+  assert.match(geographyText(state), /doggerland-reserve-lake: lake within \[1, 52, 4, 54\]/);
+  assert.throws(() => normalizeGeography({ ...state, changes:[{ ...lake, seed:[4.5,53] }] }), /lake seed outside bounds/);
+  assert.throws(() => normalizeGeography({ ...state, changes:[{ ...lake, waterLevelMeters:-11001 }] }), /water level/);
+  assert.throws(() => normalizeGeography({ ...state, changes:[{ ...lake, elevationDeltaMeters:12 }] }), /lake parameters/);
+});
+
 test('geography prompt is explicit about illustrative masks and keeps all uncertainty without duplication', () => {
   const prompt = withGeographyPrompt('A research pavilion.', GREEN);
   assert.match(prompt, /illustrative regional masks, not measured terrain/);

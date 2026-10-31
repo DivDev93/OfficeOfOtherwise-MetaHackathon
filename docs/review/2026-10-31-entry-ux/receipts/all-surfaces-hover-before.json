@@ -1,0 +1,14 @@
+{
+  "modelRoutePosts": 1,
+  "modelRoutes": {
+    "/api/continue": 1
+  },
+  "fixtureAssetCalls": 0,
+  "continuePosts": 1,
+  "fakePipelineCalls": 1,
+  "refusedPipelineCalls": 0,
+  "completedChildren": 3,
+  "sseSteps": 6,
+  "externalMetaDispatches": 0,
+  "marks": {}
+}

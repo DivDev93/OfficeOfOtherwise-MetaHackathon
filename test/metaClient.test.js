@@ -89,6 +89,22 @@ test('spend cap refuses a call before it is sent', async () => {
   assert.equal(fetch.calls.length, 0);
 });
 
+test('respond and metered image requests pass AbortSignal to fetch and keep dispatched spend uncertain', async () => {
+  let observedSignal;
+  const fetch = (_url, init) => new Promise((_, reject) => {
+    observedSignal = init.signal;
+    init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once:true });
+  });
+  const client = createMetaClient({ ...base, fetch, spendCapUsd:1, ledger:memoryLedger() });
+  const controller = new AbortController();
+  const pending = client.respond({ model:'muse-spark-1.3', input:'test', signal:controller.signal });
+  await new Promise(resolve => setImmediate(resolve));
+  controller.abort();
+  await assert.rejects(pending, /Meta request stopped/);
+  assert.equal(observedSignal.aborted, true);
+  assert.equal(client.dispatchCount(), 1, 'an aborted dispatched call is not released as unspent');
+});
+
 test('meteredPost charges the supplied per-call cost and respects the cap', async () => {
   const fetch = fakeFetch([{ status: 200, body: { data: [{ b64_json: 'AAA' }] } }]);
   const client = createMetaClient({ ...base, fetch, spendCapUsd: 0.1 });

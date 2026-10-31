@@ -122,16 +122,18 @@ export function createMetaClient(opts = {}) {
     if (!active) for (const resolve of idleWaiters.splice(0)) resolve();
   }
 
-  async function http(method, path, body) {
+  async function http(method, path, body, { signal } = {}) {
     if (!apiKey) throw new Error('META_API_KEY is not set (see .env.example)');
+    if (signal?.aborted) throw new Error('Meta request stopped');
     for (let attempt = 0; ; attempt++) {
       let res;
       try { if (method === 'POST') { dispatched++; const invocation = invocationStorage.getStore(); if (invocation) invocation.dispatched++; } res = await fetchImpl(`${baseUrl}${path}`, {
         method,
         headers: { Authorization: `Bearer ${apiKey}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
         body: body ? JSON.stringify(body) : undefined,
+        ...(signal ? { signal } : {}),
         redirect: 'error',
-      }); } catch { throw new Error('Meta request failed'); }
+      }); } catch { throw new Error(signal?.aborted ? 'Meta request stopped' : 'Meta request failed'); }
       if (res.ok) { try { return await res.json(); } catch { throw new Error('Invalid Meta response'); } }
       if (method === 'POST' || !RETRYABLE.has(res.status) || attempt >= maxRetries) {
         throw new MetaApiError(res.status, undefined, path);
@@ -148,11 +150,12 @@ export function createMetaClient(opts = {}) {
    * Generic metered POST for endpoints without token usage (images, segmentation).
    * The caller supplies the per-call cost, since Meta hasn't published those prices yet.
    */
-  async function meteredPost(path, body, { costUsd, label }) {
+  async function meteredPost(path, body, { costUsd, label, signal }) {
+    if (signal?.aborted) throw new Error('Meta request stopped');
     const reservation = reserve(costUsd);
     let settled = false;
     try {
-      const json = await http('POST', path, body);
+      const json = await http('POST', path, body, { signal });
       ledger.settleMeta(reservation, { label: label ?? path, model: body?.model, usd: costUsd, estimated: true });
       recordSettlement(reservation, costUsd);
       settled = true;
@@ -195,7 +198,8 @@ export function createMetaClient(opts = {}) {
   }
 
   /** POST /responses (non-streaming). Returns { text, response, usage, costUsd }. */
-  async function respond({ model, input, instructions, maxOutputTokens = 4096, reasoning, label, ...rest }) {
+  async function respond({ model, input, instructions, maxOutputTokens = 4096, reasoning, label, signal, ...rest }) {
+    if (signal?.aborted) throw new Error('Meta request stopped');
     if (!model) throw new Error('respond() needs a model id');
     if (Object.hasOwn(rest, 'max_output_tokens') || Object.hasOwn(rest, 'tools') || Object.hasOwn(rest, 'tool_choice')) throw new Error('Unsupported metered response options');
     if (reasoning !== undefined && (!reasoning || typeof reasoning !== 'object' || Array.isArray(reasoning) || !['none', 'minimal', 'low', 'medium', 'high'].includes(reasoning.effort) || Object.keys(reasoning).some(key => key !== 'effort'))) throw new Error('Invalid reasoning effort');
@@ -205,7 +209,7 @@ export function createMetaClient(opts = {}) {
     const reservation = reserve(estimate);
     let settled = false;
     try {
-      const response = await http('POST', '/responses', body);
+      const response = await http('POST', '/responses', body, { signal });
       const { usd, estimated } = costFromUsage(model, response.usage);
       ledger.settleMeta(reservation, { label: label ?? 'responses', model, usd, estimated, usage: response.usage });
       recordSettlement(reservation, usd);

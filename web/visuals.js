@@ -50,7 +50,7 @@ function validPlace(place) {
   return Number.isFinite(place?.lat) && Number.isFinite(place?.lon);
 }
 
-function makeBranchPin(branch, onSelect) {
+function makeBranchPin(branch, onSelect, onPreview = () => {}) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'globe-pin';
@@ -72,15 +72,22 @@ function makeBranchPin(branch, onSelect) {
   label.textContent = `${formatYear(branch.year)} · ${branch.title}`;
   label.style.cssText = 'display:none;max-width:min(48vw,240px);overflow:hidden;text-overflow:ellipsis;';
   button.append(bead, label);
+  let pointerOver=false, focused=false;
+  const updatePreview=()=>onPreview(pointerOver || focused ? branch : null, button);
+  button.addEventListener('pointerenter',()=>{pointerOver=true;updatePreview();});
+  button.addEventListener('pointerleave',()=>{pointerOver=false;updatePreview();});
+  button.addEventListener('focus',()=>{focused=true;updatePreview();});
+  button.addEventListener('blur',()=>{focused=false;updatePreview();});
   button.addEventListener('click', event => {
     event.stopPropagation();
+    onPreview(null, button);
     onSelect(branch);
   });
   button.addEventListener('pointerdown', event => event.stopPropagation());
   return { branch, element: button, label, bead };
 }
 
-export async function createGlobe(el, onBranchSelect = () => {}) {
+export async function createGlobe(el, onBranchSelect = () => {}, onBranchPreview = () => {}) {
   // Use the published browser bundle: no CDN dependency-range transformation.
   // Its internals prefer this shared Three instance over their bundled fallback.
   window.THREE = THREE;
@@ -242,7 +249,7 @@ export async function createGlobe(el, onBranchSelect = () => {}) {
       color: ancestry ? '#e6be79' : '#73aaa1', phase: (index % 5) * 0.13,
     })));
     const ancestors = path.filter(item => validPlace(item.place)).map((item, index) => ({ ...item, id: `ancestor:${index}:${item.runId}`, ancestorRunId: item.runId, title: `Chosen cause · ${item.title}` }));
-    pins = [...ancestors, ...places].map(branch => makeBranchPin(branch, selected => select(selected, true)));
+    pins = [...ancestors, ...places].map(branch => makeBranchPin(branch, selected => select(selected, true), onBranchPreview));
     globe.htmlElementsData(pins);
     updatePins();
     positionGlobe();

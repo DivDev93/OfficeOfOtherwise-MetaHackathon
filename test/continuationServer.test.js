@@ -10,9 +10,17 @@ import { continuationFor, MAX_CONTINUATION_DEPTH } from '../src/demo/continuatio
 import { SpendCapError, markUndispatchedBudgetError } from '../src/lib/metaClient.js';
 
 const headers = { 'x-demo-access-code': 'local-code', 'content-type': 'application/json' };
+const cookies = new Map();
+async function sessionCookie(url) {
+  if (cookies.has(url)) return cookies.get(url);
+  const response = await fetch(`${url}/health`);
+  const cookie = response.headers.get('set-cookie')?.split(';')[0];
+  if (!cookie) throw new Error('server did not issue its browser-session cookie');
+  cookies.set(url, cookie); return cookie;
+}
 const branch = (year = 350) => ({ status: 'ok', divergence: 'What if the ancient library survived?', branches: [{ id: 'b1', title: 'Early astronomy', summary: 'Preserved star charts improve astronomical teaching.', year, place: { name: 'Alexandria', lat: 31, lon: 29 } }], hero: { title: 'Astronomy' } });
 const completion = text => JSON.parse(text.match(/event: complete\ndata: (.+)/)?.[1] ?? '{}');
-const post = (url, input = { runId: 'root', branchId: 'b1' }, customHeaders = headers) => fetch(`${url}/api/continue`, { method: 'POST', headers: customHeaders, body: JSON.stringify(input) });
+const post = async (url, input = { runId: 'root', branchId: 'b1' }, customHeaders = headers) => fetch(`${url}/api/continue`, { method: 'POST', headers: { ...customHeaders, cookie: customHeaders.cookie || await sessionCookie(url) }, body: JSON.stringify(input) });
 
 async function setup(t, options = {}) {
   const base = await mkdtemp(join(tmpdir(), 'office-continuation-'));
@@ -92,6 +100,22 @@ test('the default continuation depth is six selected events and rejects a sevent
   assert.throws(() => continuationFor({ ...parent, id: 'run-7', branch: branch(450) }, 'b1', savedAtSix), /continuation depth limit/);
 });
 
+test('server-issued browser cookie enforces the expansion cap and ignores rotated caller UUIDs', async t => {
+  const parent = branch(); parent.branches.push({ ...parent.branches[0], id:'b2', title:'Coastal observatory' });
+  const f = await setup(t, { parent, server: { env: { DEMO_ACCESS_CODE:'local-code', DEMO_MAX_EXPANSIONS_PER_SESSION:'1' } } });
+  const cookie = await sessionCookie(f.url);
+  const first = await post(f.url, { runId:'root', branchId:'b1' }, { ...headers, cookie });
+  assert.equal(first.status, 200);
+  assert.equal(first.headers.get('x-expansion-used'),'1','the streaming response reconciles the server ledger in the client');
+  const duplicate = await post(f.url, { runId:'root', branchId:'b1' }, { ...headers, cookie });
+  assert.equal(duplicate.status, 409, 'reentry cannot launch a duplicate while the original result is not fully materialized');
+  const capped = await post(f.url, { runId:'root', branchId:'b2' }, { ...headers, cookie });
+  assert.equal(capped.status, 429);
+  assert.equal((await capped.json()).code, 'session_expansion_limit');
+  const rotated = await post(f.url, { runId:'root', branchId:'b2' }, { ...headers, cookie:'otherwise_session=22222222-2222-4222-8222-222222222222' });
+  assert.equal(rotated.status, 400, 'a caller supplied UUID is not a valid server-issued browser session');
+});
+
 test('saved geography survives manifests, completion events and second-generation canonical ancestry', async t => {
   const parent = branch();
   const geography = { version: 1, changes: [{ id: 'green-sahara', kind: 'vegetation', region: 'sahara', intensity: 0.8,
@@ -107,6 +131,40 @@ test('saved geography survives manifests, completion events and second-generatio
   const second = completion(await (await post(f.url, { runId: first.runId, branchId: 'b1' })).text());
   assert.deepEqual(second.continuation.path.map(event => event.geography), [geography, geography]);
   assert.deepEqual(f.contexts[1].continuation.path.map(event => event.geography), [geography, geography]);
+});
+
+test('saved v2 geography is accepted by the explicit continuation path and reaches the stub runner intact', async t => {
+  const parent=branch();
+  const geography={version:2,seaLevelMeters:-120,continentalTransforms:[],changes:[{id:'doggerland-wetland-plain',kind:'vegetation',intensity:0.75,
+    bounds:[-2,50,8,58.5],assumption:'Exposed shelf supports marsh, grassland, and mixed woodland.',uncertainty:'Vegetation density varies locally with rivers, soils, and climate.'}]};
+  parent.branches[0].geography=geography;
+  const f=await setup(t,{parent});
+  const response=await post(f.url);
+  assert.equal(response.status,200);
+  const result=completion(await response.text());
+  assert.equal(f.calls,1,'the injected runner is invoked once and no provider is configured');
+  assert.deepEqual(f.contexts[0].continuation.path[0].geography,geography);
+  assert.deepEqual(result.continuation.path[0].geography,geography);
+});
+
+test('recorded v2 lake geography with a bounded seed reaches the continuation runner once', async t => {
+  const geography={version:2,seaLevelMeters:-120,continentalTransforms:[],changes:[
+    {id:'doggerland-wetland-plain',bounds:[-2,50,8,58.5],kind:'vegetation',intensity:0.75,
+      assumption:'Exposed shelf supports marsh, grassland, and mixed woodland.',uncertainty:'Vegetation density varies locally with rivers, soils, and climate.'},
+    {id:'doggerland-reserve-lake',bounds:[1,52,4,54],kind:'lake',intensity:0.8,waterLevelMeters:-70,seed:[2.5,53],
+      assumption:'Low embankments retain river water in a shallow basin above the lowered global sea level.',
+      uncertainty:'Lake extent varies with rainfall, river inflow, embankment maintenance, and sedimentation.'},
+  ],assumption:'Global sea level remains approximately 120 metres below present day.',uncertainty:'Lake extents and exact shorelines are approximate.'};
+  const parent=branch();
+  parent.branches.push({id:'b4',title:'Doggerland Wetland Reserve Lake Established',summary:'A managed lake supports wetland study and local water storage.',year:1968,
+    place:{name:'Doggerland, North Sea',lat:53,lon:2.5},geography});
+  const f=await setup(t,{parent});
+  const response=await post(f.url,{runId:'root',branchId:'b4'});
+  assert.equal(response.status,200);
+  const result=completion(await response.text());
+  assert.equal(f.calls,1,'the injected stub pipeline runs once; no provider is configured');
+  assert.deepEqual(f.contexts[0].continuation.path[0].geography,geography);
+  assert.deepEqual(result.continuation.path[0].geography,geography);
 });
 
 test('saved causal links remain part of the trusted ancestry and pass policy before generation', async t => {
@@ -402,7 +460,7 @@ test('double click cannot start a second runner and a disconnected run remains r
     await new Promise((resolve, reject) => signal.addEventListener('abort', () => { aborted(); reject(new Error('Disconnected')); }, { once: true }));
   } });
   const controller = new AbortController();
-  const response = await fetch(`${f.url}/api/continue`, { method: 'POST', headers, signal: controller.signal, body: JSON.stringify({ runId: 'root', branchId: 'b1' }) });
+  const response = await fetch(`${f.url}/api/continue`, { method: 'POST', headers: { ...headers, cookie: await sessionCookie(f.url) }, signal: controller.signal, body: JSON.stringify({ runId: 'root', branchId: 'b1' }) });
   await ready;
   assert.equal((await post(f.url)).status, 409);
   controller.abort();

@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { request as httpRequest } from 'node:http';
 import { createMetaVoice, createDemoTranscriber, validateVoiceWav, MAX_AUDIO_BYTES, VOICE_MODEL } from '../src/providers/metaVoice.js';
 import { createMetaClient, SpendCapError } from '../src/lib/metaClient.js';
@@ -79,9 +81,12 @@ test('timeout, cancellation, provider errors and malformed responses are redacte
 });
 
 async function serverFixture(t, options = {}) {
-  const server = createDemoServer({ env: { DEMO_VOICE_ENABLED: 'true', DEMO_ACCESS_CODE: 'fixture-code', DEMO_REPLAY_ONLY: 'true' }, ...options });
+  const root = await mkdtemp(join(tmpdir(), 'office-voice-'));
+  const runsDir = join(root, 'runs'), liveRunsDir = join(root, 'live'), webDir = join(root, 'web');
+  await Promise.all([mkdir(runsDir), mkdir(liveRunsDir), mkdir(webDir)]);
+  const server = createDemoServer({ runsDir, liveRunsDir, webDir, env: { DEMO_VOICE_ENABLED: 'true', DEMO_ACCESS_CODE: 'fixture-code', DEMO_REPLAY_ONLY: 'true' }, ...options });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
   return `http://127.0.0.1:${server.address().port}`;
 }
 const fake = fn => Object.assign(fn, { enforcesDailyCap: true });
@@ -90,7 +95,7 @@ const post = async (url, { code = 'fixture-code', body, type = 'audio/wav', sign
 test('voice requires flag/code/metered runner, works in replay-only, and never invokes generation', async t => {
   let calls = 0;
   const url = await serverFixture(t, { transcribeAudio: fake(async () => { calls++; return responseFixture; }), runPipeline: () => { throw new Error('generation invoked'); } });
-  assert.deepEqual(await (await fetch(`${url}/health`)).json(), { status: 'ok', replayOnly: true, voiceEnabled: true });
+  assert.deepEqual(await (await fetch(`${url}/health`)).json(), { status: 'ok', replayOnly: true, voiceEnabled: true, expansionLimit:20, expansionUsed:0 });
   assert.equal((await post(url, { code: 'wrong' })).status, 403);
   assert.deepEqual(await (await post(url)).json(), { transcript: responseFixture.transcript });
   assert.equal(calls, 1);

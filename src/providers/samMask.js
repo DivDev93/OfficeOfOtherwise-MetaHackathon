@@ -85,7 +85,7 @@ export function createSamMask({ client, model, env = process.env } = {}) {
   const price = Number(env.META_SEGMENT_COST_USD ?? 0.05);
   if (!Number.isFinite(price) || price < 0) throw new Error('META_SEGMENT_COST_USD must be finite and nonnegative');
   return {
-    async segment({ image, mime, prompt }) {
+    async segment({ image, mime, prompt, signal }) {
       if (!Buffer.isBuffer(image) || mime !== 'image/png') throw new Error('SAM provider requires a PNG buffer');
       if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('SAM prompt must be a nonempty noun phrase');
       const { width, height } = PNG.sync.read(image);
@@ -105,7 +105,7 @@ export function createSamMask({ client, model, env = process.env } = {}) {
             { type: 'input_image', image_url: `data:${mime};base64,${image.toString('base64')}` },
           ] }],
           metadata: { include_confidence: 'true' },
-        }, { costUsd: price, label: 'sam-segmentation' });
+        }, { costUsd: price, label: 'sam-segmentation', signal });
         paid = true;
         rawResponses.push(response);
         trace.push({ model, ms: Date.now() - start, costUsd: price, prompt: text });

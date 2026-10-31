@@ -5,12 +5,12 @@ export function createMetaImage({ client, model, env = process.env, costUsd } = 
   const price = Number(rawCost);
   if (!Number.isFinite(price) || price < 0) throw new Error('META_IMAGE_COST_USD must be finite and nonnegative');
   return {
-    async generate({ prompt, size = '1024x1024' } = {}) {
+    async generate({ prompt, size = '1024x1024', signal } = {}) {
       if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('Image prompt is required');
       if (typeof size !== 'string' || !/^\d+x\d+$/.test(size)) throw new Error('Image size must be WxH');
       const response = await client.meteredPost('/images/generations', {
         model: imageModel, prompt, n: 1, size, response_format: 'b64_json', output_format: 'png',
-      }, { costUsd: price, label: 'image' });
+      }, { costUsd: price, label: 'image', ...(signal ? { signal } : {}) });
       try {
         const encoded = response?.data?.[0]?.b64_json;
         if (typeof encoded !== 'string' || !encoded) throw new Error('Image response did not contain valid base64 image data');
