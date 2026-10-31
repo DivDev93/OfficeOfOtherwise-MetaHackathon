@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import { continuationAction, causalEdges, createNavigationGuard, eventIdFromHash, runIdFromHash, replayLabel } from '../web/logic.js';
 import * as logic from '../web/logic.js';
 import * as geographyTexture from '../web/geographyTexture.js';
+import * as geography from '../web/geography.js';
+import * as geographyControls from '../web/geographyControls.js';
 import * as geographyLabels from '../web/geographyLabels.js';
 import * as savedPreviews from '../web/savedPreview.js';
 import { REGIONS, GEOGRAPHY_STYLES } from '../web/geographyRegions.js';
@@ -94,12 +96,14 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     if (!fixture) return new Response('', { status: 404 });
     return Response.json(match[2] === 'branch.json' ? fixture.branch : match[2] === 'trace.json' ? { steps: [] } : fixture);
   };
-  const context = vm.createContext({ ...logic, ...geographyTexture, ...geographyLabels, ...savedPreviews, REGIONS, GEOGRAPHY_STYLES, console, fetch, AbortController, TextDecoder, Uint8Array, URLSearchParams, setTimeout:scheduleTimer, clearTimeout:cancelTimer,
+  const context = vm.createContext({ ...logic, ...geographyTexture, ...geography, ...geographyControls, ...geographyLabels, ...savedPreviews, REGIONS, GEOGRAPHY_STYLES,
+    loadLocalTerrain: async () => ({ width:1, height:1, elevation:new Int16Array([0]), landmass:new Uint8Array([1]) }), console, fetch, AbortController, TextDecoder, Uint8Array, URLSearchParams, setTimeout:scheduleTimer, clearTimeout:cancelTimer,
     createAtlasController(options) {
       const controller = {
         graph:options.graph || {}, nodes:options.graph?.mapNodes || [], selectedId:options.graph?.currentWorldId || null,
-        scene:{ currentId:options.graph?.currentWorldId || null, enterWorld(id, settings = {}) { this.currentId = id; this.lastEntry = { id, settings }; atlasEntryHistory.push(id); }, setZoom(value) { this.zoom = value; }, getZoom() { return this.zoom || 0; } },
+        scene:{ currentId:options.graph?.currentWorldId || null, enterWorld(id, settings = {}) { this.currentId = id; this.lastEntry = { id, settings }; atlasEntryHistory.push(id); }, setGeography(geography, mode, renderState) { this.geographyPreview = { geography, mode, renderState }; }, setZoom(value) { this.zoom = value; }, getZoom() { return this.zoom || 0; } },
         setGraph(next) { this.graph = next; this.nodes = next.mapNodes || []; this.selectedId = next.currentWorldId || null; this.scene.currentId = this.selectedId; atlasWorldHistory.push(this.selectedId); },
+        setGeography(geography, mode, renderState) { this.scene.setGeography(geography, mode, renderState); },
         getData() { return { worlds:this.nodes.map(node => ({...node, eventRef:node.eventRef || (node.runId && node.branchId ? {runId:node.runId,branchId:node.branchId} : undefined)})), currentWorldId:this.selectedId }; },
         getAttachmentIntent() { return {...(this.attachment || {mode:'current-world'}), currentWorldId:this.selectedId}; },
         getViewOptions() { return {}; },
@@ -410,19 +414,27 @@ test('tree and Atlas hover or keyboard focus preview saved metadata without sele
   assert.match(app.ui.state().activePreview.summary,/Mammoth steppe changes this world/);
   assert.equal(app.ui.state().activePreview.sceneReference,null,'an unknown foreign scene is not inferred from the root hero');
   assert.equal(app.ui.state().selectedBranchId,selectedBefore);
-  node.pointerleave(); assert.equal(app.ui.state().previewHidden,true);
+  node.pointerleave(); assert.equal(app.ui.state().previewHidden,false,'the preview stays available briefly while the pointer can enter it');
+  await new Promise(resolve => setTimeout(resolve, 240));
+  assert.equal(app.ui.state().previewHidden,true,'the preview dismisses after the pointer-transfer delay');
   node.focus(); assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
-  node.blur(); assert.equal(app.ui.state().previewHidden,true);
+  node.blur(); assert.equal(app.ui.state().previewHidden,false,'focused previews also allow transfer into the preview');
+  await new Promise(resolve => setTimeout(resolve, 240));
+  assert.equal(app.ui.state().previewHidden,true);
   const atlasNode = app.starMap.nodes.find(item => item.runId === 'preview-root' && item.branchId === 'alt');
   app.starMap.options.onPreview(atlasNode, { source:'pointer', clientX:150, clientY:180 });
   assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
   assert.equal(app.ui.state().selectedBranchId,selectedBefore,'Atlas preview does not move the selected world');
   app.starMap.options.onPreview(null);
+  assert.equal(app.ui.state().previewHidden,false,'Atlas pointer exit keeps the preview alive during transfer');
+  await new Promise(resolve => setTimeout(resolve, 240));
   assert.equal(app.ui.state().previewHidden,true);
   app.ui.previewGlobe(alternate,node);
   assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
   assert.equal(app.ui.state().selectedBranchId,selectedBefore);
-  app.ui.previewGlobe(null,node); assert.equal(app.ui.state().previewHidden,true);
+  app.ui.previewGlobe(null,node); assert.equal(app.ui.state().previewHidden,false);
+  await new Promise(resolve => setTimeout(resolve, 240));
+  assert.equal(app.ui.state().previewHidden,true);
   assert.equal(app.posts.length,0,'preview surfaces never call generation APIs');
   assert.equal(app.gets.filter(url=>url.startsWith('/api/event-scene?')).length,sceneChecksBefore,'previewing adds no scene lookup');
 });
@@ -1393,22 +1405,24 @@ test('saved model loading indicator clears on success, error, retry and run swit
   assert.equal(app.get('model-loading-indicator').hidden, true);
 });
 
-test('unsupported v2 geography remains visible as bounded labels and assumptions without drawing it', async () => {
+test('saved v2 geography shows bounded labels and enables the local terrain preview controls', async () => {
   const root = run('geography-v2');
-  root.branch.branches[0].geography = { version:2, seaLevelMeters:-115, changes:[
-    { id:'sundaland-forest-plain', kind:'forest', intensity:.9, bounds:[95,-8,120,7], assumption:'A forest spreads across the exposed shelf.', uncertainty:'Vegetation varies locally.' },
-    { id:'coastal-mangrove-fringe', kind:'mangrove', intensity:.6, bounds:[100,-5,118,3], assumption:'Mangroves extend inland.', uncertainty:'Coastal extent is hypothetical.' },
+  root.branch.branches[0].geography = { version:2, seaLevelMeters:-115, continentalTransforms:[], changes:[
+    { id:'sundaland-forest-plain', kind:'vegetation', intensity:.9, bounds:[95,-8,120,7], assumption:'A forest spreads across the exposed shelf.', uncertainty:'Vegetation varies locally.' },
+    { id:'coastal-mangrove-fringe', kind:'vegetation', intensity:.6, bounds:[100,-5,118,3], assumption:'Mangroves extend inland.', uncertainty:'Coastal extent is hypothetical.' },
   ] };
   const app = harness({[root.id]:root}, undefined, true);
   await tick(); await app.ui.loadRun(root.id, {animate:false,autoConsequences:false});
   const legend = textContentDeep(app.get('geography-legend'));
-  assert.match(legend, /Sundaland Forest Plain · Forest/);
+  assert.match(legend, /Sundaland Forest Plain · Vegetation/);
   assert.match(legend, /A forest spreads across the exposed shelf/);
   assert.match(legend, /Vegetation varies locally/);
   assert.match(legend, /sundaland-forest-plain/);
   assert.match(legend, /95,-8,120,7/);
-  assert.match(app.get('geography-status').textContent, /unsupported by the atlas/i);
-  assert.equal(app.get('geography-scenario').disabled, true, 'unsupported v2 masks are listed but not drawn');
+  assert.match(app.get('geography-status').textContent, /illustrative surface changes/);
+  assert.equal(app.get('geography-scenario').disabled, false, 'supported v2 geography remains selectable');
+  assert.equal(app.get('geography-water-number').value, -115, 'the selected v2 sea level initializes its local control');
+  assert.deepEqual(app.ui.state().surfaceGeography, root.branch.branches[0].geography, 'the saved v2 state is retained for the selected event');
 });
 
 test('only explicit entry expands one node once; reentry reuses it and child nodes stay unopened', async () => {

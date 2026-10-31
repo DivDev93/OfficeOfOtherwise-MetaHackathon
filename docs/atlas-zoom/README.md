@@ -5,10 +5,10 @@ This page records the local Atlas implementation and the evidence captured on 20
 ## Phase status
 
 - **P0 — Data model and migration:** implemented in `web/atlas/worldModel.js` and `scripts/migrate-atlas-worlds.js`. The migration preserves stable world and question IDs, normalizes authored attachments, and derives legacy theme, boldness, and divergence-year values deterministically.
-- **P1 — Surface, lift, and orbit:** implemented in the single Atlas scene. The Sundaland → Kuching path is recorded in [`p1-sundaland-kuching.webm`](p1-sundaland-kuching.webm) (9.40 seconds). The transition follows camera zoom, but uses a fade-through-cut around the midpoint rather than rendering a literal simultaneous crossfade. This keeps one scene, camera, and renderer while making the handoff readable; it is a visible continuity tradeoff.
+- **P1 — Surface, lift, and orbit:** implemented in the single Atlas scene. The initial Sundaland → Kuching path is recorded in [`p1-sundaland-kuching.webm`](p1-sundaland-kuching.webm) (9.40 seconds). Default zoom scrubs the spatial Lift continuously. The separate direct-cut travel mode fades through its midpoint instead of compositing two complete scenes.
 - **P2 — Atlas timeline:** implemented with a logarithmic history axis, axis modes, levels of detail, and folded dense nodes. Captures cover all four levels. Dense Atlas labels are intentionally thinned; the complete exploration tree remains available for navigation. The captures do not establish perfect label spacing at every graph size.
 - **P3 — New-question attachment and travel:** present-day and current-world attachment metadata, travel modes, and ghost trail controls are implemented. The Atlas options capture is included below. Integration and final interaction review remain distinct from the static captures.
-- **P4 — Accessibility and release evidence:** the evidence package contains screenshots at desktop and mobile sizes. Accessibility behavior has implementation and test coverage, but final repository checks are still pending the remaining selection fix. Physical-device behavior is not proven by these browser captures.
+- **P4 — Accessibility and release evidence:** the evidence package contains screenshots at desktop and mobile sizes, with local checks and normal draft-PR CI. Physical-device behavior is not proven by these browser captures. Later review corrections are recorded below.
 
 ## Time scale
 
@@ -16,7 +16,7 @@ The real-history trunk ends at present-day Earth (2026). Earlier years use a con
 
 ## Data and terrain limits
 
-The captured graph contains 30 worlds in the active question, 42 known worlds, and 5 questions. The scene, camera, and renderer counts are each 1. The display renders the saved v1 curated geography masks. Some saved v2 deep-geography data is unsupported by this renderer: it remains visible as a present-day warning and falls back to a scene-image disc for mini-worlds. Those discs do not represent rendered scenario terrain. Broader terrain work remains on a separate local `30510ca` branch and is not included here.
+The captured graph contains 30 worlds in the active question, 42 known worlds, and 5 questions. The scene, camera, and renderer counts are each 1. The October 31 terrain integration correction now renders both v1 regional states and v2 water-level/continent states into the current Earth and mini-worlds using the shared local terrain data. The initial four-level capture set predates that restoration. Dataset provenance, resolution, datum and interpretation limits are recorded in [TERRAIN_DATA.md](../TERRAIN_DATA.md).
 
 ## Screenshots
 
@@ -55,3 +55,13 @@ Surface event markers are now tangent, depth-tested geographic rings. They becom
 Current screenshots: [before panning](screenshots/surface-pins-fixed-1544.jpg) and [after panning](screenshots/surface-pins-panned-1544.jpg), both at 1544×822. The earlier four-level capture set and P1 recording remain the original checkpoint evidence and predate this correction.
 
 The review update passed **423/423 tests** on Node 22.23.3 (46 files, 8.14 seconds). Raw output: ignored local artifact `out/atlas-surface-anchor-review/full-suite-final.log`. The local keyless walkthrough made zero generation POSTs or external model calls.
+
+## Terrain and preview integration review — October 31
+
+The [integration audit](INTEGRATION_AUDIT.md) records the branch-baseline mistake and restored parity. The active implementation remains on `feat/atlas-zoom`.
+
+Restored terrain-backed vegetation, lakes and shorelines, global water-level and continent controls, coordinate projection for moved terrain, and the rich saved-image hover card with internal scrolling. High-latitude Surface views now center the selected place in latitude as well as longitude. These are local rendering and preview operations; they do not call a model.
+
+Current review captures: [Sahara](screenshots/terrain-restored-sahara-1440.jpg), [Sundaland](screenshots/terrain-restored-sundaland-1440.jpg), [Beringia](screenshots/terrain-restored-beringia-1440.jpg), [continent adjustment](screenshots/terrain-continent-adjustment-1440.jpg), and [scrollable scene preview](screenshots/terrain-restored-hover-1440.jpg). The older polygon screenshot is retained as historical failing-baseline evidence.
+
+The combined correction passed **449/449 tests** on Node 22.23.3. Raw TAP output is preserved locally at `out/atlas-terrain-restore-review/full-suite-final.log`. Live keyless verification confirmed a decoded scene thumbnail, pointer transfer into its card, scroll movement from 0 to 7 pixels with Atlas zoom unchanged at 0, and dismissal after leaving both node and card. All generation POST counters remained zero.

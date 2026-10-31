@@ -1,6 +1,16 @@
 // Shared by the browser and planner. These are curated display masks, not
 // inferred coastlines or a physical climate simulation.
 export const GEOGRAPHY_REGIONS = Object.freeze(['ram-setu', 'sahara', 'doggerland', 'beringia', 'sundaland', 'northern-europe-ice']);
+const CONTINENT_REGISTRY = Object.freeze([
+  Object.freeze({ id: 'africa', label: 'Africa', center: Object.freeze([20, 3]) }),
+  Object.freeze({ id: 'eurasia', label: 'Eurasia', center: Object.freeze([80, 45]) }),
+  Object.freeze({ id: 'north-america', label: 'North America', center: Object.freeze([-105, 45]) }),
+  Object.freeze({ id: 'south-america', label: 'South America', center: Object.freeze([-60, -15]) }),
+  Object.freeze({ id: 'australia', label: 'Australia', center: Object.freeze([134, -25]) }),
+  Object.freeze({ id: 'antarctica', label: 'Antarctica', center: Object.freeze([0, -85]) }),
+]);
+export function getContinentRegistry() { return CONTINENT_REGISTRY; }
+export const GEOGRAPHY_CONTINENTS = Object.freeze(CONTINENT_REGISTRY.map(continent => continent.id));
 export const GEOGRAPHY_KINDS = Object.freeze(['land', 'vegetation', 'lake', 'ice']);
 export const GEOGRAPHY_REGION_KINDS = Object.freeze({
   'ram-setu': Object.freeze(['land']), sahara: Object.freeze(['vegetation', 'lake']), doggerland: Object.freeze(['land']),
@@ -23,6 +33,13 @@ export function normalizeGeography(value, { inherited } = {}) {
   if (previous?.version === 2) invalid('cannot downgrade geography state');
   if (!record(value) || !exactKeys(value, ['version', 'changes']) || value.version !== 1 || !Array.isArray(value.changes) || value.changes.length > 12) invalid('state');
   return normalizeV1(value, previous);
+}
+
+/** Lift saved v1 region states into the terrain renderer's v2 envelope unchanged. */
+export function upgradeGeographyV1ToV2(value) {
+  const state = normalizeGeography(value);
+  if (state?.version !== 1) invalid('v1 migration source');
+  return { version: 2, seaLevelMeters: 0, continentalTransforms: [], changes: state.changes.map(change => ({ ...change })) };
 }
 
 function normalizeLegacyChange(change, ids) {

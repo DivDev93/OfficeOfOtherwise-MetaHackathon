@@ -216,6 +216,7 @@ test('toolbar has real labelled controls, preview never enters, and only explici
   const { root, world } = sampleNodes(); let enterCount = 0, attachment = null;
   const scene = {
     setWorlds(value) { this.graph = value; }, setAxisMode(value) { this.axisMode = value; },
+    setGeography(geography, mode, renderState) { this.geographyPreview = { geography, mode, renderState }; },
     setSurfaceLabelLevel(value) { this.surfaceLevel = value; }, setOrbitLevel(value) { this.orbitLevel = value; },
     setTravelMode(value) { this.travelMode = value; }, setGhostTrail(value) { this.ghost = value; },
     getZoom() { return this.zoom || 0; }, setZoom(value) { this.zoom = value; }, enterWorld(id, options) { this.entered = { id, options }; return true; },
@@ -226,6 +227,9 @@ test('toolbar has real labelled controls, preview never enters, and only explici
     onEnter() { enterCount++; }, onAttachmentIntent(value) { attachment = value; },
   });
   assert.equal(scene.graph.worlds.find(item => item.id === world.id).id, world.id);
+  const geographyPreview = { version: 2, seaLevelMeters: -120, continentalTransforms: [], changes: [] };
+  api.setGeography(geographyPreview, 'scenario', geographyPreview);
+  assert.deepEqual(scene.geographyPreview, { geography: geographyPreview, mode: 'scenario', renderState: geographyPreview });
   assert.equal(scene.surfaceLevel, 3); assert.equal(scene.orbitLevel, 2); assert.equal(scene.axisMode, 'history-distance');
   assert.equal(scene.travelMode, 'threads'); assert.equal(scene.ghost, false);
   assert.equal(byText(toolbar, 'Labelled pins (surface)').children[0].value, '3');

@@ -1,8 +1,11 @@
 import { retryPrompt, formatYear, modelCardSteps, replayTraceGroups, parseSseBlock, availableView, completionStatus, cachedRetryRun, replayLabel, branchProgress, branchPhaseLabel, liveAccessMode, modelLoadProgress, continuationAction, createNavigationGuard, runIdFromHash, eventIdFromHash } from './logic.js';
 import { createVoiceInput } from './voice.js';
-import { safeGeography, visibleChanges, createGeographyRenderer, drawGeographyCanvas } from './geographyTexture.js';
+import { safeGeography, visibleChanges, createGeographyRenderer, drawGeographyInsetCanvas } from './geographyTexture.js';
 import { REGIONS, GEOGRAPHY_STYLES } from './geographyRegions.js';
+import { GEOGRAPHY_CONTINENTS } from './geography.js';
+import { createGeographyPreviewStore, effectiveGeographyMode, geographyFromControls, geographyPreviewKey, presentDayGeography } from './geographyControls.js';
 import { geographyLabel, geographyKindLabel, geographyTechnicalDetails, geographyDisplayChanges } from './geographyLabels.js';
+import { loadLocalTerrain } from './terrainRaster.js';
 import { createSavedPreviewPopover } from './savedPreview.js';
 import { createAtlasController } from './atlas/controller.js';
 const $ = id => document.getElementById(id);
@@ -85,6 +88,8 @@ function rememberAtlasQuestionRoot(id) {
   try { sessionStorage.setItem(ATLAS_QUESTION_ROOT_KEY, JSON.stringify([...atlasQuestionRootIds])); } catch {}
 }
 let surfaceGeography, surfaceGeographyRaw, surfaceMode = 'scenario', surfaceUnavailable = false;
+const geographyPreviewControls = createGeographyPreviewStore();
+let surfacePreviewKey = geographyPreviewKey('', '');
 const eventWork = new Map();
 const eventQueue = [];
 let activeEventJobs = 0;
@@ -218,7 +223,7 @@ function showBranchPreview(runId, branch, manifest, anchor) {
 }
 function showAtlasPreview(world, anchorInfo = null) {
   atlasPreviewWorld = world || null;
-  if (!world) { savedPreview.clear(); return; }
+  if (!world) { savedPreview.clear(null, { delay:true }); return; }
   const canvas = $('atlas-scene')?.querySelector('canvas');
   const anchor = anchorInfo && Number.isFinite(anchorInfo.clientX) && Number.isFinite(anchorInfo.clientY)
     ? {
@@ -554,6 +559,7 @@ function initializeAtlas() {
       canvas.setAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight Enter Escape + -');
     }
     renderStarMap(continuation.rootRunId ? knownRunManifests.get(continuation.rootRunId) || currentManifest : currentManifest);
+    renderGeography();
     return controller;
   }).catch(() => { $('globe-fallback').hidden = false; return null; });
   return atlasInitPromise;
@@ -768,8 +774,13 @@ async function hydrateExplorationTree(rootManifest, request) {
   }
 }
 const insetRenderer = createGeographyRenderer({
-  paint(image, geography, mode) { return { image, geography, mode }; },
-  apply({ image, geography, mode }) { if (visibleChanges(surfaceGeography).some(change => change.region === 'ram-setu')) drawGeographyCanvas($('geography-inset'), image, geography, mode, 'ram-setu'); },
+  loadTerrain: loadLocalTerrain,
+  paint(image, geography, mode, terrain) { return { image, geography, mode, terrain }; },
+  apply({ image, geography, mode, terrain }) {
+    if (visibleChanges(surfaceGeography).some(change => change.region === 'ram-setu')) drawGeographyInsetCanvas($('geography-inset'), image, geography, mode, 'ram-setu', terrain);
+    $('geography-inset-warning').hidden = true;
+  },
+  onError(error) { $('geography-inset-warning').textContent = `Regional detail unavailable: ${error?.message || 'terrain data could not be rendered'}`; $('geography-inset-warning').hidden = false; },
 });
 function showGeography(branch) {
   // Some saved descendants predate materialising the full state on each branch.
@@ -778,17 +789,42 @@ function showGeography(branch) {
   surfaceGeographyRaw = value;
   surfaceGeography = safeGeography(value);
   surfaceUnavailable = value !== undefined && !surfaceGeography;
+  surfacePreviewKey = geographyPreviewKey(currentRunId, branch?.id);
+  geographyPreviewControls.get(surfacePreviewKey, surfaceGeography);
   renderGeography();
 }
 function setSurfaceMode(mode) { surfaceMode = mode; renderGeography(); }
+function currentGeographyControls() { return geographyPreviewControls.get(surfacePreviewKey, surfaceGeography); }
+function selectedContinentTransform(controls = currentGeographyControls()) {
+  return controls.transforms?.[controls.continentId] || { longitudeOffsetDeg: 0, latitudeOffsetDeg: 0, rotationDeg: 0 };
+}
+function syncGeographyControls() {
+  const controls = currentGeographyControls();
+  if (!GEOGRAPHY_CONTINENTS.includes(controls.continentId)) controls.continentId = GEOGRAPHY_CONTINENTS[0];
+  const transform = selectedContinentTransform(controls);
+  $('geography-water-range').value = controls.seaLevelMeters;
+  $('geography-water-number').value = controls.seaLevelMeters;
+  $('geography-continent').value = controls.continentId;
+  for (const [axis, value] of [['longitude', transform.longitudeOffsetDeg], ['latitude', transform.latitudeOffsetDeg], ['rotation', transform.rotationDeg]]) {
+    $(`geography-${axis}-range`).value = value;
+    $(`geography-${axis}-number`).value = value;
+  }
+  $('geography-adjustments').querySelectorAll('input,select,button').forEach(control => { control.disabled = surfaceUnavailable; });
+}
 function renderGeography() {
+  const controls = currentGeographyControls();
+  let preview;
+  try { preview = surfaceUnavailable ? undefined : geographyFromControls(surfaceGeography, controls); }
+  catch { surfaceUnavailable = true; }
+  const hasWorldAdjustment = !!preview && (preview.seaLevelMeters !== 0 || preview.continentalTransforms.length > 0);
+  const hasScenario = visibleChanges(surfaceGeography).length > 0 || hasWorldAdjustment;
   const changes = visibleChanges(surfaceGeography);
-  $('geography-present').setAttribute('aria-pressed', String(surfaceMode === 'present'));
-  $('geography-scenario').setAttribute('aria-pressed', String(surfaceMode === 'scenario'));
-  $('geography-scenario').disabled = changes.length === 0;
-  if (!changes.length) $('geography-present').setAttribute('aria-pressed', 'true');
-  if (!changes.length) $('geography-scenario').setAttribute('aria-pressed', 'false');
-  $('geography-status').textContent = surfaceUnavailable ? 'Present-day reference · this scenario geography is unsupported by the atlas; recorded assumptions remain listed below.' : !surfaceGeography ? 'Present-day reference · no scenario geography recorded. Legacy stories retain their original map.' : !changes.length ? 'Present-day reference · no supported surface masks recorded. Other geographic changes are not mapped.' : surfaceMode === 'present' ? 'Present-day reference · compare with the selected scenario.' : `${changes.length} illustrative surface ${changes.length === 1 ? 'change' : 'changes'} · selected scenario`;
+  const mode = effectiveGeographyMode(surfaceMode, hasScenario);
+  syncGeographyControls();
+  $('geography-scenario').disabled = !hasScenario || surfaceUnavailable;
+  $('geography-present').setAttribute('aria-pressed', String(mode === 'present'));
+  $('geography-scenario').setAttribute('aria-pressed', String(mode === 'scenario'));
+  $('geography-status').textContent = surfaceUnavailable ? 'Scenario preview unavailable · geography data is unsupported.' : mode === 'present' ? (hasScenario ? 'Present-day reference · event adjustments remain available in Scenario.' : 'Present-day reference · no scenario geography recorded.') : `${changes.length ? `${changes.length} illustrative surface ${changes.length === 1 ? 'change' : 'changes'}` : 'Illustrative global what-if preview'} · selected event`;
   const legend = $('geography-legend'); legend.replaceChildren();
   const legendChanges = surfaceGeography?.changes || geographyDisplayChanges(surfaceGeographyRaw);
   for (const change of legendChanges) {
@@ -807,10 +843,26 @@ function renderGeography() {
     }
     item.append(swatch, details); legend.append(item);
   }
-  $('geography-detail').hidden = !changes.some(change => change.region === 'ram-setu');
-  const mode = changes.length ? surfaceMode : 'present';
+  $('geography-detail').hidden = !changes.some(change => change.region === 'ram-setu') || hasWorldAdjustment;
   renderStarMap(continuation.rootRunId ? knownRunManifests.get(continuation.rootRunId) || currentManifest : currentManifest);
-  insetRenderer.set(surfaceGeography, mode);
+  const renderState = mode === 'present' ? presentDayGeography() : preview;
+  $('geography-render-warning').hidden = true;
+  atlasController?.setGeography(surfaceGeography, mode, renderState);
+  insetRenderer.set($('geography-detail').hidden ? undefined : renderState, $('geography-detail').hidden ? 'present' : mode);
+}
+function updateGeographyControl(axis, input) {
+  if (input.value === '') return;
+  const value = Number(input.value);
+  if (!Number.isFinite(value)) return;
+  const bounded = Math.min(Number(input.max), Math.max(Number(input.min), value));
+  const controls = currentGeographyControls();
+  if (axis === 'seaLevelMeters') controls.seaLevelMeters = bounded;
+  else controls.transforms = { ...controls.transforms, [controls.continentId]: { ...selectedContinentTransform(controls), [axis]: bounded } };
+  geographyPreviewControls.set(surfacePreviewKey, controls);
+  renderGeography();
+  const prefix = axis === 'seaLevelMeters' ? 'water' : axis === 'longitudeOffsetDeg' ? 'longitude' : axis === 'latitudeOffsetDeg' ? 'latitude' : 'rotation';
+  $(`geography-${prefix}-range`).value = bounded;
+  $(`geography-${prefix}-number`).value = bounded;
 }
 const status = text => $('status').textContent = text;
 const viewStatus = (text, loading = false) => { $('view-status').textContent = text; $('view-status').hidden = !text; $('view-loading-indicator').hidden = !text || !loading; };
@@ -1514,7 +1566,7 @@ function renderHeroModels() {
     card.append(model, role, metrics); host.append(card);
   }
 }
-function reset({ preservePanel = false, preserveExpansion = false } = {}) { savedPreview.clear(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
+function reset({ preservePanel = false, preserveExpansion = false } = {}) { savedPreview.clear(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; geographyPreviewControls.clear(); showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
 function setBranch(data, event = 'complete', preferredBranchId = '') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchState.phase === 'final' ? (continuation.path?.length ? 'POSSIBLE CONSEQUENCE' : 'SELECTED EVENT') : branchPhaseLabel(branchState.phase);
@@ -1831,6 +1883,21 @@ $('retry').addEventListener('click', () => {
   else status('No cached story matches this suggestion; select another story or enter a live access code.');
 });
 for (const mode of ['present', 'scenario']) $('geography-' + mode).addEventListener('click', () => setSurfaceMode(mode));
+for (const [id, axis] of [['geography-water-range', 'seaLevelMeters'], ['geography-water-number', 'seaLevelMeters'], ['geography-longitude-range', 'longitudeOffsetDeg'], ['geography-longitude-number', 'longitudeOffsetDeg'], ['geography-latitude-range', 'latitudeOffsetDeg'], ['geography-latitude-number', 'latitudeOffsetDeg'], ['geography-rotation-range', 'rotationDeg'], ['geography-rotation-number', 'rotationDeg']]) {
+  $(id).addEventListener('input', event => updateGeographyControl(axis, event.currentTarget));
+}
+$('geography-continent').addEventListener('change', event => {
+  const controls = currentGeographyControls();
+  if (!GEOGRAPHY_CONTINENTS.includes(event.currentTarget.value)) return;
+  controls.continentId = event.currentTarget.value;
+  geographyPreviewControls.set(surfacePreviewKey, controls);
+  renderGeography();
+});
+$('geography-reset-adjustments').addEventListener('click', () => {
+  geographyPreviewControls.reset(surfacePreviewKey, surfaceGeography);
+  surfaceMode = 'scenario';
+  renderGeography();
+});
 $('load-run').addEventListener('click', () => loadRun($('runs').value));
 function toggleArchiveHistory() { archiveShowHistory = !archiveShowHistory; renderArchive(); if (archiveShowHistory) refreshHistory().catch(() => {}); }
 $('archive-history-toggle').addEventListener('click', toggleArchiveHistory);

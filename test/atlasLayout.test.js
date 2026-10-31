@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   ATLAS_CAMERA_DISTANCE, SURFACE_CAMERA_DISTANCE, allowEarthBodySelection, altitudeForZoom,
   atlasZoomState, createWorldRegistry, layoutAtlasWorlds, measuredFps,
-  nearestDirectionalNeighbor, selectSurfaceLabels, surfaceFacingRotation,
+  nearestDirectionalNeighbor, selectSurfaceLabels, surfaceFacingRotation, surfaceFacingOrientation, transformSurfaceNormal,
   slerpUnitVector, selectSurfaceWorldLabelIds, worldRadiusForScreenPixels, cappedTextureSize,
   fitCameraDistance, layoutOrbitNeighborhood, zoomForAltitude,
   appendContinuousFrame, atlasPresentationState,
@@ -105,6 +105,19 @@ test('current geographic normal rotates onto the camera axis and remains shared 
   assert.ok(zFacing > 0.99, 'selected marker faces the camera rather than the rear hemisphere');
   assert.ok(Math.abs(zFacing - Math.hypot(current.globe.x, current.globe.z)) < 1e-12, 'latitude remains unchanged during heading alignment');
   assert.equal(surfaceFacingRotation({ x: 0, z: 0 }), 0);
+});
+
+test('surface orientation centers high-latitude and dateline event normals, then fades pitch through Lift', () => {
+  for (const [id, lat, lon] of [['beringia', 78.2, 179.4], ['svalbard', 78.2, 18.9], ['sundaland', 2.3, 113.9]]) {
+    const current = layoutAtlasWorlds([{ id, lat, lon }], id)[0];
+    const orientation = surfaceFacingOrientation(current.globe);
+    const centered = transformSurfaceNormal(current.globe, orientation);
+    assert.ok(Math.abs(centered.x) < 1e-12, `${id} centers on horizontal axis`);
+    assert.ok(Math.abs(centered.y) < 1e-12, `${id} latitude is centered vertically`);
+    assert.ok(centered.z > 1 - 1e-12, `${id} faces the camera`);
+    assert.ok(Math.abs(surfaceFacingOrientation(current.globe, 0, .5).pitch) > 0.1 || Math.abs(lat) < 10, `${id} retains a smooth partial tilt during Lift`);
+    assert.deepEqual(surfaceFacingOrientation(current.globe, 0, 0), { yaw: 0, pitch: 0 }, 'the geographic tilt disappears at full Lift');
+  }
 });
 
 test('44 CSS-pixel pin targets and arrow navigation use projected screen coordinates', () => {
@@ -278,4 +291,15 @@ test('scene foundation uses one renderer, scene, camera and no timed camera twee
   assert.equal((scene.match(/new THREE\.PerspectiveCamera\(/g) || []).length, 1);
   assert.doesNotMatch(scene, /setTimeout\s*\(|setInterval\s*\(|cameraTween|transitionDuration/i);
   assert.match(scene, /onPreview\(world \|\| null, anchor \|\| null\)/);
+});
+
+test('terrain transforms stay render-only and align Atlas pins, anchors, routes and camera facing', () => {
+  const scene = readFileSync(new URL('../web/atlas/scene.js', import.meta.url), 'utf8');
+  assert.match(scene, /projectGeographyLocation\(\{ lat, lon \}, texture\.geography, texture\.terrain\)/);
+  assert.match(scene, /function surfacePoint\(entry, radius = 1\) \{ return geographyPoint\(entry, radius, projectedGlobe\(entry\)\); \}/);
+  assert.match(scene, /surfacePoint\(entry\)\.normalize\(\)/, 'flat pins use the transformed surface normal');
+  assert.match(scene, /surfaceFacingOrientation\(projectedGlobe\(current\)\)/, 'the camera follows transformed current coordinates');
+  assert.match(scene, /atlasGroup\.quaternion\.copy\(surfacePitchQuaternion\)\.multiply\(surfaceYawQuaternion\)/, 'latitude and longitude alignment rotate the full Atlas surface together');
+  assert.match(scene, /surfacePoint\(parent, fromRadius\).*surfacePoint\(child, markerRadius\)/s, 'causal route arcs use transformed anchors');
+  assert.match(scene, /projectGeographyLocation\(\{ lat: rawLat, lon: rawLon \}, geographyTexture\.geography, geographyTexture\.terrain\)/, 'the selected marker is painted at its transformed coordinate');
 });

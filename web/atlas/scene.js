@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { defaultWorldImageUrl } from './imageRefs.js';
 import { createWorldTextureFactory } from './worldTextures.js';
+import { projectGeographyLocation } from '../terrainRaster.js';
 import { planWorldClusters } from './clusters.js';
 import { containsFanRegion, createFanHitRegion, fanMemberOffsets } from './screenLayout.js';
 import { createAtlasP2Renderer } from './p2Renderer.js';
@@ -17,7 +18,7 @@ import {
   ATLAS_PIN_GEOMETRY_RADIUS, surfacePinAnchorRadius,
   pinScaleAtPresentation, pinAnchorRadiusAtPresentation,
   altitudeForZoom, atlasPresentationState, atlasZoomState, clampAtlasLevel, createWorldRegistry,
-  layoutAtlasWorlds, layoutOrbitNeighborhood, measuredFps, surfaceFacingRotation,
+  layoutAtlasWorlds, layoutOrbitNeighborhood, measuredFps, surfaceFacingOrientation,
   worldRadiusForScreenPixels, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds, slerpUnitVector,
   cappedTextureSize, allowEarthBodySelection, fitCameraDistance,
   appendContinuousFrame, stableWorldId, clampScreenRectCenter, isSurfaceNormalVisible,
@@ -44,8 +45,8 @@ function worldColor(entry, currentId) {
   return entry.child || entry.sibling || world.proposed !== false ? CYAN : MUTED;
 }
 
-function geographyPoint(entry, radius = 1) {
-  return new THREE.Vector3(entry.globe.x, entry.globe.y, entry.globe.z).multiplyScalar(radius);
+function geographyPoint(entry, radius = 1, globe = entry.globe) {
+  return new THREE.Vector3(globe.x, globe.y, globe.z).multiplyScalar(radius);
 }
 
 function cappedTextureImage(image, maxEdge = 2048) {
@@ -168,6 +169,14 @@ export function createAtlasScene(container, {
   const miniTextureByWorldId = new Map();
   const texturePinMeshes = new Map();
   const worldTextureFactory = createWorldTextureFactory({
+    onReady: result => {
+      if (disposed) return;
+      updateLayout();
+      if (stableWorldId(currentEntry()?.world) === result.worldId) {
+        drawCurrentMarker();
+      }
+      applyZoom(zoom, false);
+    },
     onEvict: result => {
       const texture = miniTextureByWorldId.get(result.worldId);
       if (texture) { texture.dispose(); miniTextureByWorldId.delete(result.worldId); }
@@ -176,6 +185,7 @@ export function createAtlasScene(container, {
   const unenteredOutlineTexture = createDashedOutlineTexture();
   let basemapImage = null;
   let currentTextureUsesGeography = false;
+  let geographyPreviewWorldId = null, geographyPreviewState, geographyPreviewMode = 'scenario', hasGeographyPreview = false;
   const earthTexture = new THREE.TextureLoader().load(basemapUrl, image => {
     basemapImage = cappedTextureImage(image.image, 2048);
     earthTexture.image = basemapImage; earthTexture.needsUpdate = true;
@@ -252,6 +262,8 @@ export function createAtlasScene(container, {
   raycaster.params.Points.threshold = 0.055;
   const pointer = new THREE.Vector2();
   const dummy = new THREE.Object3D();
+  const surfaceYawAxis = new THREE.Vector3(0, 1, 0), surfacePitchAxis = new THREE.Vector3(1, 0, 0);
+  const surfaceYawQuaternion = new THREE.Quaternion(), surfacePitchQuaternion = new THREE.Quaternion();
   const goldCylinderUp = new THREE.Vector3(0, 1, 0);
   const goldSegmentStart = new THREE.Vector3(), goldSegmentEnd = new THREE.Vector3(), goldSegmentDirection = new THREE.Vector3();
   const goldSegmentWorldMidpoint = new THREE.Vector3(), goldCameraWorldPosition = new THREE.Vector3();
@@ -260,7 +272,7 @@ export function createAtlasScene(container, {
   const stageFps = new Map();
   const domListeners = [];
   let worlds = [], questions = [], entries = [], currentId = null, arrivalFromId = null, zoom = 0, rotation = 0;
-  let surfaceFacingAngle = 0;
+  let surfaceFacingAngle = 0, surfaceFacingPitch = 0;
   let orbitNeighborhoodIds = new Set();
   let liveCameraDistance = altitudeForZoom(zoom);
   let clusterPlan = { surface: { visibleIds: [], clusters: [] }, orbit: { visibleIds: [], clusters: [] } };
@@ -301,6 +313,24 @@ export function createAtlasScene(container, {
     return value < 0.22 ? 'surface' : value < 0.57 ? 'lift' : value < 0.84 ? 'orbit' : 'atlas';
   }
   function currentEntry() { return entries.find(entry => entry.id === currentId) || null; }
+  const projectedGlobeByTexture = new WeakMap();
+  function projectedGlobe(entry) {
+    const current = currentEntry();
+    const texture = current ? worldScenarioTexture(current.world) : null;
+    if (texture?.status !== 'ready' || texture.geography?.version !== 2 || !texture.terrain) return entry.globe;
+    const lat = Number(entry.world?.lat ?? entry.world?.geography?.lat ?? entry.world?.geog?.lat);
+    const lon = Number(entry.world?.lon ?? entry.world?.geography?.lon ?? entry.world?.geog?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return entry.globe;
+    let byId = projectedGlobeByTexture.get(texture);
+    if (!byId) { byId = new Map(); projectedGlobeByTexture.set(texture, byId); }
+    if (byId.has(entry.id)) return byId.get(entry.id);
+    const location = projectGeographyLocation({ lat, lon }, texture.geography, texture.terrain);
+    const phi = (90 - location.lat) * Math.PI / 180, theta = (location.lon + 180) * Math.PI / 180;
+    const globe = { x: -Math.sin(phi) * Math.cos(theta), y: Math.cos(phi), z: Math.sin(phi) * Math.sin(theta) };
+    byId.set(entry.id, globe);
+    return globe;
+  }
+  function surfacePoint(entry, radius = 1) { return geographyPoint(entry, radius, projectedGlobe(entry)); }
   function surfaceEarthRadius(state) { return state.earthScale * (1 - 0.12 * state.atlas); }
   function renderedPinScale(state) { return pinScaleAtPresentation(state.lift, state.atlas); }
   function renderedPinAnchorRadius(state) { return pinAnchorRadiusAtPresentation(surfaceEarthRadius(state), state.lift, state.atlas); }
@@ -362,7 +392,7 @@ export function createAtlasScene(container, {
     return worldPoint.applyMatrix4(inverse);
   }
   function geographicWorldPosition(entry, state, timestamp = performance.now(), radius = surfaceEarthRadius(state)) {
-    const surface = geographyPoint(entry, radius).add(earthMesh.position);
+    const surface = surfacePoint(entry, radius).add(earthMesh.position);
     const orbitPosition = entry.orbit || entry.atlas;
     const orbit = new THREE.Vector3(orbitPosition.x, orbitPosition.y, orbitPosition.z);
     const point = surface.lerp(orbit, state.lift).lerp(atlasPosition(entry, timestamp), state.atlas);
@@ -399,14 +429,26 @@ export function createAtlasScene(container, {
     return new THREE.Vector3(0, 0, 0).lerp(orbit, state.lift).lerp(atlas, state.atlas);
   }
 
-  function travelFacingAngle(timestamp) {
+  function travelFacingAngles(timestamp) {
     const sample = travelSample(timestamp)?.segment;
     const from = entries.find(entry => entry.id === sample?.fromId);
     const to = entries.find(entry => entry.id === sample?.toId);
-    if (!from || !to) return surfaceFacingAngle;
-    const a = surfaceFacingRotation(from.globe), b = surfaceFacingRotation(to.globe);
-    const delta = Math.atan2(Math.sin(b - a), Math.cos(b - a));
-    return a + delta * sample.progress;
+    if (!from || !to) return { yaw: surfaceFacingAngle, pitch: surfaceFacingPitch };
+    const a = surfaceFacingOrientation(projectedGlobe(from)), b = surfaceFacingOrientation(projectedGlobe(to));
+    const delta = Math.atan2(Math.sin(b.yaw - a.yaw), Math.cos(b.yaw - a.yaw));
+    return { yaw: a.yaw + delta * sample.progress, pitch: a.pitch + (b.pitch - a.pitch) * sample.progress };
+  }
+
+  function applySurfaceOrientation(blend, timestamp = performance.now()) {
+    const facing = travelState && !travelState.cut
+      ? travelFacingAngles(timestamp)
+      : { yaw: surfaceFacingAngle, pitch: surfaceFacingPitch };
+    const amount = clamp(Number(blend ?? 1), 0, 1);
+    const yaw = (facing.yaw + rotation) * amount;
+    const pitch = facing.pitch * amount;
+    surfaceYawQuaternion.setFromAxisAngle(surfaceYawAxis, yaw);
+    surfacePitchQuaternion.setFromAxisAngle(surfacePitchAxis, pitch);
+    atlasGroup.quaternion.copy(surfacePitchQuaternion).multiply(surfaceYawQuaternion);
   }
 
   function atlasFrameBounds() {
@@ -438,14 +480,18 @@ export function createAtlasScene(container, {
   }
 
   function worldScenarioTexture(world) {
-    const raw = world?.geography ?? world?.geog;
-    if (raw == null || (raw.version === 1 && Array.isArray(raw.changes) && raw.changes.length === 0)) return null;
-    return worldTextureFactory.create(world, { baseImage: basemapImage, baseIdentity: basemapUrl });
+    const worldId = stableWorldId(world);
+    const isPreviewWorld = hasGeographyPreview && worldId === geographyPreviewWorldId && worldId === currentId;
+    if (isPreviewWorld && geographyPreviewMode === 'present') return null;
+    const raw = isPreviewWorld
+      ? geographyPreviewState : (world?.geography ?? world?.geog);
+    if (raw == null) return null;
+    return worldTextureFactory.create({ ...world, geography: raw }, { baseImage: basemapImage, baseIdentity: basemapUrl });
   }
 
   function miniTextureForWorld(world) {
     const result = worldScenarioTexture(world);
-    if (result?.status !== 'ready' || result.geography?.version !== 1 || !result.geography.changes.length) return miniEarthTexture;
+    if (result?.status !== 'ready') return miniEarthTexture;
     const id = stableWorldId(world);
     let texture = miniTextureByWorldId.get(id);
     if (!texture || texture.image !== result.miniCanvas) {
@@ -460,15 +506,20 @@ export function createAtlasScene(container, {
     const current = currentEntry();
     if (!basemapImage || !current) return;
     const geographyTexture = worldScenarioTexture(current.world);
-    currentTextureUsesGeography = geographyTexture?.status === 'ready' && geographyTexture.geography?.version === 1 && geographyTexture.geography.changes.length > 0;
+    currentTextureUsesGeography = geographyTexture?.status === 'ready';
     const source = currentTextureUsesGeography
       ? geographyTexture.currentCanvas : basemapImage;
     const canvas = document.createElement('canvas');
     canvas.width = source.width; canvas.height = source.height;
     const context = canvas.getContext('2d'); context.drawImage(source, 0, 0);
-    if (Number.isFinite(Number(current.world.lat)) && Number.isFinite(Number(current.world.lon))) {
-      const x = ((Number(current.world.lon) + 180) / 360) * canvas.width;
-      const y = ((90 - Number(current.world.lat)) / 180) * canvas.height;
+    const rawLat = Number(current.world.lat ?? current.world.geography?.lat ?? current.world.geog?.lat);
+    const rawLon = Number(current.world.lon ?? current.world.geography?.lon ?? current.world.geog?.lon);
+    if (Number.isFinite(rawLat) && Number.isFinite(rawLon)) {
+      const location = currentTextureUsesGeography && geographyTexture.geography?.version === 2 && geographyTexture.terrain
+        ? projectGeographyLocation({ lat: rawLat, lon: rawLon }, geographyTexture.geography, geographyTexture.terrain)
+        : { lat: rawLat, lon: rawLon };
+      const x = ((location.lon + 180) / 360) * canvas.width;
+      const y = ((90 - location.lat) / 180) * canvas.height;
       const radius = Math.max(2, canvas.width * 0.0008);
       context.beginPath(); context.arc(x, y, radius * 2, 0, Math.PI * 2); context.fillStyle = '#d5a85c'; context.globalAlpha = 0.9; context.fill();
       context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fillStyle = '#f5dfae'; context.globalAlpha = 1; context.fill();
@@ -496,7 +547,9 @@ export function createAtlasScene(container, {
     const parentIds = new Set(worlds.filter(world => world.parentId != null).map(world => String(world.parentId)));
     for (const entry of entries) entry.explored = entry.world.explored === true || entry.world.hasChildren === true || parentIds.has(entry.id) || entry.world.mapState === 'explored' || entry.world.status === 'explored';
     const current = currentEntry();
-    surfaceFacingAngle = surfaceFacingRotation(current?.globe);
+    const currentFacing = current ? surfaceFacingOrientation(projectedGlobe(current)) : { yaw: 0, pitch: 0 };
+    surfaceFacingAngle = currentFacing.yaw;
+    surfaceFacingPitch = currentFacing.pitch;
     earthMesh.userData.worldId = current?.id ?? null;
     const record = current && registry.get(current.id);
     if (record) record.object = earthMesh;
@@ -601,11 +654,11 @@ export function createAtlasScene(container, {
     const layoutState = atlasPresentationState(zoom, motionReduced).state;
     const layoutMarkerRadius = pinAnchorRadiusAtPresentation(surfaceEarthRadius(layoutState), layoutState.lift, layoutState.atlas);
     childEntries.forEach((entry, index) => {
-      const from = geographyPoint(entry, layoutMarkerRadius).add(earthMesh.position);
+      const from = surfacePoint(entry, layoutMarkerRadius).add(earthMesh.position);
       const to = new THREE.Vector3(entry.orbit.x, entry.orbit.y, entry.orbit.z);
       from.lerp(to, layoutState.lift);
       const selected = current ? new THREE.Vector3(current.orbit.x, current.orbit.y, current.orbit.z) : new THREE.Vector3(0, 0, 0);
-      selected.lerp(geographyPoint(current || entry, surfaceEarthRadius(layoutState)).add(earthMesh.position), 1 - layoutState.lift);
+      selected.lerp(surfacePoint(current || entry, surfaceEarthRadius(layoutState)).add(earthMesh.position), 1 - layoutState.lift);
       selected.toArray(linePositions, index * 6);
       to.toArray(linePositions, index * 6 + 3);
     });
@@ -650,7 +703,7 @@ export function createAtlasScene(container, {
     currentRing.visible = currentRing.material.opacity > 0.01;
     atmosphere.position.copy(earthMesh.position);
     atmosphere.scale.setScalar(state.earthScale * (1 - 0.12 * state.atlas) * 1.025);
-    atlasGroup.rotation.y = (((travelState && !travelState.cut) ? travelFacingAngle(timestamp) : surfaceFacingAngle) + rotation) * (1 - state.lift);
+    applySurfaceOrientation(1 - state.lift, timestamp);
     atlasGroup.updateMatrixWorld(true);
     const frame = atlasFrameBounds();
     const atlasCenter = new THREE.Vector3((frame.left + frame.right) / 2, (frame.bottom + frame.top) / 2, 0);
@@ -688,7 +741,7 @@ export function createAtlasScene(container, {
     flatEntries.forEach((entry, index) => {
       const surfaceRadius = surfaceEarthRadius(state) + 0.00025;
       dummy.position.copy(worldPosition(entry, state, timestamp, surfaceRadius));
-      dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(entry.globe.x, entry.globe.y, entry.globe.z).normalize());
+      dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), surfacePoint(entry).normalize());
       dummy.scale.setScalar(1);
       dummy.updateMatrix(); surfacePinInstances.setMatrixAt(index, dummy.matrix);
       surfacePinInstances.setColorAt(index, instanceColor.copy(worldColor(entry, currentId)));
@@ -782,14 +835,14 @@ export function createAtlasScene(container, {
       const label = registry.get(entry.id)?.label;
       if (!label) continue;
       const surfacePosition = entry.id === arrivalFromId ? arrivalSurfacePoint()
-        : geographyPoint(entry, surfaceEarthRadius(state)).add(earthMesh.position);
+        : surfacePoint(entry, surfaceEarthRadius(state)).add(earthMesh.position);
       const atlasPoint = atlasPosition(entry, timestamp);
       atlasPoint.x += 0.22; atlasPoint.y += 0.23;
       const orbitPoint = new THREE.Vector3(entry.orbit.x + 0.22, entry.orbit.y + 0.23, entry.orbit.z);
       const fanOffset = fanOffsets.get(entry.id);
       const labelOffset = { x: fanOffset?.x || 0, y: (fanOffset?.y || 0) - 22 };
       label.position.copy(withScreenOffset(surfacePosition.lerp(orbitPoint, state.lift).lerp(atlasPoint, state.atlas), labelOffset));
-      const surfaceNormal = new THREE.Vector3(entry.globe.x, entry.globe.y, entry.globe.z).transformDirection(atlasGroup.matrixWorld);
+      const surfaceNormal = surfacePoint(entry).transformDirection(atlasGroup.matrixWorld);
       const surfaceHorizonVisible = entry.id === arrivalFromId || isSurfaceNormalVisible(surfaceNormal, towardCamera, surfaceHorizonThreshold);
       const surfaceOpacity = entry.surfaceLabel && surfaceHorizonVisible ? state.surface : 0;
       const orbitOpacity = entry.orbitVisible ? state.lift * (1 - state.atlas) * 0.9 : 0;
@@ -891,8 +944,8 @@ export function createAtlasScene(container, {
       const fromRadius = parent.id === currentId ? surfaceEarthRadius(state) : markerRadius;
       const from = worldPosition(parent, state, timestamp, fromRadius);
       const to = worldPosition(child, state, timestamp, markerRadius);
-      const surfaceFrom = geographyPoint(parent, fromRadius).normalize();
-      const surfaceTo = geographyPoint(child, markerRadius).normalize();
+      const surfaceFrom = surfacePoint(parent, fromRadius).normalize();
+      const surfaceTo = surfacePoint(child, markerRadius).normalize();
       const arcPoints = [];
       const segments = 10;
       for (let step = 0; step <= segments; step++) {
@@ -995,6 +1048,14 @@ export function createAtlasScene(container, {
     registry.reconcile(worlds);
     if (currentId && !worlds.some(world => stableWorldId(world) === currentId)) currentId = null;
     arrivalFromId = arrivalParentWorldId(worlds.find(world => stableWorldId(world) === currentId), worlds);
+    updateLayout(); drawCurrentMarker(); applyZoom(zoom, false);
+  }
+
+  function setGeography(_geography, mode, renderState) {
+    geographyPreviewWorldId = currentId;
+    geographyPreviewState = renderState;
+    geographyPreviewMode = mode === 'present' ? 'present' : 'scenario';
+    hasGeographyPreview = true;
     updateLayout(); drawCurrentMarker(); applyZoom(zoom, false);
   }
 
@@ -1282,7 +1343,7 @@ export function createAtlasScene(container, {
   listen(renderer.domElement, 'pointermove', event => {
     if (drag) {
       rotation = drag.rotation + (event.clientX - drag.x) * 0.006;
-      atlasGroup.rotation.y = (surfaceFacingAngle + rotation) * (1 - atlasPresentationState(zoom, motionReduced).state.lift);
+      applySurfaceOrientation(1 - atlasPresentationState(zoom, motionReduced).state.lift);
       applyZoom(zoom, false);
       return;
     }
@@ -1450,7 +1511,7 @@ export function createAtlasScene(container, {
     if (axisTransition) {
       applyZoom(zoom, false, timestamp);
       if (timestamp - axisTransition.startedAt >= AXIS_ANIMATION_MS) axisTransition = null;
-    } else if (!travelState) atlasGroup.rotation.y = (surfaceFacingAngle + rotation) * (1 - atlasPresentationState(zoom, motionReduced).state.lift);
+    } else if (!travelState) applySurfaceOrientation(1 - atlasPresentationState(zoom, motionReduced).state.lift, timestamp);
     renderer.render(scene, camera);
     const level = stageForZoom(zoom);
     const frameWindow = appendContinuousFrame(stageFrameWindow, stageFrameLevel, level, timestamp);
@@ -1467,6 +1528,7 @@ export function createAtlasScene(container, {
 
   return {
     setWorlds,
+    setGeography,
     enterWorld,
     setZoom,
     getZoom,

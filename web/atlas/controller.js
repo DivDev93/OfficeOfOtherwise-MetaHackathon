@@ -373,6 +373,7 @@ export async function createAtlasController({
     getData: () => ({ worlds: [...data.worlds], questions: [...data.questions], currentWorldId: currentId }),
     getViewOptions: () => ({ ...viewOptions }),
     getAttachmentIntent: intent,
+    setGeography(geography, mode, renderState) { if (!disposed) scene.setGeography?.(geography, mode, renderState); },
     setGraph(next = {}) {
       if (disposed) return;
       const updated = adaptAtlasGraph(next);

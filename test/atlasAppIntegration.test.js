@@ -27,6 +27,17 @@ test('Atlas controller is the only spatial entry surface and previews stay separ
   assert.match(app, /setGraph\(graph\)/);
 });
 
+test('geography controls preview locally per selected event and restore its scenario on reset', () => {
+  for (const id of ['geography-adjustments', 'geography-water-range', 'geography-water-number', 'geography-continent', 'geography-longitude-range', 'geography-latitude-range', 'geography-rotation-range', 'geography-reset-adjustments']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(app, /geographyPreviewKey\(currentRunId, branch\?\.id\)/);
+  assert.match(app, /geographyPreviewControls\.get\(surfacePreviewKey, surfaceGeography\)/);
+  assert.match(app, /geographyPreviewControls\.reset\(surfacePreviewKey, surfaceGeography\)/);
+  assert.match(app, /atlasController\?\.setGeography\(surfaceGeography, mode, renderState\)/);
+  assert.match(css, /\.geography-adjustment-fields/);
+});
+
 test('Atlas keeps quick zoom visible, moves real view controls into a disclosure, and offers a clear full-map return path', () => {
   assert.match(app, /function compactAtlasToolbar\(toolbar\)/);
   assert.match(app, /controls\.slice\(0, 3\)/);

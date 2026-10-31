@@ -74,9 +74,30 @@
         <section id="geography-panel" class="geography-panel glass-vault" aria-label="Scenario geography">
           <div class="geography-heading"><strong>Earth surface</strong><div role="group" aria-label="Earth surface comparison"><button id="geography-present" type="button" class="outline" aria-pressed="false">Present day</button><button id="geography-scenario" type="button" class="outline" aria-pressed="true">Scenario</button></div></div>
           <p id="geography-status" role="status">Present-day reference · no scenario geography recorded.</p>
-          <p class="geography-caution">Illustrative approximation · curated regional masks, not calculated coastlines or a physical simulation.</p>
+          <p id="geography-render-warning" class="geography-render-warning" role="status" hidden></p>
+          <p class="geography-caution">Illustrative terrain preview · not a coastline or tectonic prediction.</p>
+          <details id="geography-adjustments" class="geography-adjustments">
+            <summary>Adjust this world</summary>
+            <div class="geography-adjustment-fields">
+              <fieldset class="geography-control">
+                <legend>Global water level <span>metres from present day</span></legend>
+                <div class="geography-number-row"><input id="geography-water-range" type="range" min="-11000" max="9000" step="1" value="0" aria-label="Global water level in metres"><label class="sr-only" for="geography-water-number">Global water level in metres</label><input id="geography-water-number" type="number" min="-11000" max="9000" step="1" value="0"></div>
+              </fieldset>
+              <fieldset class="geography-control">
+                <legend>Continent placement <span>fictional transform from present coordinates</span></legend>
+                <label class="geography-continent-label" for="geography-continent">Continent</label>
+                <select id="geography-continent">
+                  <option value="africa">Africa</option><option value="eurasia">Eurasia</option><option value="north-america">North America</option><option value="south-america">South America</option><option value="australia">Australia</option><option value="antarctica">Antarctica</option>
+                </select>
+                <label class="geography-axis"><span>Longitude offset <small>−180° to +180°</small></span><span class="geography-number-row"><input id="geography-longitude-range" type="range" min="-180" max="180" step="1" value="0" aria-label="Continent longitude offset in degrees"><input id="geography-longitude-number" type="number" min="-180" max="180" step="1" value="0" aria-label="Continent longitude offset in degrees"></span></label>
+                <label class="geography-axis"><span>Latitude offset <small>−90° to +90°</small></span><span class="geography-number-row"><input id="geography-latitude-range" type="range" min="-90" max="90" step="1" value="0" aria-label="Continent latitude offset in degrees"><input id="geography-latitude-number" type="number" min="-90" max="90" step="1" value="0" aria-label="Continent latitude offset in degrees"></span></label>
+                <label class="geography-axis"><span>Spin <small>−180° to +180°</small></span><span class="geography-number-row"><input id="geography-rotation-range" type="range" min="-180" max="180" step="1" value="0" aria-label="Continent rotation in degrees"><input id="geography-rotation-number" type="number" min="-180" max="180" step="1" value="0" aria-label="Continent rotation in degrees"></span></label>
+              </fieldset>
+              <button id="geography-reset-adjustments" type="button" class="outline">Reset to event scenario</button>
+            </div>
+          </details>
           <ul id="geography-legend"></ul>
-          <figure id="geography-detail" hidden><figcaption>Ram Setu / Palk Strait · regional detail</figcaption><canvas id="geography-inset" width="540" height="210" role="img" aria-label="Illustrative Ram Setu regional surface comparison"></canvas><small>Local drawing enlarged for visibility. Shape and coverage are approximate.</small></figure>
+          <figure id="geography-detail" hidden><figcaption>Ram Setu / Palk Strait · regional detail</figcaption><canvas id="geography-inset" width="540" height="210" role="img" aria-label="Illustrative Ram Setu regional surface comparison"></canvas><small id="geography-inset-warning" class="geography-render-warning" role="status" hidden></small><small>Local drawing enlarged for visibility. Shape and coverage are approximate.</small></figure>
         </section>
       </section>
 

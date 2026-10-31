@@ -1,4 +1,5 @@
-import { BASE_EARTH_IMAGE, drawGeographyCanvas, safeGeography } from '../geographyTexture.js';
+import { drawGeographyCanvas, safeGeography } from '../geographyTexture.js';
+import { createTerrainLoader } from '../terrainRaster.js';
 
 export const WORLD_TEXTURE_CURRENT_MAX_EDGE = 2048;
 export const WORLD_TEXTURE_MINI_MAX_EDGE = 512;
@@ -9,9 +10,7 @@ const worldIdOf = world => world?.id != null ? String(world.id)
 
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableValue(value[key])]));
-  }
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableValue(value[key])]));
   return value;
 }
 
@@ -24,8 +23,7 @@ function dimensionsFor(image, maxEdge) {
 
 function defaultCanvasFactory(width, height) {
   if (typeof document === 'undefined' || !document.createElement) throw new Error('Canvas creation unavailable');
-  const canvas = document.createElement('canvas');
-  canvas.width = width; canvas.height = height;
+  const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
   return canvas;
 }
 
@@ -42,23 +40,46 @@ function baseImageIdentity(image, explicitIdentity) {
 }
 
 /**
- * Create bounded, per-world v1 scenario Earth canvases. The injected base image
- * keeps this helper synchronous and prevents it from starting network work.
+ * Bounded per-world scenario textures. Non-empty v1 and all v2 terrain are
+ * loaded asynchronously; callers are notified when both canvases are ready.
  */
 export function createWorldTextureFactory({
   canvasFactory = defaultCanvasFactory,
   draw = drawGeographyCanvas,
+  loadTerrain = createTerrainLoader(),
   maxEntries = WORLD_TEXTURE_CACHE_LIMIT,
+  onReady = () => {},
   onEvict = () => {},
+  onError = () => {},
 } = {}) {
   const limit = Math.max(1, Math.min(WORLD_TEXTURE_CACHE_LIMIT, Math.floor(Number(maxEntries) || WORLD_TEXTURE_CACHE_LIMIT)));
   const cache = new Map();
+  let disposed = false;
 
   function evict(key) {
     const entry = cache.get(key);
     if (!entry) return;
     cache.delete(key);
-    onEvict(entry.result);
+    if (entry.result.status === 'ready') onEvict(entry.result);
+  }
+
+  function canvasFor(image, maxEdge) {
+    const dimensions = dimensionsFor(image, maxEdge);
+    if (!dimensions) return null;
+    const canvas = canvasFactory(dimensions.width, dimensions.height);
+    canvas.width = dimensions.width; canvas.height = dimensions.height;
+    return { canvas, dimensions };
+  }
+
+  function render(worldId, geography, baseImage, current, mini, terrain) {
+    draw(current.canvas, baseImage, geography, 'scenario', undefined, terrain);
+    draw(mini.canvas, baseImage, geography, 'scenario', undefined, terrain);
+    return {
+      status: 'ready', worldId, geography,
+      currentCanvas: current.canvas, miniCanvas: mini.canvas,
+      currentDimensions: current.dimensions, miniDimensions: mini.dimensions, terrain,
+      fallback: null,
+    };
   }
 
   function create(world, { baseImage, baseIdentity } = {}) {
@@ -67,12 +88,14 @@ export function createWorldTextureFactory({
 
     const rawGeography = world?.geography ?? world?.geog;
     const geography = rawGeography == null ? undefined : safeGeography(rawGeography);
+    if (rawGeography != null && !geography) {
+      return { status: 'unsupported', worldId, reason: 'invalid-geography', fallback: 'scene-disc' };
+    }
+    if (!baseImage) return { status: 'base-unavailable', worldId, geography, fallback: 'scene-disc' };
+
     const sourceIdentity = baseImageIdentity(baseImage, baseIdentity);
     const normalizedKey = geography === undefined ? 'base-only' : JSON.stringify(stableValue(geography));
     const cacheKey = `${worldId}\u0000${sourceIdentity}\u0000${normalizedKey}`;
-
-    // A stable world ID has one active geography/base version. Replacements
-    // invalidate the prior texture record instead of retaining stale assets.
     for (const [key, entry] of cache) if (entry.worldId === worldId && key !== cacheKey) evict(key);
     const hit = cache.get(cacheKey);
     if (hit) {
@@ -80,37 +103,43 @@ export function createWorldTextureFactory({
       return hit.result;
     }
 
-    if (rawGeography != null && !geography) {
-      return { status: 'unsupported', worldId, reason: rawGeography?.version === 2 ? 'geography-v2' : 'invalid-geography', fallback: 'scene-disc' };
+    const current = canvasFor(baseImage, WORLD_TEXTURE_CURRENT_MAX_EDGE);
+    const mini = canvasFor(baseImage, WORLD_TEXTURE_MINI_MAX_EDGE);
+    if (!current || !mini) return { status: 'base-unavailable', worldId, geography, fallback: 'scene-disc' };
+
+    const entry = { worldId, result: null };
+    cache.set(cacheKey, entry);
+    const needsTerrain = geography?.version === 2 || (geography?.version === 1 && geography.changes.length > 0);
+    if (!needsTerrain) {
+      entry.result = render(worldId, geography, baseImage, current, mini);
+    } else {
+      entry.result = { status: 'pending', worldId, geography, fallback: 'present-day-texture' };
+      const pending = Promise.resolve().then(() => loadTerrain()).then(terrain => {
+        if (disposed || cache.get(cacheKey) !== entry) return null;
+        // Legacy curated masks are upgraded by the shared renderer when terrain
+        // is supplied, so Atlas uses the same coastline pipeline as saved v2.
+        const result = render(worldId, geography, baseImage, current, mini, terrain);
+        entry.result = result;
+        onReady(result);
+        return result;
+      }).catch(error => {
+        if (!disposed && cache.get(cacheKey) === entry) {
+          // A transient asset failure must not become a cached permanent fallback.
+          cache.delete(cacheKey);
+          onError(error, { worldId, geography });
+        }
+        return null;
+      });
+      entry.result.promise = pending;
     }
-    if (!baseImage) return { status: 'base-unavailable', worldId, geography, fallback: 'scene-disc' };
-
-    const currentDimensions = dimensionsFor(baseImage, WORLD_TEXTURE_CURRENT_MAX_EDGE);
-    const miniDimensions = dimensionsFor(baseImage, WORLD_TEXTURE_MINI_MAX_EDGE);
-    if (!currentDimensions || !miniDimensions) return { status: 'base-unavailable', worldId, geography, fallback: 'scene-disc' };
-
-    const currentCanvas = canvasFactory(currentDimensions.width, currentDimensions.height);
-    currentCanvas.width = currentDimensions.width; currentCanvas.height = currentDimensions.height;
-    const miniCanvas = canvasFactory(miniDimensions.width, miniDimensions.height);
-    miniCanvas.width = miniDimensions.width; miniCanvas.height = miniDimensions.height;
-    draw(currentCanvas, baseImage, geography, 'scenario');
-    draw(miniCanvas, baseImage, geography, 'scenario');
-
-    const result = {
-      status: 'ready', worldId, geography,
-      currentCanvas, miniCanvas,
-      currentDimensions, miniDimensions,
-      fallback: null,
-    };
-    cache.set(cacheKey, { worldId, result });
     while (cache.size > limit) evict(cache.keys().next().value);
-    return result;
+    return entry.result;
   }
 
   return {
     create,
     get size() { return cache.size; },
     clear() { for (const key of [...cache.keys()]) evict(key); },
-    dispose() { this.clear(); },
+    dispose() { disposed = true; this.clear(); },
   };
 }

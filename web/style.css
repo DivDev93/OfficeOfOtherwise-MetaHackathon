@@ -29,7 +29,7 @@ details{margin-top:9px;color:var(--neutral-200);font-size:10px}details summary{c
 .glass-veil{border-color:rgba(236,228,212,.12);background:rgba(245,242,237,.035);backdrop-filter:blur(12px)}
 .glass-panel{backdrop-filter:blur(20px)}
 .glass-vault{border:1px solid rgba(236,228,212,.16);background:linear-gradient(150deg,rgba(19,15,15,.94),rgba(7,6,7,.94));backdrop-filter:blur(28px);box-shadow:0 22px 68px rgba(0,0,0,.5)}
-.saved-event-preview{position:fixed;z-index:40;display:grid;gap:6px;box-sizing:border-box;max-width:calc(100vw - 16px);max-height:min(190px,calc(100vh - 16px));overflow:hidden;padding:11px 13px;border:1px solid #a18a66;border-radius:11px;background:linear-gradient(145deg,rgba(29,25,21,.98),rgba(16,14,12,.98));box-shadow:0 14px 32px #000c;color:var(--parchment);pointer-events:none;backdrop-filter:blur(10px)}.saved-event-preview[hidden]{display:none}.saved-event-preview strong{font:600 15px/1.25 var(--serif);color:#f4eee2}.saved-event-preview small{color:var(--neutral-300);font-size:10px;line-height:1.4}.saved-event-preview p{max-height:68px;overflow:hidden;margin:0;color:var(--neutral-200);font-size:12px;line-height:1.45}.saved-event-preview .saved-preview-scene{color:var(--gold)}
+.saved-event-preview{position:fixed;z-index:40;display:grid;gap:7px;box-sizing:border-box;max-width:calc(100vw - 16px);max-height:min(320px,calc(100vh - 16px));overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y;padding:11px 13px;border:1px solid #a18a66;border-radius:11px;background:linear-gradient(145deg,rgba(29,25,21,.98),rgba(16,14,12,.98));box-shadow:0 14px 32px #000c;color:var(--parchment);pointer-events:auto;backdrop-filter:blur(10px);scrollbar-width:thin;scrollbar-color:#9a805c #171310}.saved-event-preview[hidden]{display:none}.saved-event-preview .saved-preview-image{display:block;width:100%;max-height:132px;aspect-ratio:16/9;object-fit:cover;border-radius:7px;background:#171310}.saved-event-preview .saved-preview-image[hidden]{display:none}.saved-event-preview .saved-preview-title{font:500 22px/1.05 var(--serif);color:#f4eee2;overflow-wrap:anywhere}.saved-event-preview .saved-preview-meta,.saved-event-preview .saved-preview-scene{color:var(--neutral-300);font-size:10px;line-height:1.4;overflow-wrap:anywhere}.saved-event-preview .saved-preview-summary{margin:0;color:var(--neutral-200);font:13px/1.42 var(--sans);overflow-wrap:anywhere}.saved-event-preview .saved-preview-scene{color:var(--gold)}
 .header-actions .glass-veil,.panel-head.glass-veil,.view-switch.glass-veil{backdrop-filter:blur(12px)}
 .brand>span:nth-child(2){font:500 19px/1 var(--serif);letter-spacing:.16em}
 .brand small{font-size:11px;letter-spacing:.05em}
@@ -126,12 +126,27 @@ body:not(.has-story) .geography-panel{display:none}
 .geography-heading button{min-height:40px;padding:6px 8px;font-size:10px}
 .geography-heading button[aria-pressed="true"]{background:#e5c07b26;border-color:var(--gold);color:var(--gold)}
 .geography-panel p{line-height:1.5;margin:8px 0}.geography-caution{color:var(--neutral-400);font-size:10px}
+.geography-render-warning{padding:7px 8px;border-left:2px solid #e5c07b;background:#e5c07b12;color:var(--gold);font-size:10px}
+.geography-adjustments{margin:9px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.geography-adjustments summary{min-height:40px;display:flex;align-items:center;color:var(--gold);font-weight:650;cursor:pointer;list-style-position:inside}
+.geography-adjustment-fields{display:grid;gap:9px;padding:2px 0 10px}
+.geography-control{min-width:0;margin:0;padding:8px;border:1px solid #ece4d41a;border-radius:6px}
+.geography-control legend{padding:0 4px;color:var(--paper);font-size:10px;font-weight:650}
+.geography-control legend span,.geography-axis small{color:var(--neutral-400);font-size:9px;font-weight:400}
+.geography-number-row{display:grid;grid-template-columns:minmax(0,1fr) 84px;align-items:center;gap:9px}
+.geography-number-row input[type=range]{width:100%;accent-color:var(--gold)}
+.geography-number-row input[type=number],#geography-continent{width:100%;min-height:40px;padding:6px;border:1px solid var(--line);border-radius:5px;background:var(--vault);color:var(--paper);font:inherit;font-variant-numeric:tabular-nums}
+.geography-continent-label{display:block;margin:0 0 4px;color:var(--neutral-200);font-size:10px}
+.geography-axis{display:grid;grid-template-columns:1fr;gap:4px;margin-top:8px;color:var(--neutral-200);font-size:10px}
+.geography-axis>span:first-child{display:flex;justify-content:space-between;gap:8px}
+#geography-reset-adjustments{justify-self:start;min-height:40px;padding:7px 10px;font-size:10px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 #geography-legend{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:10px}
 #geography-legend li{display:grid;grid-template-columns:10px 1fr;gap:4px 7px;line-height:1.45}
 #geography-legend li>span:not(.geography-swatch),#geography-legend li>small{grid-column:2}
 #geography-legend small{color:var(--neutral-400)}.geography-swatch{width:9px;height:9px;margin-top:4px;border-radius:2px}
 #geography-detail{margin:12px 0 0}#geography-detail[hidden]{display:none}#geography-detail figcaption{margin-bottom:7px}#geography-detail canvas{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:5px}#geography-detail small{display:block;margin-top:6px;color:var(--neutral-400)}
-@media(max-width:700px){.geography-panel{left:10px;bottom:auto;top:175px;transform:none;width:min(280px,calc(100vw - 20px));max-height:21dvh;font-size:10px;padding:9px 10px}.invitation-open .geography-panel{display:none}.geography-heading button{min-height:36px;font-size:9px}.geography-caution{font-size:9px}}
+@media(max-width:700px){.geography-panel{left:10px;bottom:auto;top:175px;transform:none;width:min(320px,calc(100vw - 20px));max-height:44dvh;font-size:10px;padding:9px 10px}.invitation-open .geography-panel{display:none}.geography-heading button{min-height:36px;font-size:9px}.geography-caution{font-size:9px}.geography-adjustment-fields{gap:6px}.geography-control{padding:6px}.geography-number-row{grid-template-columns:minmax(0,1fr) 72px}}
 
 .event-consequences { border-top: 1px solid rgba(255,255,255,.12); padding: 1rem 0; }
 .event-consequences h3 { font-size: .82rem; color: #e5bd78; margin: 0 0 .5rem; }

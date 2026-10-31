@@ -1,5 +1,9 @@
 # Agent rules: Office of Otherwise
 
+## Active Atlas review candidate — October 31, 2026
+
+The operator expects ongoing prototype fixes to stay together. The active integrated candidate is `feat/atlas-zoom`, draft PR #11. Continue Atlas fixes there; main is the frozen submission baseline, not a complete copy of the reviewed local prototype. The candidate includes the prior terrain renderer, local geography controls, and rich hover-preview behavior. Read `docs/atlas-zoom/INTEGRATION_AUDIT.md` before replacing a component or choosing another baseline. Older terrain/voice worktrees are preserved recovery references, not parallel targets for new prototype changes. Keep PR #11 draft and unmerged pending operator approval. Keep PR #7 parked. No deployment or submission is authorized.
+
 ## Submission freeze — operator instruction, 2026-10-30
 
 Through November 4, 2026 (America/Toronto), do not add features or continue pilot/feedback work. Make only fixes explicitly requested by the operator. No public app hosting or deployment is required or authorized. Keep PR #7 open, draft and unmerged, parked until after the Meta hackathon submission. Preserve the pilot source and its work; do not resume or submit the hackathon entry without a later operator instruction.
