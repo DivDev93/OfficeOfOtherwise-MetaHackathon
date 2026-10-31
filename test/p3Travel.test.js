@@ -88,4 +88,3 @@ test('scene exposes optional ghost and travel hooks while reusing the single cur
   assert.match(source, /const earthMesh = new THREE\.Mesh\(earthGeometry, earthMaterial\)/);
   assert.doesNotMatch(source, /new THREE\.Mesh\(new THREE\.SphereGeometry\([^\n]*world/i);
 });
-

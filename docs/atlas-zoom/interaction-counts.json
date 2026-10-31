@@ -1,0 +1,88 @@
+{
+  "date": "2026-10-31",
+  "mode": "keyless replay-only loopback fixture",
+  "actions": [
+    "pointer hover on saved tree event",
+    "keyboard focus preview",
+    "same selected event explicit re-entry"
+  ],
+  "before": {
+    "replayOnly": true,
+    "routes": {
+      "/api/run": {
+        "GET": 0,
+        "POST": 0,
+        "HEAD": 0
+      },
+      "/api/continue": {
+        "GET": 0,
+        "POST": 0,
+        "HEAD": 0
+      },
+      "/api/event-scene": {
+        "GET": 196,
+        "POST": 0,
+        "HEAD": 0
+      },
+      "/api/event-cutout": {
+        "GET": 0,
+        "POST": 0,
+        "HEAD": 0
+      },
+      "/api/transcribe": {
+        "GET": 0,
+        "POST": 0,
+        "HEAD": 0
+      }
+    },
+    "postCounts": {
+      "/api/run": 0,
+      "/api/continue": 0,
+      "/api/event-scene": 0,
+      "/api/event-cutout": 0,
+      "/api/transcribe": 0
+    },
+    "externalMetaDispatches": 0
+  },
+  "after": {
+    "replayOnly": true,
+    "routes": {
+      "/api/run": {
+        "GET": 0,
+        "POST": 0,
+        "HEAD": 0
+      },
+      "/api/continue": {
+        "GET": 0,
+        "POST": 0,
+        "HEAD": 0
+      },
+      "/api/event-scene": {
+        "GET": 196,
+        "POST": 0,
+        "HEAD": 0
+      },
+      "/api/event-cutout": {
+        "GET": 0,
+        "POST": 0,
+        "HEAD": 0
+      },
+      "/api/transcribe": {
+        "GET": 0,
+        "POST": 0,
+        "HEAD": 0
+      }
+    },
+    "postCounts": {
+      "/api/run": 0,
+      "/api/continue": 0,
+      "/api/event-scene": 0,
+      "/api/event-cutout": 0,
+      "/api/transcribe": 0
+    },
+    "externalMetaDispatches": 0
+  },
+  "totalGenerationPostsBefore": 0.0,
+  "totalGenerationPostsAfter": 0.0,
+  "externalMetaDispatches": 0
+}

@@ -29,4 +29,3 @@ test('QA fixture paths are not production default URLs', () => {
   const world = { ...baseWorld, sceneRef: { status: 'complete', path: `candidate/live/.event-scenes/${'a'.repeat(64)}.png` } };
   assert.equal(defaultWorldImageUrl(world, { origin: 'https://atlas.example' }), null);
 });
-

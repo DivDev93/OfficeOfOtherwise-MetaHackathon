@@ -89,4 +89,3 @@ export function preservesTravelSource(travelState, requestedCurrentId) {
     && String(requestedCurrentId ?? '') === String(travelState.toId ?? '')
     && String(travelState.fromId ?? '') !== String(travelState.toId ?? ''));
 }
-
