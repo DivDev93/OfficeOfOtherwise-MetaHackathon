@@ -10,6 +10,7 @@ import { createContinuationStore } from '../src/demo/continuationStore.js';
 import { createEventSceneStore } from '../src/demo/eventSceneStore.js';
 import { createEventCutoutStore } from '../src/demo/eventCutoutStore.js';
 import { continuationFor, MAX_CONTINUATION_DEPTH } from '../src/demo/continuation.js';
+import { prepareAuthoredQuestion } from '../src/demo/authoredQuestion.js';
 import { keywordCheck } from '../src/guardrails/topicPolicy.js';
 import { geographyText } from '../web/geography.js';
 import { SpendCapError } from '../src/lib/metaClient.js';
@@ -238,7 +239,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         }
         const continuation = { rootRunId: saved?.continuation?.rootRunId ?? id, path: [], ...(saved?.continuation ?? {}), children };
         const selectedHero = Array.isArray(branch.branches) ? branch.branches.find(item => item.id === branch.hero?.branchId) : null;
-        return { id, title: value(branch.hero?.title) || value(selectedHero?.title) || value(branch.title) || value(branch.divergence) || id, divergence: value(branch.divergence), ...rendering, status: provisional?.status ?? rendering.status ?? (value(branch.status) || 'unknown'), ...((provisional?.reason ?? rendering.reason) ? { reason: provisional?.reason ?? rendering.reason } : {}), hasModel: present.includes('model.glb') || present.includes('model.meshopt.glb'), assets: present, assetUrls, branch, continuation };
+        return { id, title: value(branch.hero?.title) || value(selectedHero?.title) || value(branch.title) || value(branch.divergence) || id, divergence: value(branch.divergence), ...rendering, status: provisional?.status ?? rendering.status ?? (value(branch.status) || 'unknown'), ...((provisional?.reason ?? rendering.reason) ? { reason: provisional?.reason ?? rendering.reason } : {}), hasModel: present.includes('model.glb') || present.includes('model.meshopt.glb'), assets: present, assetUrls, branch, continuation, ...(saved?.questionAttachment ? { questionAttachment: saved.questionAttachment } : {}) };
       } catch { /* no valid manifest in this root */ }
     }
     return null;
@@ -264,7 +265,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         for (const record of store.list()) {
           if (record.status !== 'complete') continue;
           const item = await manifest(record.id);
-          if (item) runs.push({ id: item.id, title: item.title, divergence: record.rootDivergence ?? item.divergence, ...(record.continuation ? { parentRunId: record.continuation.parentRunId, parentBranchId: record.continuation.parentBranchId } : {}), updatedAt: record.updatedAt });
+          if (item) runs.push({ id: item.id, title: item.title, divergence: record.rootDivergence ?? item.divergence, ...(record.continuation ? { parentRunId: record.continuation.parentRunId, parentBranchId: record.continuation.parentBranchId } : {}), ...(record.questionAttachment ? { questionAttachment: record.questionAttachment } : {}), updatedAt: record.updatedAt });
         }
         return json(res, 200, { runs: runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) });
       }
@@ -517,7 +518,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > 8192) return json(res, 413, { error: 'Request too large' }); }
         let input;
         try { input = JSON.parse(body); } catch { return json(res, 400, { error: 'Invalid JSON' }); }
-        let continuation, edge, divergence;
+        let continuation, edge, divergence, questionAttachment;
         const retryBudgetFailure = continuing && input?.retryBudgetFailure === true;
         if (continuing) {
           if (!input || Object.keys(input).some(key => !['runId', 'branchId', 'retryBudgetFailure'].includes(key)) || (input.retryBudgetFailure !== undefined && typeof input.retryBudgetFailure !== 'boolean') || !safeId(input.runId ?? '') || !safeId(input.branchId ?? '')) return json(res, 400, { error: 'Choose a valid saved run and branch.' });
@@ -526,12 +527,13 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           try { continuation = continuationFor(parent, input.branchId, store.get(input.runId), Math.min(MAX_CONTINUATION_DEPTH, Math.max(1, maxContinuationDepth))); }
           catch (error) { return json(res, 400, { error: error.message }); }
           divergence = continuation.rootDivergence;
+          questionAttachment = store.get(input.runId)?.questionAttachment;
           edge = store.edge(input.runId, input.branchId);
           if (edge) {
             const saved = store.get(edge.runId);
             if (edge.status === 'complete' && saved?.status === 'complete' && await manifest(edge.runId)) {
               res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
-              return res.end(`event: complete\ndata: ${JSON.stringify(clean({ ...saved.completion, continuation: saved.continuation, reused: true, step: 'complete', ...renderMetadata(saved.completion?.branch) }))}\n\n`);
+              return res.end(`event: complete\ndata: ${JSON.stringify(clean({ ...saved.completion, continuation: saved.continuation, ...(saved.questionAttachment ? { questionAttachment: saved.questionAttachment } : {}), reused: true, step: 'complete', ...renderMetadata(saved.completion?.branch) }))}\n\n`);
             }
             const eligibleBudgetRetry = await budgetFailureEdge(edge, input.runId, input.branchId);
             if (!retryBudgetFailure || !eligibleBudgetRetry) return json(res, 409, { error: eligibleBudgetRetry ? 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.' : 'This continuation is unfinished or uncertain. Automatic retry is disabled to avoid duplicate charges.', status: edge.status, ...(eligibleBudgetRetry ? { code: 'budget_exhausted' } : {}), ...(safeId(edge.runId ?? '') ? { runId: edge.runId } : {}) });
@@ -541,8 +543,25 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
             return json(res, 409, { error: 'No server-recorded budget refusal authorizes this retry.', status: 'failed' });
           }
         } else {
-          if (typeof input?.divergence !== 'string' || !input.divergence.trim() || input.divergence.length > 2000) return json(res, 400, { error: 'A divergence is required' });
+          if (!input || Object.keys(input).some(key => !['divergence', 'attachment'].includes(key)) || typeof input?.divergence !== 'string' || !input.divergence.trim() || input.divergence.length > 2000) return json(res, 400, { error: 'A divergence is required' });
           divergence = input.divergence.trim();
+          if (input.attachment !== undefined) {
+            const questionId = randomUUID();
+            const attachmentParent = input.attachment?.mode === 'current-world' && safeId(input.attachment.parentRunId)
+              ? await manifest(input.attachment.parentRunId) : null;
+            try {
+              const prepared = prepareAuthoredQuestion({
+                attachment: input.attachment,
+                questionId,
+                divergence,
+                parent: attachmentParent,
+                parentSaved: attachmentParent ? store.get(attachmentParent.id) : null,
+                maxDepth: Math.min(MAX_CONTINUATION_DEPTH, Math.max(1, maxContinuationDepth)),
+              });
+              continuation = prepared.continuation;
+              questionAttachment = prepared.questionAttachment;
+            } catch (error) { return json(res, 400, { error: error.message }); }
+          }
         }
         if (env.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled. Use replay mode.' });
         if (continuing && !keywordCheck(divergence).allowed) return json(res, 400, { error: 'The saved branch cannot pass the topic policy.' });
@@ -559,7 +578,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
             const saved = store.get(edge.runId);
             if (edge.status === 'complete' && saved?.status === 'complete' && await manifest(edge.runId)) {
               res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
-              return res.end(`event: complete\ndata: ${JSON.stringify(clean({ ...saved.completion, continuation: saved.continuation, reused: true, step: 'complete', ...renderMetadata(saved.completion?.branch) }))}\n\n`);
+              return res.end(`event: complete\ndata: ${JSON.stringify(clean({ ...saved.completion, continuation: saved.continuation, ...(saved.questionAttachment ? { questionAttachment: saved.questionAttachment } : {}), reused: true, step: 'complete', ...renderMetadata(saved.completion?.branch) }))}\n\n`);
             }
             const eligibleBudgetRetry = await budgetFailureEdge(edge, input.runId, input.branchId);
             if (!retryBudgetFailure || !eligibleBudgetRetry) return json(res, 409, { error: eligibleBudgetRetry ? 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.' : 'This continuation is unfinished or uncertain. Automatic retry is disabled to avoid duplicate charges.', status: edge.status, ...(eligibleBudgetRetry ? { code: 'budget_exhausted' } : {}), ...(safeId(edge.runId ?? '') ? { runId: edge.runId } : {}) });
@@ -603,11 +622,12 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           if (continuing) {
             if (!store.get(input.runId)) {
               const parent = await manifest(input.runId);
-              store.save({ id: input.runId, status: 'complete', rootDivergence: divergence, completion: { runId: input.runId, branch: clean(parent.branch) } });
+              store.save({ id: input.runId, status: 'complete', rootDivergence: divergence, completion: { runId: input.runId, branch: clean(parent.branch) }, ...(parent.questionAttachment ? { questionAttachment: parent.questionAttachment } : {}) });
             }
           }
-          const reservedRunId = edge?.runId ?? randomUUID();
-          store.save({ id: reservedRunId, status: 'in-progress', rootDivergence: divergence, ...(continuation ? { continuation } : {}) });
+          const reservedRunId = questionAttachment?.questionId ?? edge?.runId ?? randomUUID();
+          const persistedQuestionAttachment = questionAttachment ? { ...questionAttachment, questionId: reservedRunId } : undefined;
+          store.save({ id: reservedRunId, status: 'in-progress', rootDivergence: divergence, ...(continuation ? { continuation } : {}), ...(persistedQuestionAttachment ? { questionAttachment: persistedQuestionAttachment } : {}) });
           res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Content-Type-Options': 'nosniff', ...(expansionUsed === null ? {} : { 'X-Expansion-Used': String(expansionUsed) }) });
           res.flushHeaders();
           const controller = new AbortController();
@@ -615,13 +635,13 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           const emit = (event, data) => { if (!res.destroyed && !res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(clean(data))}\n\n`); };
           const allowed = new Set(['policy', 'propose', 'review', 'image', 'cutout', '3d']);
           try {
-            const result = await runner({ divergence, continuation, runId: reservedRunId, signal: controller.signal, dailyCapUsd, onStep: event => { if (allowed.has(event?.step)) { if (safeId(event.runId ?? '')) liveRoots.set(event.runId, liveRoot); emit(event.step, event); } } });
+            const result = await runner({ divergence, continuation, ...(questionAttachment?.divergenceYear ? { divergenceYear: questionAttachment.divergenceYear } : {}), ...(questionAttachment?.divergencePlace ? { divergencePlace: questionAttachment.divergencePlace } : {}), runId: reservedRunId, signal: controller.signal, dailyCapUsd, onStep: event => { if (allowed.has(event?.step)) { if (safeId(event.runId ?? '')) liveRoots.set(event.runId, liveRoot); emit(event.step, event); } } });
             if (result?.runId !== reservedRunId) throw new Error('Generation did not complete under its reserved run ID');
             if (continuing && result?.branch?.status !== 'ok') throw new Error('Continuation did not complete');
             if (safeId(result?.runId ?? '')) liveRoots.set(result.runId, liveRoot);
             if (continuing && (await manifest(reservedRunId))?.branch?.status !== 'ok') throw new Error('Continuation was not saved');
-            const completion = clean({ ...result, directory: undefined, ...(continuation ? { continuation } : {}), reused: false });
-            if (safeId(result?.runId ?? '')) store.save({ id: result.runId, status: 'complete', rootDivergence: divergence, ...(continuation ? { continuation } : {}), completion });
+            const completion = clean({ ...result, directory: undefined, ...(continuation ? { continuation } : {}), ...(questionAttachment ? { questionAttachment: persistedQuestionAttachment } : {}), reused: false });
+            if (safeId(result?.runId ?? '')) store.save({ id: result.runId, status: 'complete', rootDivergence: divergence, ...(continuation ? { continuation } : {}), ...(questionAttachment ? { questionAttachment: persistedQuestionAttachment } : {}), completion });
             if (edge) store.finish(edge, 'complete');
             emit('complete', { ...completion, ...renderMetadata(result?.branch), step: 'complete' });
           } catch (error) {
@@ -630,7 +650,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
             // their durable reservation for review.
             let retryable = !!edge && !controller.signal.aborted && error instanceof SpendCapError && error.continuationRetryable === true;
             const budgetProof = continuing && !controller.signal.aborted ? spendCapProof(error) : null;
-            const record = status => ({ id: reservedRunId, status, rootDivergence: divergence, ...(continuation ? { continuation } : {}), ...(budgetProof ? { budgetFailure: budgetProof } : {}) });
+            const record = status => ({ id: reservedRunId, status, rootDivergence: divergence, ...(continuation ? { continuation } : {}), ...(questionAttachment ? { questionAttachment: persistedQuestionAttachment } : {}), ...(budgetProof ? { budgetFailure: budgetProof } : {}) });
             if (retryable) {
               store.save(record('retryable'));
               try { store.releaseUndispatched(edge); } catch { retryable = false; }

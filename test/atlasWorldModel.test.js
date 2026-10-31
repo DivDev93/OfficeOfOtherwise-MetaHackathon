@@ -18,6 +18,7 @@ test('v1 migration keeps the question separate and maps stable world IDs and leg
   const migrated = migrateSavedRun(legacy, { runId: 'beringia', assetRefs: { cutoutRef: 'cutout.png', modelRef: 'model.meshopt.glb' } });
   assert.equal(migrated.questions[0].id, 'beringia');
   assert.equal(migrated.questions[0].question, legacy.divergence);
+  assert.equal(migrated.questions[0].divergenceYear, -4500, 'legacy questions derive divergence year from their earliest saved event');
   assert.equal(migrated.worlds.length, 2);
   const herder = migrated.worlds.find(world => world.id === 'beringia:b2');
   assert.equal(herder.parentId, null);
@@ -85,8 +86,41 @@ test('deterministic migration preserves continuation ancestry and deduplicates s
   const descendant = a.worlds.find(world => world.id === 'child:c1');
   assert.equal(descendant.parentId, 'root:b2');
   assert.equal(descendant.questionId, 'root');
+  assert.equal(a.questions.find(question => question.id === 'root').divergenceYear, -4500,
+    'a question shared by continuation records uses the earliest event across its saved runs');
   assert.equal(descendant.provenance.reviewDepth, 1);
   assert.equal(a.metadata.counts.worlds, a.worlds.length);
+});
+
+test('authored attachments migrate as separate questions linked to their saved parent world', () => {
+  const root = { ...legacy, id: 'root', runId: 'root' };
+  const parent = root.branches[0];
+  const authored = {
+    id: 'question-2', runId: 'question-2', divergence: 'A public school shares the saved star charts.',
+    questionAttachment: { questionId: 'question-2', mode: 'current-world', parentWorldId: 'root::b2', parentRunId: 'root', parentBranchId: 'b2', divergenceYear: parent.year, divergencePlace: parent.place },
+    continuation: { rootRunId: 'root', parentRunId: 'root', parentBranchId: 'b2', path: [{ runId: 'root', branchId: 'b2', ...parent }] },
+    branches: [{ id: 'c1', title: 'Shared navigation lessons', year: 1100, place: { name: 'Nome', lat: 64, lon: -165 }, summary: 'Shared charts support careful navigation.', score: 8 }],
+  };
+  const descendant = {
+    id: 'descendant', runId: 'descendant', divergence: authored.divergence, questionAttachment: authored.questionAttachment,
+    continuation: { rootRunId: 'root', parentRunId: 'question-2', parentBranchId: 'c1', path: [
+      { runId: 'root', branchId: 'b2', ...parent },
+      { runId: 'question-2', branchId: 'c1', ...authored.branches[0] },
+    ] },
+    branches: [{ id: 'd1', title: 'Northern chart exchange', year: 1200, place: { name: 'Yukon', lat: 64, lon: -139 }, summary: 'Travelers exchange navigation charts.', score: 7 }],
+  };
+  const authoredPayload = { ...authored }; delete authoredPayload.questionAttachment;
+  const migrated = migrateSavedRuns([{ run: root }, { runId: authored.id, run: authoredPayload, questionAttachment: authored.questionAttachment }, { run: descendant }]);
+  const selectedParent = migrated.worlds.find(world => world.id === 'root:b2');
+  const authoredWorld = migrated.worlds.find(world => world.id === 'question-2:c1');
+  assert.equal(selectedParent.questionId, 'root');
+  assert.equal(authoredWorld.questionId, 'question-2');
+  assert.equal(authoredWorld.parentId, 'root:b2');
+  assert.equal(migrated.worlds.find(world => world.id === 'descendant:d1').parentId, 'question-2:c1');
+  assert.deepEqual(migrated.questions.find(question => question.id === 'question-2'), {
+    id: 'question-2', rootRunId: 'question-2', question: authored.divergence, divergenceYear: parent.year,
+    divergencePlace: parent.place, attachmentMode: 'current-world', parentWorldId: 'root:b2', parentRunId: 'root', parentBranchId: 'b2',
+  });
 });
 
 test('asset refs reject URLs, absolute paths, traversal, and unsupported characters', () => {

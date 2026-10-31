@@ -54,17 +54,30 @@ function normalizeDivergencePlace(value) {
   return place ? place : undefined;
 }
 
-function normalizedQuestion({ rootRunId, rootRun, run }) {
-  const divergence = text(rootRun?.divergence ?? rootRun?.rootDivergence ?? run?.divergence ?? run?.rootDivergence);
-  if (!divergence) throw new Error(`Missing divergence for root run ${rootRunId}`);
-  const divergenceYear = rootRun?.divergenceYear ?? rootRun?.question?.divergenceYear ?? run?.divergenceYear ?? run?.question?.divergenceYear;
-  const divergencePlace = rootRun?.divergencePlace ?? rootRun?.question?.divergencePlace ?? run?.divergencePlace ?? run?.question?.divergencePlace;
+function normalizedQuestion({ rootRunId, rootRun, run, fallbackDivergenceYear }) {
+  const attachment = run?.questionAttachment ?? rootRun?.questionAttachment;
+  const questionId = safeId(attachment?.questionId) ? attachment.questionId : rootRunId;
+  const divergence = text(run?.divergence ?? rootRun?.divergence ?? rootRun?.rootDivergence ?? run?.rootDivergence);
+  if (!divergence) throw new Error(`Missing divergence for root run ${questionId}`);
+  const savedDivergenceYear = attachment?.divergenceYear ?? rootRun?.divergenceYear ?? rootRun?.question?.divergenceYear ?? run?.divergenceYear ?? run?.question?.divergenceYear;
+  const divergenceYear = Number.isSafeInteger(savedDivergenceYear) && savedDivergenceYear !== 0
+    ? savedDivergenceYear
+    : Number.isSafeInteger(fallbackDivergenceYear) && fallbackDivergenceYear !== 0 ? fallbackDivergenceYear : undefined;
+  const divergencePlace = attachment?.divergencePlace ?? rootRun?.divergencePlace ?? rootRun?.question?.divergencePlace ?? run?.divergencePlace ?? run?.question?.divergencePlace;
+  const parentRunId = safeId(attachment?.parentRunId) ? attachment.parentRunId : undefined;
+  const parentBranchId = safeId(attachment?.parentBranchId) ? attachment.parentBranchId : undefined;
+  const parentWorldId = parentRunId && parentBranchId ? `${parentRunId}:${parentBranchId}`
+    : safeId(attachment?.parentWorldId) ? attachment.parentWorldId : undefined;
   return {
-    id: rootRunId,
-    rootRunId,
+    id: questionId,
+    rootRunId: questionId,
     question: divergence,
     ...(Number.isSafeInteger(divergenceYear) && divergenceYear !== 0 ? { divergenceYear } : {}),
     ...(normalizeDivergencePlace(divergencePlace) !== undefined ? { divergencePlace: normalizeDivergencePlace(divergencePlace) } : {}),
+    ...(attachment?.mode === 'current-world' || attachment?.mode === 'present-day' ? { attachmentMode: attachment.mode } : {}),
+    ...(parentWorldId ? { parentWorldId } : {}),
+    ...(parentRunId ? { parentRunId } : {}),
+    ...(parentBranchId ? { parentBranchId } : {}),
   };
 }
 
@@ -123,13 +136,16 @@ function branchWorld({ runId, branch, questionId, parentId, depth, assetRefs = {
 }
 
 /** Convert a saved v1 run record into canonical world and question records. */
-export function migrateSavedRun(run, { runId = run?.runId ?? run?.id, assetRefsByBranch = {}, assetRefs = {} } = {}) {
+export function migrateSavedRun(run, { runId = run?.runId ?? run?.id, assetRefsByBranch = {}, assetRefs = {}, questionIdByRun = new Map(), questionDivergenceYearById = new Map() } = {}) {
   if (!run || typeof run !== 'object' || !Array.isArray(run.branches)) throw new Error('Expected a saved run with a branches array');
   if (!safeId(runId)) throw new Error('A stable runId is required');
   const continuation = run.continuation;
-  const rootRunId = continuation?.rootRunId ?? run.rootRunId ?? runId;
-  if (!safeId(rootRunId)) throw new Error(`Invalid rootRunId for run ${runId}`);
-  const question = normalizedQuestion({ rootRunId, rootRun: run.rootQuestion, run });
+  const ancestryRootRunId = continuation?.rootRunId ?? run.rootRunId ?? runId;
+  const rootRunId = safeId(run.questionAttachment?.questionId) ? run.questionAttachment.questionId : ancestryRootRunId;
+  if (!safeId(rootRunId) || !safeId(ancestryRootRunId)) throw new Error(`Invalid rootRunId for run ${runId}`);
+  const runEventYears = (run.branches ?? []).map(branch => branch?.year).filter(year => Number.isSafeInteger(year) && year !== 0);
+  const question = normalizedQuestion({ rootRunId, rootRun: run.rootQuestion, run,
+    fallbackDivergenceYear: questionDivergenceYearById.get(rootRunId) ?? (runEventYears.length ? Math.min(...runEventYears) : undefined) });
   const worlds = [];
   const path = Array.isArray(continuation?.path) ? continuation.path : [];
   let parentId = null;
@@ -137,7 +153,8 @@ export function migrateSavedRun(run, { runId = run?.runId ?? run?.id, assetRefsB
     if (!event || !safeId(event.runId) || !safeId(event.branchId)) throw new Error(`Invalid continuation event ${index} in run ${runId}`);
     const id = `${event.runId}:${event.branchId}`;
     const branch = { ...event, id: event.branchId };
-    worlds.push(branchWorld({ runId: event.runId, branch, questionId: rootRunId, parentId, depth: index, assetRefs: assetRefsByBranch[id] ?? {}, legacy: true }));
+    const ancestryQuestionId = questionIdByRun.get(event.runId) ?? ancestryRootRunId;
+    worlds.push(branchWorld({ runId: event.runId, branch, questionId: ancestryQuestionId, parentId, depth: index, assetRefs: assetRefsByBranch[id] ?? {}, legacy: true }));
     parentId = id;
   }
   const depth = path.length;
@@ -159,15 +176,37 @@ function validSourcePath(value) {
   return normalized;
 }
 
+function runForRecord(item) {
+  const run = item?.run ?? item?.manifest ?? item;
+  return item?.questionAttachment && !run?.questionAttachment ? { ...run, questionAttachment: item.questionAttachment } : run;
+}
+
 /** Build a deterministic v1 graph from saved runs; duplicate ancestor nodes are deduplicated by canonical id. */
 export function migrateSavedRuns(records, { sources = [] } = {}) {
   if (!Array.isArray(records)) throw new Error('records must be an array');
   const worlds = new Map();
   const questions = new Map();
+  const questionIdByRun = new Map();
+  const questionDivergenceYearById = new Map();
   for (const item of records) {
-    const run = item?.run ?? item;
+    const run = runForRecord(item);
     const runId = item?.runId ?? run?.runId ?? run?.id;
-    const migrated = migrateSavedRun(run, { runId, assetRefsByBranch: item?.assetRefsByBranch ?? {}, assetRefs: item?.assetRefs ?? {} });
+    if (!safeId(runId)) continue;
+    const questionId = safeId(run?.questionAttachment?.questionId)
+      ? run.questionAttachment.questionId : run?.continuation?.rootRunId ?? run?.rootRunId ?? runId;
+    if (safeId(questionId)) questionIdByRun.set(runId, questionId);
+    if (safeId(questionId)) {
+      const years = (run?.branches ?? []).map(branch => branch?.year).filter(year => Number.isSafeInteger(year) && year !== 0);
+      if (years.length) {
+        const earliest = Math.min(...years);
+        questionDivergenceYearById.set(questionId, Math.min(questionDivergenceYearById.get(questionId) ?? earliest, earliest));
+      }
+    }
+  }
+  for (const item of records) {
+    const run = runForRecord(item);
+    const runId = item?.runId ?? run?.runId ?? run?.id;
+    const migrated = migrateSavedRun(run, { runId, assetRefsByBranch: item?.assetRefsByBranch ?? {}, assetRefs: item?.assetRefs ?? {}, questionIdByRun, questionDivergenceYearById });
     for (const world of migrated.worlds) {
       const existing = worlds.get(world.id);
       if (existing) {

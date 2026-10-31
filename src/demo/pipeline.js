@@ -49,7 +49,7 @@ export function createDemoEventCutoutRunner({ env = process.env, dailyCapUsd, ou
 }
 
 export function createDemoRunner({ env = process.env, dailyCapUsd, outputRoot = 'out' } = {}) {
-  const runner = async ({ divergence, continuation, runId, from, subjectOverride, onStep, signal }) => {
+  const runner = async ({ divergence, continuation, divergenceYear, divergencePlace, runId, from, subjectOverride, onStep, signal }) => {
     if (signal?.aborted) throw new Error('Run aborted');
     const enable3d = env.DEMO_3D_ENABLED === 'true';
     if (enable3d && (env.CHRONOS_3D_CAPABILITY_CONFIRMED !== 'true' || !(env.CHRONOS_API_BASE || env.CHRONOS_3D_ENDPOINT) || !env.CHRONOS_API_TOKEN)) throw new Error('Confirmed Chronos TRELLIS configuration is required');
@@ -83,7 +83,14 @@ export function createDemoRunner({ env = process.env, dailyCapUsd, outputRoot = 
       classifyPrompt: createModelClassifier(agentClient, { model: promptPolicyModel, categories }),
       classifyBranches: createModelClassifier(agentClient, { model: branchPolicyModel, categories }),
     });
-    const agent = createBranchAgent({ client: agentClient, policy, model });
+    const branchAgent = createBranchAgent({ client: agentClient, policy, model });
+    const agent = {
+      ...branchAgent,
+      run: input => branchAgent.run({ ...input,
+        ...(Number.isSafeInteger(divergenceYear) && divergenceYear !== 0 ? { divergenceYear } : {}),
+        ...(divergencePlace ? { divergencePlace } : {}),
+      }),
+    };
     let result;
     try {
       result = await runHarness({ divergence, continuation, ...(runId ? { timestamp: runId } : {}), from, subjectOverride, client, agent, image: createMetaImage({ client, env }), sam: createSamMask({ client, env }), policy, apiCalls, onStep, chronos3d, no3d: !enable3d, signal, outputRoot });
