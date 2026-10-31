@@ -1,0 +1,233 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import {
+  ATLAS_REAL_SPHERE_LIMIT, AXIS_ANIMATION_MS, AXIS_MODES, ATLAS_TIME_SCALE_LABEL, FUTURE_EXTENSION_WIDTH, PRESENT_DAY_REFERENCE,
+  atlasLOD, axisTransitionProgress, buildAtlasTimeline, formatHistoricalYear,
+  interpolateAtlasPoint, layoutLogTimeTicks, logDistanceX, planQuestionRootConnections, worldDistanceMap,
+} from '../web/atlas/p2Atlas.js';
+
+function sampleGraph() {
+  const worlds = [
+    { id: 'root', parentId: null, questionId: 'q-a', year: 1800, title: 'Sundaland', boldness: 0.3, theme: 'geography-ecology', provenance: { reviewScore: 9 } },
+    { id: 'child-a', parentId: 'root', questionId: 'q-a', year: 1902, title: 'Kuching', boldness: 0.7, theme: 'science-medicine', provenance: { reviewScore: 8, sourceBranchId: 'b2' } },
+    { id: 'sibling', parentId: 'root', questionId: 'q-a', year: 1850, title: 'Sibling branch', boldness: 0.4, theme: 'infrastructure-trade', provenance: { sourceBranchId: 'b1' } },
+    { id: 'grandchild', parentId: 'child-a', questionId: 'q-a', year: 1930, title: 'Field notes', boldness: 0.55, theme: 'culture-daily-life', provenance: { reviewScore: 7 } },
+    { id: 'far', parentId: 'grandchild', questionId: 'q-a', year: 2000, title: 'Later study', boldness: 0.2, theme: 'science-medicine' },
+    { id: 'distant', parentId: 'far', questionId: 'q-a', year: 2020, title: 'Recent study', boldness: 0.1, theme: 'science-medicine' },
+    { id: 'q-b-root', parentId: null, questionId: 'q-b', year: -5000, title: 'Sahara', boldness: 0.8, theme: 'geography-ecology' },
+    { id: 'q-b-child', parentId: 'q-b-root', questionId: 'q-b', year: -3000, title: 'River gardens', boldness: 0.6, theme: 'culture-daily-life' },
+  ];
+  return { version: 1, worlds, questions: [
+    { id: 'q-a', question: 'What if the Sunda Shelf stayed exposed?', divergenceYear: 1800 },
+    { id: 'q-b', question: 'What if the Sahara remained green?', divergenceYear: -5000 },
+  ] };
+}
+
+test('log time scale anchors 2026 at the trunk end and compresses BCE distance', () => {
+  assert.equal(ATLAS_TIME_SCALE_LABEL, 'Log distance back from present (2026)');
+  const present = logDistanceX(2026, { earliestYear: -1000000 });
+  const recent = logDistanceX(1902, { earliestYear: -1000000 });
+  const old = logDistanceX(-5000, { earliestYear: -1000000 });
+  const deep = logDistanceX(-1000000, { earliestYear: -1000000 });
+  assert.equal(present, 3.8);
+  assert.ok(present > recent && recent > old && old > deep);
+  assert.ok(deep > -4.61);
+  assert.equal(formatHistoricalYear(-1), '1 BCE');
+  assert.equal(formatHistoricalYear(1), '1 CE');
+  assert.ok(logDistanceX(-5000, { earliestYear: -1, left: -4.6, right: 3.8 }) > -4.6);
+});
+
+test('future events extend monotonically beyond the fixed 2026 trunk end in a bounded branch lane', () => {
+  const options = { earliestYear: -5000, presentYear: 2026, latestYear: 2100, right: 3.8 };
+  const x2026 = logDistanceX(2026, options);
+  const x2034 = logDistanceX(2034, options);
+  const x2100 = logDistanceX(2100, options);
+  assert.equal(x2026, 3.8);
+  assert.ok(x2034 > x2026 && x2034 < x2100);
+  assert.equal(x2100, 3.8 + FUTURE_EXTENSION_WIDTH);
+  const years = [-5000, -1, 1, 2026, 2034, 2100];
+  const positions = years.map(year => logDistanceX(year, options));
+  assert.ok(positions.every((x, index) => index === 0 || x > positions[index - 1]), 'BCE through future event coordinates stay strictly chronological');
+
+  const timeline = buildAtlasTimeline({
+    worlds: years.slice(3).map((year, index) => ({ id: `future-${year}`, parentId: index ? `future-${years[index + 2]}` : null, questionId: 'future-q', year })),
+    questions: [{ id: 'future-q', question: 'A future chronology', divergenceYear: 2034 }],
+  }, 'future-2026');
+  assert.equal(timeline.trunk.right, 3.8);
+  assert.equal(timeline.presentEarth.x, 3.8);
+  assert.equal(timeline.positions.get('future-2026').x, 3.8);
+  assert.equal(timeline.positions.get('future-2034').x, x2034);
+  assert.equal(timeline.positions.get('future-2100').x, x2100);
+  assert.deepEqual(timeline.futureExtension, { fromX: 3.8, toX: 3.8 + FUTURE_EXTENSION_WIDTH, latestYear: 2100, label: 'FUTURE · 2100 →' });
+  assert.ok(timeline.visibleTicks.every(tick => tick.x <= timeline.trunk.right), 'calendar tick labels remain on the history trunk, away from future branch space');
+});
+
+test('log tick labels keep a minimum projected gap and retain the present label', () => {
+  const ticks = layoutLogTimeTicks({ earliestYear: -1000000, presentYear: 2026, minGap: 0.7 });
+  assert.equal(ticks.at(-1).label, 'PRESENT · 2026');
+  for (let index = 1; index < ticks.length; index++) assert.ok(ticks[index].x - ticks[index - 1].x >= 0.7);
+});
+
+test('three axis modes produce distinct coordinates and question divergence attaches to the trunk', () => {
+  const graph = sampleGraph();
+  const layouts = AXIS_MODES.map(mode => buildAtlasTimeline(graph, 'child-a', mode));
+  const positionFor = layout => layout.positions.get('child-a');
+  assert.notEqual(positionFor(layouts[0]).y, positionFor(layouts[1]).y);
+  assert.notEqual(positionFor(layouts[1]).y, positionFor(layouts[2]).y);
+  const inactive = layouts[0].questionBranches.find(branch => branch.questionId === 'q-b');
+  assert.equal(inactive.divergenceYear, -5000);
+  assert.match(inactive.label, /Sahara remained green/i);
+  assert.equal(inactive.x, logDistanceX(-5000, { earliestYear: -5000 }));
+  assert.equal(layouts[0].questionBranches.find(branch => branch.questionId === 'q-a').active, true);
+  assert.equal(layouts[0].presentEarth.year, 2026);
+  const branch = layouts[1];
+  assert.ok(branch.positions.get('sibling').y < branch.positions.get('child-a').y, 'b1 precedes b2 in proposed branch order');
+});
+
+test('equal semantic distances receive deterministic small vertical sub-lanes without changing time order', () => {
+  const worlds = [
+    { id: 'tied-a', parentId: null, questionId: 'q', year: 1800, boldness: .5, theme: 'geography-ecology' },
+    { id: 'tied-b', parentId: null, questionId: 'q', year: 1850, boldness: .5, theme: 'geography-ecology' },
+    { id: 'tied-c', parentId: null, questionId: 'q', year: 1900, boldness: .5, theme: 'geography-ecology' },
+  ];
+  for (const mode of ['history-distance', 'theme']) {
+    const layout = buildAtlasTimeline({ worlds }, 'tied-a', mode);
+    const points = worlds.map(world => layout.positions.get(world.id));
+    assert.ok(new Set(points.map(point => point.y)).size === 3, `${mode} breaks ties into sub-lanes`);
+    assert.ok(points[0].x < points[1].x && points[1].x < points[2].x, 'time coordinates stay strictly ordered');
+    const repeated = buildAtlasTimeline({ worlds }, 'tied-a', mode);
+    assert.deepEqual(points.map(point => point.y), worlds.map(world => repeated.positions.get(world.id).y), 'tie lanes are deterministic');
+  }
+});
+
+test('large tied groups wrap into four bounded rows instead of expanding the camera to portrait scale', () => {
+  const worlds = Array.from({ length: 30 }, (_, index) => ({
+    id: `tied-${index}`, parentId: null, questionId: 'q', year: 1900 + index, boldness: .5,
+  }));
+  const layout = buildAtlasTimeline({ worlds }, 'tied-0');
+  const points = worlds.map(world => layout.positions.get(world.id));
+  assert.equal(new Set(points.map(point => point.y)).size, 4);
+  assert.ok(Math.max(...points.map(point => point.y)) - Math.min(...points.map(point => point.y)) <= 1.44);
+  assert.deepEqual(points.map(point => point.x), worlds.map(world => logDistanceX(world.year, { earliestYear: 1900 })));
+});
+
+test('current-world question metadata attaches a parchment question branch to its declared parent', () => {
+  const graph = {
+    worlds: [
+      { id: 'origin', parentId: null, questionId: 'q-root', year: 1800, title: 'Origin' },
+      { id: 'what-if', parentId: 'origin', questionId: 'q-new', year: 1850, title: 'What if' },
+    ],
+    questions: [
+      { id: 'q-root', question: 'Root question', divergenceYear: 1800 },
+      { id: 'q-new', mode: 'current-world', parentWorldId: 'origin', question: 'New question', divergenceYear: 1850 },
+    ],
+  };
+  const layout = buildAtlasTimeline(graph, 'origin');
+  const branch = layout.questionBranches.find(item => item.questionId === 'q-new');
+  assert.equal(branch.attachmentMode, 'current-world');
+  assert.equal(branch.attachment.fromWorldId, 'origin');
+  assert.equal(branch.attachment.toWorldId, 'what-if');
+  assert.deepEqual(layout.questionAttachments.map(item => item.questionId), ['q-new']);
+});
+
+test('question tokens connect every spatial root without inventing root-question worlds', () => {
+  const worlds = [
+    { id: 'sundaland', parentId: null, questionId: 'q-map' },
+    { id: 'north-shelf', parentId: null, questionId: 'q-map' },
+    { id: 'river-delta', parentId: null, questionId: 'q-map' },
+    { id: 'descendant', parentId: 'sundaland', questionId: 'q-map' },
+    { id: 'other-root', parentId: null, questionId: 'q-other' },
+  ];
+  const branches = [{ questionId: 'q-map', x: 1.2, y: 0.7 }, { questionId: 'q-other', x: -1, y: -0.7 }];
+  const connections = planQuestionRootConnections(worlds, branches, new Set(['north-shelf']));
+  assert.deepEqual(connections, [
+    { questionId: 'q-map', worldId: 'sundaland', color: 'proposed' },
+    { questionId: 'q-map', worldId: 'north-shelf', color: 'lineage' },
+    { questionId: 'q-map', worldId: 'river-delta', color: 'proposed' },
+    { questionId: 'q-other', worldId: 'other-root', color: 'proposed' },
+  ]);
+  assert.equal(worlds.length, 5, 'question tokens are not inserted as fake world nodes');
+});
+
+test('inactive questions fold into chips while the current question and gold lineage stay expanded', () => {
+  const graph = sampleGraph();
+  const layout = buildAtlasTimeline(graph, 'child-a');
+  assert.deepEqual(new Set(layout.foldedIds), new Set(['q-b-root', 'q-b-child']));
+  assert.deepEqual(new Set(layout.lineageIds), new Set(['root', 'child-a']));
+  assert.equal(layout.chips.length, 1);
+  assert.equal(layout.chips[0].count, 2);
+  assert.match(layout.chips[0].label, /Sahara.*2/);
+});
+
+test('activating an inactive question chip expands its worlds without changing the current world', () => {
+  const graph = sampleGraph();
+  const folded = buildAtlasTimeline(graph, 'child-a');
+  const expanded = buildAtlasTimeline(graph, 'child-a', 'history-distance', { expandedQuestionIds: ['q-b'] });
+  assert.deepEqual(folded.chips.map(chip => chip.questionId), ['q-b']);
+  assert.deepEqual(expanded.chips, []);
+  assert.ok(expanded.realSphereIds.includes('q-b-root') || expanded.pointIds.includes('q-b-root'));
+  assert.ok(expanded.realSphereIds.includes('q-b-child') || expanded.pointIds.includes('q-b-child'));
+  assert.equal(expanded.activeQuestionId, 'q-a', 'unfolding the question does not select an arbitrary event or switch current question');
+});
+
+test('Present-day Earth is a virtual reference token, not a persisted event world', () => {
+  assert.deepEqual(PRESENT_DAY_REFERENCE, { id: 'present-day-earth', kind: 'present-day', year: 2026, title: 'Present-day Earth' });
+});
+
+test('worlds two steps from current remain spheres, farther active nodes use points, and lineage is mandatory', () => {
+  const graph = sampleGraph();
+  const layout = buildAtlasTimeline(graph, 'child-a');
+  const spheres = new Set(layout.realSphereIds);
+  const points = new Set(layout.pointIds);
+  assert.ok(spheres.has('root') && spheres.has('child-a') && spheres.has('grandchild'));
+  assert.ok(spheres.has('far'));
+  assert.ok(points.has('distant'));
+  assert.ok(!spheres.has('q-b-root') && !points.has('q-b-root'));
+  assert.ok(layout.realSphereIds.length <= ATLAS_REAL_SPHERE_LIMIT);
+  const distances = worldDistanceMap(graph.worlds, 'child-a');
+  assert.equal(distances.get('grandchild'), 1);
+  assert.equal(distances.get('far'), 2);
+  assert.equal(distances.get('distant'), 3);
+});
+
+test('far LOD is capped without folding any member of a long gold lineage', () => {
+  const worlds = Array.from({ length: 32 }, (_, index) => ({ id: `w${index}`, parentId: index ? `w${index - 1}` : null, questionId: 'q', year: 1900 + index }));
+  const lod = atlasLOD(worlds, 'w31', 'q', { sphereLimit: 24 });
+  assert.equal(lod.lineageIds.length, 32);
+  assert.equal(lod.realSphereIds.length, 32);
+  assert.equal(lod.pointIds.length, 0);
+  assert.equal(lod.foldedIds.length, 0);
+});
+
+test('700 ms axis transition is ease-out and interpolates all coordinates', () => {
+  assert.equal(AXIS_ANIMATION_MS, 700);
+  assert.equal(axisTransitionProgress(0), 0);
+  assert.equal(axisTransitionProgress(700), 1);
+  assert.ok(axisTransitionProgress(350) > 0.8);
+  assert.deepEqual(interpolateAtlasPoint({ x: 0, y: 2, z: 0 }, { x: 10, y: -2, z: 4 }, 0.25), { x: 2.5, y: 1, z: 1 });
+});
+
+test('world labels are greedily deconflicted by both horizontal and vertical boxes', () => {
+  const layout = buildAtlasTimeline(sampleGraph(), 'child-a');
+  assert.equal(layout.worlds.find(world => world.id === 'child-a').labelVisible, true, 'current world label has priority');
+  const labels = layout.worlds.filter(world => world.labelVisible).map(world => ({ x: world.x + 0.14, y: world.y + 0.27 }));
+  for (let left = 0; left < labels.length; left++) for (let right = left + 1; right < labels.length; right++) {
+    assert.ok(Math.abs(labels[left].x - labels[right].x) >= 1.55 || Math.abs(labels[left].y - labels[right].y) >= 0.42);
+  }
+  for (const node of labels) for (const tick of layout.visibleTicks) {
+    assert.ok(Math.abs(node.x - tick.x) >= 1.55 || Math.abs(node.y - tick.y) >= 0.42, 'world labels do not overlap the trunk tick labels');
+  }
+  for (const chip of layout.chips) for (const node of labels) {
+    assert.ok(Math.abs(node.x - chip.x) >= 2.2 || Math.abs(node.y - chip.y) >= 0.38, 'question chips do not overlap world labels');
+  }
+});
+
+test('P2 trunk renderer attaches to the P1 scene and adds no scene, camera, or renderer', () => {
+  const source = readFileSync(new URL('../web/atlas/p2Renderer.js', import.meta.url), 'utf8');
+  assert.match(source, /createAtlasP2Renderer\(scene/);
+  assert.match(source, /scene\.add\(group\)/);
+  assert.match(source, /foldedQuestionIds/);
+  assert.match(source, /layoutLabels\(camera, viewport, reservedRects/);
+  assert.doesNotMatch(source, /new THREE\.(?:Scene|PerspectiveCamera|WebGLRenderer)\s*\(/);
+});
