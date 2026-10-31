@@ -78,6 +78,32 @@ export function surfaceFacingRotation(normal) {
   return Math.atan2(-x, z);
 }
 
+/** Yaw and latitude tilt that place a geographic normal at camera-forward +Z. */
+export function surfaceFacingOrientation(normal, yawOffset = 0, blend = 1) {
+  const x = Number(normal?.x), y = Number(normal?.y), z = Number(normal?.z);
+  if (![x, y, z].every(Number.isFinite) || Math.hypot(x, y, z) < 1e-8) return { yaw: 0, pitch: 0 };
+  const amount = Math.min(1, Math.max(0, Number(blend) || 0));
+  const yaw = (surfaceFacingRotation({ x, z }) + (Number(yawOffset) || 0)) * amount;
+  const pitch = Math.atan2(y, Math.hypot(x, z)) * amount;
+  return {
+    yaw: yaw === 0 ? 0 : yaw,
+    pitch: pitch === 0 ? 0 : pitch,
+  };
+}
+
+/** Pure counterpart to the Atlas group's Y-yaw followed by X-pitch rotation. */
+export function transformSurfaceNormal(normal, { yaw = 0, pitch = 0 } = {}) {
+  const x = Number(normal?.x), y = Number(normal?.y), z = Number(normal?.z);
+  if (![x, y, z].every(Number.isFinite)) return { x: 0, y: 0, z: 0 };
+  const yawCos = Math.cos(yaw), yawSin = Math.sin(yaw);
+  const xYaw = x * yawCos + z * yawSin;
+  const zYaw = -x * yawSin + z * yawCos;
+  const pitchCos = Math.cos(pitch), pitchSin = Math.sin(pitch);
+  const yPitch = y * pitchCos - zYaw * pitchSin;
+  const zPitch = y * pitchSin + zYaw * pitchCos;
+  return { x: xYaw, y: yPitch, z: zPitch };
+}
+
 /** World-space radius that projects to a requested CSS-pixel diameter. */
 export function worldRadiusForScreenPixels(distance, fovDegrees, viewportHeight, pixels = 44) {
   const d = Number(distance), fov = Number(fovDegrees), height = Number(viewportHeight), size = Number(pixels);
