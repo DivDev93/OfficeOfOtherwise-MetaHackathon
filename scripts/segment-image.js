@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createMetaClient } from '../src/lib/metaClient.js';
 import { fileLedger } from '../src/lib/spendLedger.js';
-import { taskSpendCap } from '../src/demo/budget.js';
+import { configuredSpendCap, configuredDailyCap } from '../src/demo/budget.js';
 import { keywordCheck } from '../src/guardrails/topicPolicy.js';
 import { createSamMask } from '../src/providers/samMask.js';
 import { decodePng, applyMask, writeMaskPng, writeCutoutPng } from '../src/lib/png.js';
@@ -18,7 +18,9 @@ export async function runSegmentImage({ imagePath, prompt, client, outRoot = 'ou
   const decoded = decodePng(image);
   // Disable transport retries as well as provider fallback: this diagnostic is
   // explicitly limited to one request, even when the server returns a 5xx.
-  const metered = client ?? createMetaClient({ env, ledger: fileLedger('out/spend.json', { requireExisting: true }), spendCapUsd: taskSpendCap({ env }), dailyCapUsd: Number(env.DEMO_DAILY_CAP_USD ?? 3), maxRetries: 0 });
+  const spendCapUsd = client ? undefined : configuredSpendCap({ env, outputRoot: outRoot });
+  const dailyCapUsd = client ? undefined : configuredDailyCap({ env, spendCapUsd });
+  const metered = client ?? createMetaClient({ env, ledger: fileLedger(join(outRoot, 'spend.json'), { requireExisting: true }), spendCapUsd, dailyCapUsd, maxRetries: 0 });
   // Enforce the one-attempt limit independently of provider fallback behavior.
   let attempts = 0;
   const singleAttempt = { meteredPost(...args) {

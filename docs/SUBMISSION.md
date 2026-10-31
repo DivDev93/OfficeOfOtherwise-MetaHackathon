@@ -1,25 +1,72 @@
-# Submission draft
+# Submission package — Office of Otherwise
 
-**Public replay demo:** [Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app) (deployed revision `office-otherwise-00003-gz2`, built from `main` commit `cd2953e`; replay-only, live generation disabled)
+- **Project / team:** Office of Otherwise
+- **Sole contributor and startup representative:** Divakar Dev
+- **Track:** Startups Track (operator confirmed startup representative eligibility)
+- **Intended theme:** Build for Your World
+- **Submission deadline:** November 4, 2026, 9:00 PM America/Toronto
+- **Public repository:** [DivDev93/OfficeOfOtherwise-MetaHackathon](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon)
+- **Public replay demo:** [Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app)
+- **3-minute video:** [Download the v2 submission video](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/releases/download/hackathon-submission-2026-10-31/office-of-otherwise-submission-1080p-v2.mp4)
 
-**Deployment verified 2026-10-28:** The Earth globe renders on the hosted service. Alexandria, Beringia, Green Sahara and Mechanisms each display their hero scene and cutout and load the 3D viewer. Full downloads of every `hero.png`, `cutout.png` and original `model.glb` returned HTTP 200 and matched the repository's SHA-256 hashes; the browser uses the corresponding Meshopt viewer copies. The existing project, region and service settings were preserved.
+The public repository, replay demo, and v2 video are the judge-facing release artifacts. The hackathon entry remains unsubmitted and consent unchecked. PR #7 remains open, draft, and unmerged; the parked `develop` pilot work remains intact.
 
-## Project description
+## Primary use and product story
 
-Office of Otherwise is a Meta-powered branching layer for Chronos, an alternate-history explorer. Start with a question about science, technology, culture or geography; the system checks the topic, proposes geographically anchored branches, reviews them for consistency and selects a hero scene. Muse Spark 1.3 handles the current topic-policy path; Muse Wonder proposes and reviews branches. Muse Image renders the hero scene, while SAM 3.1 isolates a subject. Alexandria, Beringia, Green Sahara and Mechanisms each include a separately generated SAM 3D Objects model, with the actual generation time recorded and unknown cost left null. The browser prefers Meshopt-compressed copies while retaining each original GLB: Alexandria loads as 2,628,148 bytes instead of 13,385,656 bytes, an 80.4% reduction. All eight model files bring the cached demo archive to 52,811,787 bytes under its 80 MB limit. The orrery cutout missed some thin components. Chronos, including its globe, accounts, credits and 3D infrastructure, existed before the event. The proposed product uses credits to support interactive exploration.
+Office of Otherwise is a counterfactual worldbuilding workbench for writers and worldbuilders. It turns one “what if?” premise into a navigable path of possible events: choose a turning point, follow its consequences with matching illustrative scenes, return to an earlier choice to explore another branch, and compare scenario geography with the present-day globe. The intended outcome is to help writers develop and communicate a complex alternate-world idea while keeping its choices and visuals together. Scenario geography is illustrative, not a scientific simulation or historical claim.
 
-## Built during the hackathon
+## How Meta models power the core loop
 
-Public repository: https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon
+| Role in the exploration loop | Meta model | Implementation |
+| --- | --- | --- |
+| Topic policy check on prompts, branches, and continuations | **Muse Spark 1.3** (`muse-spark-1.3`) + keyword guardrails | `src/guardrails/topicPolicy.js` |
+| Propose and review branches, select a hero, and attach structured scenario geography | **Muse Wonder** (`muse-wonder-1.0`) | `src/agents/branchAgent.js`, `src/demo/pipeline.js` |
+| Continue selected events and validate saved ancestry | **Muse Wonder** (`muse-wonder-1.0`), checked by keyword guardrails | `src/demo/continuation.js`, `src/demo/pipeline.js` |
+| Render the selected hero scene and per-event scenes (including immediate-child `sceneOnly` prefetch) | **Muse Image** (`muse-image-1.0`) | `src/demo/pipeline.js`, `src/demo/eventSceneStore.js` |
+| Isolate hero subjects and per-event cutouts | **SAM 3.1** (`sam-3.1`) | `src/demo/pipeline.js`, `src/demo/eventCutoutStore.js` |
+| Transcribe optional local push-to-talk voice prompts | **Muse Voice Transcribe** (`muse-voice-transcribe-1.0`) | `src/providers/metaVoice.js`, `web/voice.js` |
+| Four curated root 3D objects (`alexandria`, `beringia`, `green-sahara`, `mechanisms`) | **Meta SAM 3D Objects** (generated separately through preexisting private Tattva runner) | Validated and attached via `scripts/attach-glb.js` |
 
-All four curated replays record SAM 3D Objects as `3D: Meta SAM 3D Objects (via Tattva Cloud Run)`; the models were generated separately and attached to the cached runs. This repository provides validated attachment and provenance display, not the provider service.
+### Prefetch and exploration discipline
 
-The first functional commit after the 2026-10-26 12:00 ET kickoff is `ba7110f`, authored 2026-10-26 13:38:22 -04:00 (Eastern Daylight Time). The earlier scaffold `53a83c0` predates kickoff and has no functional code. The working range is `ba7110f` through `HEAD`, inclusive; resolve `HEAD` to the final integration commit and verify ancestry before submission. Inspect with `git log --reverse --format="%h %aI %s"`.
+Selecting an event keeps that exact event selected, loads or generates its matching scene and immediate consequences automatically, and prefetches scenes **only** (`sceneOnly`) for those immediate children once they exist. It never recursively generates consequences for unselected children. Saved scenes, cutouts, and continuations reopen from disk without duplicate model calls.
 
-Muse Spark 1.3 handles current prompt and per-branch topic-policy checks; Muse Wonder proposes and reviews branches; Muse Image generates the hero scene; SAM 3.1 generates the subject mask; Meta SAM 3D Objects supplies the separately generated replay models. Older cached traces retain the model and timing/cost information actually recorded at generation time, including Muse Wonder policy calls. The hosted demo is replay-only and the simulated guardrail fixture is not a live Muse verdict.
+### 3D verification and boundaries
+
+All four curated saved roots (`alexandria`, `beringia`, `green-sahara`, `mechanisms`) include genuine **Meta SAM 3D Objects** meshes (`.glb` and `.meshopt.glb`), generated separately through the preexisting private Tattva runner and attached with validated provenance (durations recorded; unknown generation costs left `null`). The earlier repeated story/view switching blank-canvas defect in `web/visuals.js` and `web/app.js` was diagnosed (sizing/camera fitting while `#model-view` was hidden and stale URL state across resets) and fixed. A local headless Chrome check exercised repeated story and `Scene → SAM cutout → 3D object → Scene` switching across the four saved models; this is local replay verification, not a claim about freshly generated models or the hosted service. Non-hero events explain in the UI when a 3D object is unavailable.
+
+## Built during the hackathon vs. preexisting platform
+
+- **Hackathon implementation:** Work begins with functional commit `ba7110f` on 2026-10-26 13:38:22 -04:00 EDT (after kickoff; `53a83c0` is a pre-kickoff nonfunctional scaffold) and includes the following project components. This describes the hackathon work, not the full history of every file:
+  - Meta Model API calls through the shared client and adapters (`src/lib/metaClient.js`, `src/providers/metaImage.js`, `src/providers/samMask.js`, `src/providers/metaVoice.js`) with a shared spend ledger (`src/lib/spendLedger.js`, `src/demo/budget.js`)
+  - Topic policy guardrails (`src/guardrails/topicPolicy.js`)
+  - Counterfactual branching and consistency review, persistent event continuations, and structured scenario geography (`src/agents/branchAgent.js`, `src/demo/pipeline.js`, `src/demo/continuation.js`); reusable scene and cutout storage (`src/demo/eventSceneStore.js`, `src/demo/eventCutoutStore.js`)
+  - Interactive browser atlas, exploration tree, spatial exploration starmap popover, illustrative scenario geography surface comparison and Ram Setu regional inset, full-size scene lightbox, and Three.js 3D object viewer (`web/`, `server/`)
+  - Validated GLB attachment (`scripts/attach-glb.js`) and per-step provenance display
+- **Preexisting platform (`Tattva3d.ai` / `Chronos`):**
+  - Private 3D reconstruction backend, authentication, and GPU infrastructure predate the hackathon and are excluded from this public repository.
+  - The public live 3D adapter (`src/providers/chronos3d.js`) supports **TRELLIS only** when separately configured; it is not wired to SAM 3D Objects.
+  - [`docs/JUDGE_ACCESS_PLAN.md`](JUDGE_ACCESS_PLAN.md) describes the saved-replay judge path; fresh private SAM 3D generation is not part of this submission.
+
+## Historical Argon timing sample (October 30, 2026)
+
+The following figures are the Argon-reported pre-takeover sample from October 30, 2026. They have not been independently recomputed and do not describe the current spend ledger or current cumulative spend. The `$22.0748` amount is that sample's reported cumulative spend; its then-reported `$143.30` ceiling is historical context only.
+
+- **Muse Image (`muse-image-1.0`, `n = 43`):** provider duration min `12.5s`, median `25.3s`, mean `27.5s`, p90 `38.6s`, max `82.2s`.
+- **Muse Wonder propose (`muse-wonder-1.0`, `n = 49`):** min `24.2s`, median `35.0s`, mean `36.8s`, p90 `49.7s`, max `55.8s`.
+- **Muse Wonder review (`muse-wonder-1.0`, `n = 44`):** min `6.0s`, median `10.5s`, mean `10.9s`, p90 `14.1s`, max `25.7s`.
+- **Muse Spark 1.3 policy (`muse-spark-1.3`, `n = 274`):** min `1.3s`, median `3.8s`, mean `5.4s`, p90 `9.3s`, max `41.0s`.
+- **SAM 3.1 cutout (`sam-3.1`, `n = 48`):** min `0.01s`, median `4.2s`, mean `5.3s`, p90 `11.1s`, max `27.3s`.
+- **Queue / concurrency bound:** Browser event jobs share a 3-slot queue (`MAX_EVENT_JOBS = 3`), overlapping the selected event's scene and consequence requests while deferring child scene prefetches (`sceneOnly`) until the selected event's consequences arrive. Saved scenes and consequences can reopen without duplicate provider calls; no response-time measurement is claimed here.
 
 ## Judge setup
 
-1. Install Node 22 (at least 22.9.0), clone the public repository and run `npm ci --ignore-scripts` and `npm test`.
-2. Open the public replay demo above or run `npm run demo` for local replay. Alexandria, Beringia, Green Sahara and Mechanisms are completed 3D replays. The hosted deployment does not enable live model generation.
-3. For optional local live work, copy `.env.example` to `.env`, provide credentials privately, initialize the task checkpoint once using `npm run init-demo-budget`, and configure verified Chronos capability. For 2D-only generation use `npm run harness -- "What if the Library of Alexandria never burned?" --no-3d`. These commands make metered calls. Do not put credentials in the repository or submission.
+1. **Public replay demo:** Open [Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app) to inspect saved worlds without credentials in replay-only mode.
+2. **Local credential-free replay & tests:** On Node `>= 22.9.0`, run `npm ci --ignore-scripts`, `npm test`, and `npm run demo` (`http://127.0.0.1:3000`).
+3. **Local live Meta exploration:** Copy `.env.example` to your ignored local `.env`, set `META_API_KEY` (and optional `META_SPEND_CAP_USD` / `DEMO_DAILY_CAP_USD`), and run `npm run demo` on `127.0.0.1`.
+
+## Release provenance
+
+The final submission release was integrated through one PR from `codex/meta-submission-release` to `main`, as an exception to the usual `develop` → `main` path. The exact resulting `main` HEAD is deployed in replay-only mode. PR #7 remains open, draft, and unmerged; `develop` and its parked pilot work remain intact.
+
+The corrected video is published as `office-of-otherwise-submission-1080p-v2.mp4` under release tag `hackathon-submission-2026-10-31`. Its SHA-256 is `0C72D0DDE6E25AAF601ECAA80DFB313E55D59317B8B7773703B4EA95221D7F9E`. The hackathon entry has not been submitted.

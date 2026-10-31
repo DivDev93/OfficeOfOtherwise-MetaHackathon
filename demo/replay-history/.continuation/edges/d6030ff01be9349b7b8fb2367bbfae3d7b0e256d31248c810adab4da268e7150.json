@@ -1,0 +1,66 @@
+{
+  "parentRunId": "df5e6d97-9f0d-49a0-bb62-ad52c3ae6d09",
+  "parentBranchId": "b1",
+  "runId": "cc1b3038-9c20-44d3-83e0-1045c6392d8e",
+  "status": "complete",
+  "continuation": {
+    "rootRunId": "beringia",
+    "rootDivergence": "What if the Bering land bridge never flooded?",
+    "parentRunId": "df5e6d97-9f0d-49a0-bb62-ad52c3ae6d09",
+    "parentBranchId": "b1",
+    "path": [
+      {
+        "runId": "beringia",
+        "branchId": "b2",
+        "title": "Reindeer Herders Cross Continents",
+        "year": 900,
+        "summary": "Permanent land allows Siberian reindeer herding, sled design, and cold-climate clothing techniques to spread gradually into Alaska by foot and caravan. Northern communities on both sides develop a shared seasonal round, exchanging breeding animals and knowledge each year.",
+        "place": {
+          "name": "Nome, Alaska",
+          "lat": 64.5011,
+          "lon": -165.4064
+        },
+        "geography": {
+          "version": 1,
+          "changes": [
+            {
+              "id": "curated-beringia-land",
+              "kind": "land",
+              "region": "beringia",
+              "intensity": 0.85,
+              "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+              "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+            }
+          ]
+        }
+      },
+      {
+        "runId": "df5e6d97-9f0d-49a0-bb62-ad52c3ae6d09",
+        "branchId": "b1",
+        "title": "Rotating Lichen Pastures Sustain Herds",
+        "year": 1080,
+        "summary": "Communities formalize rotational grazing that lets lichen recover between seasons, improving herd health across the shared seasonal round. This follows because annual exchanges of herders and breeding animals spread observations about overgrazed ground and recovery times to both sides of Beringia.",
+        "place": {
+          "name": "Kotzebue, Alaska",
+          "lat": 66.8983,
+          "lon": -162.5968
+        },
+        "causalLink": "The shared seasonal round from 900 brought herders repeatedly to the same pastures, making lichen depletion visible and prompting agreed rotation schedules exchanged at annual meetings.",
+        "geography": {
+          "version": 1,
+          "changes": [
+            {
+              "id": "curated-beringia-land",
+              "kind": "land",
+              "region": "beringia",
+              "intensity": 0.85,
+              "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+              "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "updatedAt": "2026-10-31T00:44:22.649Z"
+}

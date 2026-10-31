@@ -159,6 +159,7 @@ export function cachedRetryRun(runs, suggestion) {
   return runs.find(run => run.divergence === suggestion && !['blocked', 'simulated'].includes(run.status)) ?? null;
 }
 export function replayLabel(run) {
+  if (run.parentRunId) return `${Number.isInteger(run.year) ? `${formatYear(run.year)} · ` : ''}${run.title || `Saved future · ${run.id}`}`;
   const shortTitles = {
     alexandria: 'Alexandria · Library survives',
     beringia: 'Beringia · land bridge stays',
@@ -175,4 +176,51 @@ export function replayLabel(run) {
 export function liveAccessMode(health) {
   if (!health || health.status !== 'ok' || typeof health.replayOnly !== 'boolean') return 'unknown';
   return health.replayOnly ? 'replay-only' : 'live-enabled';
+}
+
+// Saved descendants are navigation: opening one never needs a generation call.
+// Mirror the server's hard maximum so terminal paths never become failed attempts.
+export const MAX_CONTINUATION_DEPTH = 6;
+const depthLimitMessage = 'The six-step continuation limit is reached. Return to an earlier world to explore a different path.';
+
+export function continuationAction({ runId, branchId, children = [], path = [], busy = false, mode, access = false } = {}) {
+  if (busy) return { type: 'wait' };
+  const child = children.find(child => child.branchId === branchId && child.runId);
+  if (child && (!child.status || child.status === 'complete')) return { type: 'open', runId: child.runId };
+  if (child) return { type: 'unavailable', message: child.status === 'in-progress' ? 'This future is still being saved. Reopen the previous world after it finishes.' : 'This path has an incomplete saved attempt. Choose another path; automatic retries are disabled to prevent duplicate spend.' };
+  if (path.length >= MAX_CONTINUATION_DEPTH) return { type: 'limit', message: depthLimitMessage };
+  if (!runId) return { type: 'unavailable', message: 'Wait for this world to finish saving before expanding a path.' };
+  if (mode === 'replay-only') return { type: 'unavailable', message: 'Fresh exploration needs the demo running locally with your own Meta API key. Saved descendants remain available.' };
+  if (mode !== 'live-enabled' || !access) return { type: 'unavailable', message: 'Path selected. Expanding a new path needs an access code for live generation. Saved descendants remain available.' };
+  return { type: 'generate', runId, branchId };
+}
+
+export function createNavigationGuard() {
+  let id = 0, controller = null;
+  return {
+    begin() { controller?.abort(); controller = new AbortController(); return { id: ++id, signal: controller.signal }; },
+    current(request) { return request === id; },
+    get signal() { return controller?.signal; },
+  };
+}
+
+export function causalEdges(branches = [], path = [], explicitOrigin = null) {
+  const valid = node => Number.isFinite(node?.place?.lat) && Number.isFinite(node?.place?.lon);
+  const edges = [];
+  // A missing location interrupts an edge; it must not silently join two generations.
+  for (let index = 1; index < path.length; index++) if (valid(path[index - 1]) && valid(path[index])) edges.push({ from: path[index - 1], to: path[index], ancestry: true });
+  const parent = path.at(-1) || explicitOrigin;
+  if (valid(parent)) for (const branch of branches) if (valid(branch)) edges.push({ from: parent, to: branch, ancestry: false });
+  return edges;
+}
+
+export function runIdFromHash(hash = '') {
+  try { return new URLSearchParams(hash.replace(/^#/, '')).get('run') || ''; } catch { return ''; }
+}
+
+export function eventIdFromHash(hash = '') {
+  try {
+    const id = new URLSearchParams(hash.replace(/^#/, '')).get('event') || '';
+    return /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(id) ? id : '';
+  } catch { return ''; }
 }

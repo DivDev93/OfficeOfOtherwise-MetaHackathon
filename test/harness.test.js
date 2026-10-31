@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readdirSync } from 'node:fs';
 import { runHarness } from '../harness/run.js';
+import { createMetaClient } from '../src/lib/metaClient.js';
 import { writeCutoutPng, decodePng } from '../src/lib/png.js';
 import { createSamMask } from '../src/providers/samMask.js';
 
@@ -52,6 +53,36 @@ test('empty branch never calls image or segmentation', async () => {
     const fail = () => { throw new Error('unexpected generation'); };
     const result = await runHarness({ client: { spent: () => 0 }, agent: { run: async () => ({ status: 'empty', trace: [], rejected: [] }) }, image: { generate: fail }, sam: { segment: fail }, outputRoot: dir, timestamp: 3, log() {} });
     assert.equal(result.branch.status, 'empty');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('overlapping harness runs sharing one client keep trace cost invocation-local', async () => {
+  const dir = temp();
+  try {
+    const started = new Map(), releases = new Map();
+    const client = createMetaClient({ apiKey: 'fixture', spendCapUsd: 1, fetch: async (_url, init) => {
+      const label = JSON.parse(init.body).label;
+      started.set(label, true);
+      await new Promise(resolve => releases.set(label, resolve));
+      return Response.json({ ok: true });
+    } });
+    const makeRun = (label, costUsd) => runHarness({
+      divergence: label, client, outputRoot: dir, timestamp: label, log() {},
+      agent: { run: async () => {
+        await client.meteredPost('/images', { label }, { costUsd });
+        return { status: 'blocked', trace: [], rejected: [] };
+      } },
+      image: { generate() { throw new Error('unexpected image'); } },
+      sam: { segment() { throw new Error('unexpected segmentation'); } },
+    });
+    const a = makeRun('run-a', 0.04), b = makeRun('run-b', 0.07);
+    while (started.size < 2) await new Promise(resolve => setTimeout(resolve, 1));
+    releases.get('run-b')(); const resultB = await b;
+    releases.get('run-a')(); const resultA = await a;
+    assert.equal(resultA.costUsd, 0.04); assert.equal(resultB.costUsd, 0.07);
+    assert.equal(JSON.parse(readFileSync(join(dir, 'run-a', 'trace.json'))).costUsd, 0.04);
+    assert.equal(JSON.parse(readFileSync(join(dir, 'run-b', 'trace.json'))).costUsd, 0.07);
+    assert.ok(Math.abs(client.spent() - 0.11) < 1e-12, 'the shared global ledger still reports total spend');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -134,9 +165,6 @@ test('forged saved hero is blocked by topic policy before generation', async () 
 test('CLI reports missing credentials and preserves failure trace', () => {
   const dir = temp();
   try {
-    mkdirSync(join(dir, 'out'));
-    writeFileSync(join(dir, 'out', 'spend.json'), JSON.stringify({ totalUsd: 0, entries: [], reservations: {} }));
-    writeFileSync(join(dir, 'out', 'demo-task-budget.json'), JSON.stringify({ startingMetaSpendUsd: 0, taskBudgetUsd: 2 }));
     const env = { ...process.env };
     delete env.META_API_KEY;
     delete env.MODEL_API_KEY;
@@ -153,13 +181,13 @@ test('CLI reports missing credentials and preserves failure trace', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('CLI fails before any live work without the task budget checkpoint', () => {
+test('CLI fails before any live work when META_SPEND_CAP_USD is invalid', () => {
   const dir = temp();
   try {
     const script = fileURLToPath(new URL('../harness/run.js', import.meta.url));
-    const result = spawnSync(process.execPath, [script, '--no-3d', 'What if a library survived?'], { cwd: dir, env: { ...process.env, META_API_KEY: 'sentinel' }, encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [script, '--no-3d', 'What if a library survived?'], { cwd: dir, env: { ...process.env, META_API_KEY: 'sentinel', META_SPEND_CAP_USD: '-5' }, encoding: 'utf8' });
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /budget checkpoint/i);
+    assert.match(result.stderr, /Invalid META_SPEND_CAP_USD/i);
     assert.doesNotMatch(result.stderr, /sentinel/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -243,6 +271,80 @@ test('3D is opt-in for injected harness calls and missing client fails before ag
   let called=false;
   await assert.rejects(runHarness({client:{spent:()=>0},agent:{run(){called=true;}},no3d:false}), /Chronos 3D client is required/);
   assert.equal(called,false);
+});
+
+test('harness forwards bounded ancestry and persists it with the stable reserved run ID', async () => {
+  const dir = temp();
+  try {
+    const continuation = {
+      rootRunId: 'root', rootDivergence: 'What if the library survived?', parentRunId: 'root', parentBranchId: 'b1',
+      path: [{ runId: 'root', branchId: 'b1', title: 'Steam workshops', year: 120, summary: 'Surviving scrolls spread pump designs.', place: { name: 'Alexandria', lat: 31, lon: 29 }, ignored: 'discarded' }],
+      ignored: 'discarded',
+    };
+    let seen;
+    const result = await runHarness({ divergence: continuation.rootDivergence, continuation, timestamp: 'reserved-run-id', outputRoot: dir, log() {}, client: { spent: () => 0 },
+      agent: { run: async args => { seen = args; return { status: 'empty', branches: [], trace: [] }; } } });
+    assert.equal(seen.continuation.parentBranchId, 'b1');
+    assert.equal(seen.continuation.ignored, undefined);
+    assert.equal(seen.continuation.path[0].ignored, undefined);
+    const branch = JSON.parse(readFileSync(join(dir, 'reserved-run-id', 'branch.json')));
+    const trace = JSON.parse(readFileSync(join(dir, 'reserved-run-id', 'trace.json')));
+    assert.deepEqual(branch.continuation, seen.continuation);
+    assert.deepEqual(trace.continuation, seen.continuation);
+    assert.equal(result.directory, join(dir, 'reserved-run-id'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('saved causal links are policy checked before image generation', async () => {
+  const dir = temp();
+  try {
+    const source = join(dir, 'branch.json');
+    writeFileSync(source, JSON.stringify({ status: 'ok', divergence: 'A library survives', branches: [{ title: 'Steam workshops', summary: 'Pumps spread.', causalLink: 'An army copies them.' }], hero: { imagePrompt: 'A brass pump', subject: 'pump' }, trace: [] }));
+    const { createTopicPolicy } = await import('../src/guardrails/topicPolicy.js');
+    const result = await runHarness({ from: source, client: { spent: () => 0 }, image: { generate() { throw new Error('unexpected generation'); } }, policy: createTopicPolicy(), outputRoot: dir, timestamp: 'saved-cause', log() {} });
+    assert.equal(result.blocked, true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('saved hero geography reaches image generation and its free text is policy checked first', async () => {
+  const dir = temp();
+  try {
+    const source = join(dir, 'branch.json');
+    const geography = { version: 1, changes: [{ id: 'green-sahara', kind: 'vegetation', region: 'sahara', intensity: 0.8,
+      assumption: 'Grasslands persist across the Sahara.', uncertainty: 'Rainfall boundaries are illustrative.' }] };
+    const saved = { status: 'ok', divergence: 'A greener Sahara', branches: [{ id: 'b1', title: 'Field station', summary: 'Botany expands.', geography }], hero: { branchId: 'b1', imagePrompt: 'A field station', subject: 'building' }, trace: [] };
+    writeFileSync(source, JSON.stringify(saved));
+    let imagePrompt, policyInput;
+    const png = writeCutoutPng(Uint8Array.from([1, 2, 3, 255]), 1, 1);
+    const result = await runHarness({ from: source, client: { spent: () => 0 }, outputRoot: dir, timestamp: 'geo-image', log() {},
+      image: { generate: async ({ prompt }) => { imagePrompt = prompt; return { buffer: png, mime: 'image/png', costUsd: 0 }; } },
+      sam: { segment: async () => ({ selectedMask: null, trace: [] }) }, policy: { checkPrompt: async text => { policyInput = text; return { allowed: true }; } } });
+    assert.ok(imagePrompt.includes(geography.changes[0].assumption));
+    assert.ok(imagePrompt.includes(geography.changes[0].uncertainty));
+    assert.ok(policyInput.includes(geography.changes[0].uncertainty));
+    assert.deepEqual(result.branch.branches[0].geography, geography);
+    saved.branches[0].geography.changes[0].uncertainty = 'An army occupies the region.';
+    writeFileSync(source, JSON.stringify(saved));
+    const { createTopicPolicy } = await import('../src/guardrails/topicPolicy.js');
+    const blocked = await runHarness({ from: source, client: { spent: () => 0 }, outputRoot: dir, timestamp: 'geo-block', log() {},
+      image: { generate() { throw new Error('unexpected generation'); } }, policy: createTopicPolicy() });
+    assert.equal(blocked.blocked, true);
+    saved.branches[0].geography.changes[0].region = 'atlantis';
+    writeFileSync(source, JSON.stringify(saved));
+    await assert.rejects(runHarness({ from: source, client: { spent: () => 0 }, outputRoot: dir, timestamp: 'geo-invalid', log() {} }), /Invalid geography/);
+    geography.changes[0].region = 'sahara';
+    geography.changes[0].uncertainty = 'Rainfall boundaries are illustrative.';
+    saved.branches[0].geography = geography;
+    saved.hero.branchId = 'unknown';
+    writeFileSync(source, JSON.stringify(saved));
+    await assert.rejects(runHarness({ from: source, client: { spent: () => 0 }, outputRoot: dir, timestamp: 'geo-hero', log() {} }), /requires a saved hero branch/);
+    saved.hero.branchId = 'b1';
+    saved.continuation = { rootRunId: 'root', rootDivergence: 'A greener Sahara', parentRunId: 'root', parentBranchId: 'b1',
+      path: [{ runId: 'root', branchId: 'b1', title: 'Grasslands persist', year: 300, summary: 'Grasslands persist.', place: { name: 'Sahara', lat: 24, lon: 12 }, geography: { version: 1, changes: [{ ...geography.changes[0], region: 'sahara' }] } }] };
+    saved.branches[0].geography = { version: 1, changes: [] };
+    writeFileSync(source, JSON.stringify(saved));
+    await assert.rejects(runHarness({ from: source, client: { spent: () => 0 }, outputRoot: dir, timestamp: 'geo-erased', log() {} }), /inherited condition/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('CLI refuses unconfirmed 3D before Meta work', () => {

@@ -1,64 +1,113 @@
 # Office of Otherwise
 
-**Ask "what if?" and walk into the answer.**
+**Change a premise. Follow the consequences. Explore the world that emerges.**
 
-Office of Otherwise is the Meta-powered branching layer for [Chronos](#relationship-to-chronos), an alternate-history explorer. You give it a point of divergence. Meta's models branch the timeline, check that the branches hold together, render a scene for each one, and cut out the subject so the existing Chronos pipeline can turn it into a 3D object or a world you can explore.
+Office of Otherwise is a counterfactual worldbuilding workbench for writers and worldbuilders. It turns one “what if?” premise into a navigable path of possible events: choose a turning point, follow its consequences with matching illustrative scenes, return to an earlier choice to explore another branch, and compare scenario geography with the present-day globe. The goal is to help writers develop and communicate a complex alternate-world idea while keeping its choices and visuals together. Scenario geography is illustrative, not a scientific simulation or historical claim.
 
-Built for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026). Startups track.
-
-> Status: local branch → image → subject cutout harness, validated with fixtures and live fresh-agent and saved-branch runs. Alexandria, Beringia, Green Sahara and Mechanisms now have separately generated SAM 3D Objects models; all four show `3D: Meta SAM 3D Objects (via Tattva Cloud Run)`. See [Built during the hackathon](#built-during-the-hackathon).
+Built for the **Meta Global AI Developer Hackathon** (October 26–November 4, 2026), **Startups Track**, theme **Build for Your World**. Divakar Dev is the sole contributor and startup representative.
 
 ## Public demo
 
-[Open the Office of Otherwise replay demo](https://office-otherwise-875096283797.northamerica-northeast2.run.app). The deployed revision, `office-otherwise-00001-84n`, is replay-only: live model generation is disabled. Explore the four cached 3D runs for Alexandria, Beringia, Green Sahara and Mechanisms; they do not make live Meta or 3D provider calls.
+**Judge replay demo:** [Open Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app) to inspect the saved worlds in replay-only mode, without credentials or model spend.
+
+The final submission release is integrated through one PR from `codex/meta-submission-release` to `main`, as an exception to the normal `develop` → `main` flow. PR #7 remains open, draft, and unmerged; `develop` and its parked pilot work remain intact. The v2 video is published as the GitHub release asset [`office-of-otherwise-submission-1080p-v2.mp4`](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/releases/download/hackathon-submission-2026-10-31/office-of-otherwise-submission-1080p-v2.mp4) under tag `hackathon-submission-2026-10-31`.
+
+## Saved replay examples
+
+To inspect the current local replay package, start `npm run demo` without `META_API_KEY`. These links use saved records and do not make model calls:
+
+- **Beringia, 900 → 1380 → 1472 → 1538:** [900 start](http://127.0.0.1:3000/#run=beringia&event=b2) → [1380](http://127.0.0.1:3000/#run=df5e6d97-9f0d-49a0-bb62-ad52c3ae6d09&event=b3) → [1472](http://127.0.0.1:3000/#run=c892b8d0-36c5-4eeb-a70b-022041a25c98&event=b1) → [1538](http://127.0.0.1:3000/#run=1fc70744-d82b-4364-8b78-c79544a4f7d6&event=b1). This follows three saved continuations across four events.
+- **1080 Lichen alternate:** [Open the saved event](http://127.0.0.1:3000/#run=df5e6d97-9f0d-49a0-bb62-ad52c3ae6d09&event=b1); its saved continuation has three consequences (1150, 1310, 1380).
+- **Complete Beringia Scene → SAM cutout:** [Open the Beringia root](http://127.0.0.1:3000/#run=beringia&event=b2) and switch from **Scene** to **SAM cutout** to see the full sled subject with frame margin. This is the recommended saved SAM example.
+- **Additional 1645 nonhero SAM record:** [Open the saved event](http://127.0.0.1:3000/#run=c892b8d0-36c5-4eeb-a70b-022041a25c98&event=b4) to inspect the packaged cutout. Its source scene already clips the foreground animal at the right edge, and the saved cutout preserves that crop; this is a recorded output, not viewer clipping.
+- **Ram Setu root:** [Open the saved world](http://127.0.0.1:3000/#run=04f9af4a-f4ee-48da-b8d6-85e73373452a). Its illustrative geography retains its uncertainty note; this example has no 3D model.
 
 ## How it works
 
-| Step | Meta model | Module |
-|---|---|---|
-| Plan branches, check consistency, choose the hero scene | **Muse Wonder** | `src/agents/branchAgent.js` |
-| Narrate each branch (streamed) | **Muse Spark** | `src/providers/metaText.js` |
-| Keep branches out of war and political territory | Muse Wonder + rules | `src/guardrails/topicPolicy.js` |
-| Render the branch scene | **Muse Image** | `src/providers/metaImage.js` |
-| Cut out the subject for 3D | **SAM 3.1** | `src/providers/samMask.js` |
-| Generate 3D models for cached demos | **SAM 3D Objects** | Separately generated; GLBs attached by `scripts/attach-glb.js` and labeled in replay provenance. |
-| Image + mask → 3D object or world | *(existing Chronos pipeline, private)* | via `CHRONOS_3D_ENDPOINT` |
+| Step | Model or implementation | Source |
+| --- | --- | --- |
+| Check prompts, branches, and continuation context | Deterministic keyword rules + **Muse Spark 1.3** (`muse-spark-1.3`) | `src/guardrails/topicPolicy.js` |
+| Propose and review branches, select a hero, and attach scenario geography | **Muse Wonder** (`muse-wonder-1.0`) | `src/agents/branchAgent.js`, `src/demo/pipeline.js` |
+| Continue selected paths and validate continuation ancestry | **Muse Wonder** (`muse-wonder-1.0`), checked by keyword guardrails | `src/demo/continuation.js`, `src/demo/pipeline.js` |
+| Render hero and per-event scenes; store reusable event scenes | **Muse Image** (`muse-image-1.0`) | `src/demo/pipeline.js`, `src/demo/eventSceneStore.js` |
+| Isolate hero and per-event subject cutouts; store reusable event cutouts | **SAM 3.1** (`sam-3.1`) | `src/demo/pipeline.js`, `src/demo/eventCutoutStore.js` |
+| Transcribe optional push-to-talk voice prompts | **Muse Voice Transcribe** (`muse-voice-transcribe-1.0`) | `src/providers/metaVoice.js`, `web/voice.js` |
+| Supply the four curated root 3D objects | **Meta SAM 3D Objects**, generated separately through the preexisting private Tattva runner | Attached with `scripts/attach-glb.js`; provenance recorded in each replay trace |
+| Explore the results | Hackathon-built exploration tree, spatial starmap, scenario geography globe, and 3D viewer | `web/` and `server/` |
 
-Divergence points are drawn from science, technology, culture and geography. War and political scenarios are out of scope by design (see `src/guardrails/`).
+The four curated root runs (`alexandria`, `beringia`, `green-sahara`, `mechanisms`) retain their actual recorded **Muse Wonder** policy attribution rather than relabeling older traces as Spark runs. When an event is selected, the app keeps that event in view, loads or generates its matching scene and immediate consequences, and prefetches scenes **only** for those immediate children (`sceneOnly`) without recursively expanding child consequences until the user clicks a child event.
 
-## Run it
+The four SAM 3D Objects replays (`alexandria`, `beringia`, `green-sahara`, `mechanisms`) contain genuine attached `.glb` and `.meshopt.glb` meshes with recorded generation durations and unknown generation costs left `null`; they do not claim an automated public prompt-to-SAM-3D service. Non-hero events and newly generated continuations explain clearly in the UI when a 3D object is not available.
+
+Divergence points stay in science, technology, culture, and geography. Political and war topics are out of scope by design (`src/guardrails/`).
+
+## Run it locally
+
+### 1. Credential-free replay and offline test suite
+
+Replay mode and the offline test suite require no API keys or private services. Use Node **22.9.0 or newer** (CI runs on Node 22):
 
 ```bash
-npm ci --ignore-scripts  # Node >=22.9.0 (CI uses Node 22)
-cp .env.example .env   # add META_API_KEY
+npm ci --ignore-scripts
 npm test
-npm run init-demo-budget  # once, before the first live task call
+npm run demo           # http://127.0.0.1:3000 (replay-only when META_API_KEY is unset)
+```
+
+Without `META_API_KEY`, `npm run demo` starts cleanly in replay-only mode (`Showing saved runs · live generation disabled`). You can explore the saved stories, switch between **Scene**, **SAM cutout**, and **3D object** across all four curated worlds, inspect the exploration tree and spatial map, and compare present-day vs. scenario geography.
+
+### 2. Local live exploration with a Meta Model API key
+
+To enable fresh local branching, event continuations, event scene generation, SAM 3.1 cutouts, and voice prompt transcription with your own Meta Model API key:
+
+1. Copy `.env.example` to `.env` (in a new clone; preserve any existing `.env` and `out/spend.json`) and set `META_API_KEY` on the server. API keys stay strictly server-side and are never placed in browser storage, URLs, logs, or Git.
+2. Review `META_SPEND_CAP_USD` (cumulative ledger ceiling enforced across all calls via `out/spend.json`) and optional `DEMO_DAILY_CAP_USD` (defaults to `META_SPEND_CAP_USD` when unset). Do not delete or reset an existing `out/spend.json` ledger.
+3. Start the server on loopback:
+
+```bash
+npm run demo           # http://127.0.0.1:3000
+```
+
+When `META_API_KEY` is configured and the server binds to loopback (`127.0.0.1`), `npm run demo` automatically enables local browser access (`localReviewAccess`), voice dictation (`DEMO_VOICE_ENABLED=true` by default), and persistent continuations under `out/`, governed by `META_SPEND_CAP_USD` and `DEMO_DAILY_CAP_USD`. If you set `DEMO_ACCESS_CODE` on a non-loopback host, enter that access code in the UI's **Access code** field.
+
+Fresh Meta image spend is reserved at `$0.01` per image by default. `.env.example` uses this application estimate; set `META_IMAGE_COST_USD` explicitly if you want a different conservative estimate. This is a ledger estimate, not a provider invoice.
+
+With `META_API_KEY` configured and `HOST=127.0.0.1`, local live mode allows up to 60 requests per IP per minute by default; other configurations default to 5. Set `DEMO_RATE_LIMIT` to override with a positive integer. Generation routes share a bucket; voice has a separate bucket. This request throttle is separate from cumulative and daily Meta spend ceilings.
+
+Continuation paths support up to six selected events. A seventh continuation is rejected with an explicit depth-limit message; saved ancestors remain available to inspect or continue from an earlier point.
+
+You can also run the CLI harness directly:
+
+```bash
 npm run harness -- "What if the Library of Alexandria never burned?" --no-3d
 # Reuse a saved branch run without paying for the agent again:
 npm run harness -- --from out/branch-<timestamp>.json --no-3d
-# If the subject is not found, retry a saved branch using a concrete noun:
+# Retry segmentation on a saved branch with a specific concrete noun:
 npm run harness -- --from out/branch-<timestamp>.json --subject book --no-3d
-npm run demo           # local replay, http://localhost:3000
 ```
 
-The harness uses one metered Meta client and writes `branch.json`, `hero.png`, `mask.png`, `cutout.png`, and `trace.json` to `out/<timestamp>/`. It prints each step's timing and cost, and the selected mask's confidence. Saved branch traces remain available as provenance but are excluded from the new run's cost. An optional subject override is recorded in the trace and does not alter the saved branch. Reused content and any override get one fresh policy check before generation, billed separately. Blocked or empty branches stop before image generation.
+### What works with a Meta key vs. optional private 3D
 
-The harness defaults to a 3D handoff and fails before Meta calls if verified Chronos configuration is unavailable; use `--no-3d` for local 2D-only runs. The deployed public demo is replay-only, with live model generation disabled. For local live generation, the demo server requires a configured access code, budget checkpoint and verified Chronos TRELLIS configuration. Alexandria, Beringia, Green Sahara and Mechanisms are completed 3D replays. The guardrail replay is a labeled simulation of an unavailable classifier, not a recorded model verdict. The four model files bring the cached demo archive to 46,343,279 bytes; the cache cap is 80 MB. See [deployment notes](docs/DEPLOY.md).
+- **Works with `META_API_KEY` alone (`DEMO_3D_ENABLED=false` or `--no-3d`):** Prompt/branch topic checks (**Muse Spark 1.3**), counterfactual branch generation, consistency review, persistent multi-step event continuations, and structured scenario geography (**Muse Wonder**), hero and event scene generation (**Muse Image**), hero and event subject cutouts (**SAM 3.1**), and push-to-talk prompt transcription (**Muse Voice Transcribe**).
+- **Requires separate private 3D infrastructure:** A Meta Model API key does not supply credentials for the preexisting private Tattva/Chronos 3D service. The public live adapter (`src/providers/chronos3d.js`) supports **TRELLIS only** when `CHRONOS_3D_ENDPOINT` and `CHRONOS_API_TOKEN` are configured, while the four saved **SAM 3D Objects** assets were generated separately through the private Tattva runner and attached with `npm run attach-glb`. See [judge access and 3D scope](docs/JUDGE_ACCESS_PLAN.md); fresh private SAM 3D generation is not part of the judge path.
 
-For a separately generated GLB, attach it to a provisional cached run with `npm run attach-glb -- <slug> <path-to-model.glb> --provider sam3dobjects --ms <actual-elapsed-ms>`. The command validates the GLB structure and records it as pre-generated, without claiming a live Chronos job. `sam3dobjects` displays the `3D: Meta SAM 3D Objects (via Tattva Cloud Run)` provenance badge; use it only when that provider produced the attached model. Omit `--ms` if the actual duration is unknown. The local demo cache is capped at 80 MB.
+The release video [`office-of-otherwise-submission-1080p-v2.mp4`](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/releases/download/hackathon-submission-2026-10-31/office-of-otherwise-submission-1080p-v2.mp4) is 158.28 seconds, 1920×1080, 25 fps (SHA-256 `0C72D0DDE6E25AAF601ECAA80DFB313E55D59317B8B7773703B4EA95221D7F9E`). It is an edited saved-result walkthrough with six replay-only UI chapters and two locally authored title cards; chapter 05 shows the complete saved Beringia root sled cutout. No fresh model generation, transcription, or classification is filmed.
 
-Muse Image defaults to $0.01 per image. SAM defaults to a conservative estimated $0.05 per call; Meta now lists $2.50 per 1,000 images on its [SAM model page](https://dev.meta.ai/models/sam-3-1). The ledger records the configured estimate, not an invoice. Token estimates use Meta's published Wonder and Spark rates, but cannot guarantee that provider charges never exceed a reservation. An empty segmentation gets at most one retry with the subject's head noun. All calls use the persistent spend ledger and respect `META_SPEND_CAP_USD`; tests use fixtures and do not call Meta.
+## Metering, provenance, and third-party notices
 
-PNG encoding uses Node's built-in zlib; decoding uses MIT-licensed `pngjs`. SAM output decoding uses the unmodified `@meta-sam/parser` npm dependency under Meta's separate **SAM License**, including its use and redistribution restrictions. It is not covered by this repository's MIT license. See [third-party notices](THIRD_PARTY_NOTICES.md).
+All Meta calls go through one shared client (`src/lib/metaClient.js`) backed by atomic reservations in `out/spend.json`. Muse Image defaults to `$0.01` per image; SAM 3.1 defaults to a conservative `$0.05` estimate per call (Meta lists `$2.50` per 1,000 images on its [SAM 3.1 model page](https://dev.meta.ai/models/sam-3-1)); Muse Voice Transcribe reserves at `$0.18` per audio hour; Wonder and Spark use published token rates. Failed or interrupted dispatches remain recorded as uncertain rather than silently retried.
 
-## Relationship to Chronos
+PNG encoding uses Node's built-in `zlib`; decoding uses MIT-licensed `pngjs`. SAM mask decoding uses `@meta-sam/parser` under Meta's **SAM License**. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
-Chronos (globe, accounts, credits, 3D/world rendering) existed before this hackathon and stays private. Chronos uses this repo as a dependency through its provider registry, so this repo holds all of the hackathon work.
+## Relationship to Chronos / Tattva3d.ai
+
+**Tattva3d.ai / Chronos predates the hackathon.** Its private 3D reconstruction backend, authentication, and GPU infrastructure are existing platform context and are excluded from this repository. The four saved SAM 3D Objects meshes were generated on that private infrastructure and attached here with validated provenance.
 
 ## Built during the hackathon
 
-Everything in this repository was written during the event window (first functional commit after 2026-10-26 12:00 PM ET). The day-by-day log is in [`docs/HACKATHON.md`](docs/HACKATHON.md).
+Hackathon work begins with functional commit `ba7110f` (**2026-10-26 13:38:22 -04:00 EDT**, after the noon kickoff; `53a83c0` is a pre-kickoff scaffold) and includes Meta Model API providers and the shared spend ledger, topic guardrails, Wonder branching and continuation agents, event scene and cutout runners, voice transcription, scenario geography masks and the Ram Setu regional inset, the interactive exploration tree and spatial starmap, the 3D globe and GLB viewer, and provenance display. The preexisting private Tattva/Chronos 3D infrastructure is excluded, as described above. See [docs/HACKATHON.md](docs/HACKATHON.md), [docs/SUBMISSION.md](docs/SUBMISSION.md), and [docs/CONTINUATION.md](docs/CONTINUATION.md).
+
+The final release came through one integration PR from `codex/meta-submission-release` to `main`; the exact resulting `main` HEAD is deployed in replay-only mode. `develop` and its parked pilot work remain untouched, and PR #7 stays open, draft, and unmerged. The hackathon entry is not submitted here.
 
 ## License
 
-Application code: MIT. Dependencies retain their own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).
+Independently authored application code: all rights reserved; see [LICENSE](LICENSE). Dependencies and third-party assets retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Earlier versions distributed under MIT remain subject to the permissions granted for those versions.

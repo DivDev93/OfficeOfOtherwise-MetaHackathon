@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createBranchAgent } from '../src/agents/branchAgent.js';
+import { createBranchAgent, normalizeContinuation } from '../src/agents/branchAgent.js';
 import { createTopicPolicy } from '../src/guardrails/topicPolicy.js';
 import { extractJson } from '../src/lib/json.js';
 
@@ -155,4 +155,171 @@ test('Spark policy provenance is distinct from Wonder propose and review', async
   const proposal = events.find(event => event.step === 'propose' && event.pending === false);
   assert.equal(proposal.model, 'muse-wonder-1.0');
   assert.equal(proposal.policyModel, 'muse-spark-1.3');
+});
+
+const CONTINUATION = {
+  rootRunId: 'root-library', rootDivergence: 'What if the Library of Alexandria never burned?',
+  parentRunId: 'steam-run', parentBranchId: 'pumps',
+  path: [
+    { runId: 'root-library', branchId: 'steam', ...BRANCHES[0] },
+    { runId: 'steam-run', branchId: 'pumps', title: 'Workshops copy steam pumps', year: 200, summary: 'Workshops retain the library scrolls and copy the mine pumps.', place: BRANCHES[0].place },
+  ],
+};
+
+test('continuation carries original assumption and every chosen event into proposal and review', async () => {
+  const child = { ...BRANCHES[1], causalLink: 'Copied mine pumps let workshops power paper mills.' };
+  const client = fakeClient({ propose: JSON.stringify([child]), review: REVIEW });
+  const policyInputs = [];
+  const policy = { ...allowAll, checkPrompt: async text => { policyInputs.push(text); return allowAll.checkPrompt(text); } };
+  const out = await createBranchAgent({ client, policy }).run({ divergence: CONTINUATION.rootDivergence, continuation: CONTINUATION });
+  assert.equal(out.status, 'ok');
+  assert.equal(out.branches[0].causalLink, child.causalLink);
+  for (const call of client.calls) {
+    assert.ok(call.input.includes(CONTINUATION.rootDivergence));
+    for (const event of CONTINUATION.path) assert.ok(call.input.includes(event.summary));
+    assert.match(call.instructions, /strictly later nonzero integer year/);
+    assert.match(call.instructions, /hypotheses, not sourced or verified history/);
+    assert.match(call.instructions, /Do not overwrite or contradict/);
+  }
+  assert.ok(policyInputs[0].includes(CONTINUATION.path[1].summary));
+  assert.equal(out.continuation.parentBranchId, 'pumps');
+  assert.equal('id' in out.continuation.path[0], false);
+});
+
+test('continuation drops backwards, same-year, zero, fractional and causeless events before review or streaming', async () => {
+  const base = { ...BRANCHES[1], causalLink: 'The earlier pumps support paper mills.' };
+  const proposals = [
+    ...[120, 200, 0, 200.5].map((year, i) => ({ ...base, id: `invalid-${i}`, year })),
+    { ...base, id: 'causeless', year: 250, causalLink: ' ' },
+    { ...base, id: 'later', year: 201 },
+  ];
+  const client = fakeClient({ propose: JSON.stringify(proposals), review: REVIEW });
+  const events = [];
+  const out = await createBranchAgent({ client, policy: allowAll }).run({ divergence: CONTINUATION.rootDivergence, continuation: CONTINUATION, onStep: event => events.push(event) });
+  assert.deepEqual(out.branches.map(b => b.id), ['later']);
+  assert.deepEqual(events.find(e => e.step === 'propose' && e.pending === false).branches.map(b => b.id), ['later']);
+  const reviewBranches = JSON.parse(client.calls[1].input.split('\nBranches:\n')[1]);
+  assert.deepEqual(reviewBranches.map(b => b.id), ['later']);
+});
+
+test('second-depth continuation preserves ancestor causal mechanisms independently of summaries', async () => {
+  const mechanism = 'Shared pump casting dimensions let workshops exchange replacement parts.';
+  const context = { ...CONTINUATION, path: [CONTINUATION.path[0], { ...CONTINUATION.path[1], summary: 'Workshops expand.', causalLink: mechanism }] };
+  const child = { ...BRANCHES[1], causalLink: 'Interchangeable parts let paper mills maintain pumps.' };
+  const client = fakeClient({ propose: JSON.stringify([child]), review: REVIEW });
+  const policyInputs = [];
+  const policy = { ...allowAll, checkPrompt: async text => { policyInputs.push(text); return allowAll.checkPrompt(text); } };
+  const out = await createBranchAgent({ client, policy }).run({ divergence: context.rootDivergence, continuation: context });
+  assert.equal(out.status, 'ok');
+  assert.equal(out.continuation.path[1].causalLink, mechanism);
+  assert.equal('causalLink' in out.continuation.path[0], false);
+  assert.ok(policyInputs[0].includes(mechanism));
+  for (const call of client.calls) assert.ok(call.input.includes(mechanism));
+  for (const causalLink of ['', ' ', null, 5, 'x'.repeat(4001)]) {
+    assert.throws(() => normalizeContinuation({ ...context, path: [context.path[0], { ...context.path[1], causalLink }] }), /Invalid continuation causalLink/);
+  }
+});
+
+test('continuation allows later BCE descendants and returns empty without review for invalid children', async () => {
+  const context = { ...CONTINUATION, parentRunId: CONTINUATION.rootRunId, parentBranchId: 'steam', path: [{ ...CONTINUATION.path[0], year: -200 }] };
+  const child = { ...BRANCHES[0], year: -150, causalLink: 'Surviving scrolls spread pump designs.' };
+  let client = fakeClient({ propose: JSON.stringify([child]), review: REVIEW });
+  assert.equal((await createBranchAgent({ client, policy: allowAll }).run({ divergence: 'A library survives', continuation: context })).status, 'ok');
+  client = fakeClient({ propose: JSON.stringify([{ ...child, year: -250 }]) });
+  assert.equal((await createBranchAgent({ client, policy: allowAll }).run({ divergence: 'A library survives', continuation: context })).status, 'empty');
+  assert.equal(client.calls.length, 1);
+});
+
+test('continuation rejects malformed, mismatched, unordered and oversized ancestry before model calls', async () => {
+  for (const context of [
+    { ...CONTINUATION, path: [] }, { ...CONTINUATION, parentBranchId: 'forged' },
+    { ...CONTINUATION, path: [CONTINUATION.path[0], { ...CONTINUATION.path[1], year: 100 }] },
+    { ...CONTINUATION, rootDivergence: 'x'.repeat(4001) },
+    { ...CONTINUATION, path: Array(33).fill(CONTINUATION.path[0]) },
+    { ...CONTINUATION, path: [{ ...CONTINUATION.path[0], year: 0 }] },
+  ]) {
+    const client = fakeClient({});
+    await assert.rejects(createBranchAgent({ client, policy: allowAll }).run({ divergence: 'A library survives', continuation: context }), /Invalid continuation/);
+    assert.equal(client.calls.length, 0);
+  }
+  assert.equal(normalizeContinuation(undefined), undefined);
+});
+
+test('causal links cannot hide prohibited topics from either keyword or model policy', async () => {
+  const children = [
+    { ...BRANCHES[1], id: 'keyword', causalLink: 'The pumps equip an army.' },
+    { ...BRANCHES[1], id: 'classifier', causalLink: 'The pumps finance a struggle for the crown.' },
+    { ...BRANCHES[1], id: 'clean', causalLink: 'The pumps power workshops.' },
+  ];
+  const policy = createTopicPolicy({ classify: async text => text.includes('crown') ? { verdict: 'block', category: 'politics' } : { verdict: 'allow' } });
+  const client = fakeClient({ propose: JSON.stringify(children), review: REVIEW });
+  const out = await createBranchAgent({ client, policy }).run({ divergence: CONTINUATION.rootDivergence, continuation: CONTINUATION });
+  assert.deepEqual(out.branches.map(b => b.id), ['clean']);
+  assert.deepEqual(out.rejected.map(r => r.branch.id), ['keyword', 'classifier']);
+});
+
+test('a prohibited ancestor is blocked before generating any descendants', async () => {
+  const client = fakeClient({});
+  const continuation = { ...CONTINUATION, path: [CONTINUATION.path[0], { ...CONTINUATION.path[1], summary: 'An army copies the pumps.' }] };
+  const out = await createBranchAgent({ client, policy: allowAll }).run({ divergence: 'A library survives', continuation });
+  assert.equal(out.status, 'blocked');
+  assert.equal(client.calls.length, 0);
+});
+
+const GEOGRAPHY = { version: 1, changes: [{ id: 'green-sahara', kind: 'vegetation', region: 'sahara', intensity: 0.7,
+  assumption: 'The Sahara retains extensive grassland.', uncertainty: 'Rainfall and exact boundaries are hypothetical.' }] };
+
+test('model geography survives planning, review, streaming and the selected hero image prompt', async () => {
+  const branch = { ...BRANCHES[0], geography: GEOGRAPHY };
+  const client = fakeClient({ propose: JSON.stringify([branch]), review: REVIEW });
+  const events = [], policyInputs = [];
+  const policy = createTopicPolicy({ classifyBranches: async text => { policyInputs.push(text); return { verdict: 'allow' }; } });
+  const out = await createBranchAgent({ client, policy }).run({ divergence: 'What if the Sahara stayed green?', onStep: event => events.push(event) });
+  assert.deepEqual(out.branches[0].geography, GEOGRAPHY);
+  assert.deepEqual(events.find(event => event.step === 'propose' && event.pending === false).branches[0].geography, GEOGRAPHY);
+  assert.ok(client.calls[1].input.includes(GEOGRAPHY.changes[0].assumption));
+  assert.ok(policyInputs[0].includes(GEOGRAPHY.changes[0].uncertainty));
+  assert.ok(out.hero.imagePrompt.includes(GEOGRAPHY.changes[0].assumption));
+  assert.ok(out.hero.imagePrompt.includes(GEOGRAPHY.changes[0].uncertainty));
+  assert.match(client.calls[0].instructions, /no supported visualization, not no physical change/);
+  assert.match(client.calls[0].instructions, /"sahara":\["vegetation","lake"\]/);
+});
+
+test('malformed or ancestry-erasing geography never reaches review or stream, while omission inherits', async () => {
+  const context = { ...CONTINUATION, path: CONTINUATION.path.map(event => ({ ...event, geography: GEOGRAPHY })) };
+  const child = { ...BRANCHES[1], causalLink: 'The inherited grassland supports botanical workshops.' };
+  const client = fakeClient({ propose: JSON.stringify([
+    { ...child, id: 'missing-condition', geography: { version: 1, changes: [] } },
+    { ...child, id: 'unknown-region', geography: { version: 1, changes: [{ ...GEOGRAPHY.changes[0], region: 'atlantis' }] } },
+    { ...child, id: 'weakened', geography: { version: 1, changes: [{ ...GEOGRAPHY.changes[0], intensity: 0.1 }] } },
+    { ...child, id: 'inherited' },
+  ]), review: REVIEW });
+  const events = [];
+  const out = await createBranchAgent({ client, policy: allowAll }).run({ divergence: context.rootDivergence, continuation: context, onStep: event => events.push(event) });
+  assert.deepEqual(out.branches.map(branch => branch.id), ['inherited']);
+  assert.deepEqual(out.branches[0].geography, GEOGRAPHY);
+  assert.deepEqual(out.continuation.path.map(event => event.geography), [GEOGRAPHY, GEOGRAPHY]);
+  const reviewed = JSON.parse(client.calls[1].input.split('\nBranches:\n')[1]);
+  assert.deepEqual(reviewed.map(branch => branch.id), ['inherited']);
+  assert.deepEqual(events.find(event => event.step === 'propose' && event.pending === false).branches.map(branch => branch.id), ['inherited']);
+  for (const call of client.calls) assert.ok(call.input.includes(GEOGRAPHY.changes[0].assumption));
+  assert.throws(() => normalizeContinuation({ ...context, path: [context.path[0], { ...context.path[1], geography: { version: 1, changes: [] } }] }), /Invalid geography/);
+});
+
+test('geography free text cannot bypass keyword or model policy, including inherited uncertainty', async () => {
+  const geographic = uncertainty => ({ ...GEOGRAPHY, changes: [{ ...GEOGRAPHY.changes[0], uncertainty }] });
+  const policy = createTopicPolicy({ classifyBranches: async text => text.includes('crown') ? { verdict: 'block', category: 'politics' } : { verdict: 'allow' } });
+  const client = fakeClient({ propose: JSON.stringify([
+    { ...BRANCHES[0], id: 'keyword', geography: geographic('An army uses the grassland.') },
+    { ...BRANCHES[0], id: 'model', geography: geographic('A struggle for the crown changes rainfall study.') },
+    { ...BRANCHES[0], id: 'clean', geography: GEOGRAPHY },
+  ]), review: REVIEW });
+  const out = await createBranchAgent({ client, policy }).run({ divergence: 'A greener Sahara' });
+  assert.deepEqual(out.branches.map(branch => branch.id), ['clean']);
+  assert.deepEqual(out.rejected.map(item => item.branch.id), ['keyword', 'model']);
+  const noCalls = fakeClient({});
+  const inherited = { ...CONTINUATION, path: [{ ...CONTINUATION.path[0], geography: geographic('An army uses the grassland.') }, CONTINUATION.path[1]] };
+  const blocked = await createBranchAgent({ client: noCalls, policy: allowAll }).run({ divergence: 'A greener Sahara', continuation: inherited });
+  assert.equal(blocked.status, 'blocked');
+  assert.equal(noCalls.calls.length, 0);
 });

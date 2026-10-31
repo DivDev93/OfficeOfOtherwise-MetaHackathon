@@ -5,11 +5,13 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createMetaClient } from '../src/lib/metaClient.js';
 import { fileLedger } from '../src/lib/spendLedger.js';
-import { taskSpendCap } from '../src/demo/budget.js';
+import { configuredSpendCap, configuredDailyCap } from '../src/demo/budget.js';
 import { createTopicPolicy, createModelClassifier, categoriesFromEnv } from '../src/guardrails/topicPolicy.js';
 
 const model = process.env.META_TEXT_MODEL_PLANNER || 'muse-wonder-1.0';
-const client = createMetaClient({ ledger: fileLedger('out/spend.json', { requireExisting: true }), spendCapUsd: taskSpendCap({}), dailyCapUsd: Number(process.env.DEMO_DAILY_CAP_USD ?? 3) });
+const spendCapUsd = configuredSpendCap({});
+const dailyCapUsd = configuredDailyCap({ spendCapUsd });
+const client = createMetaClient({ ledger: fileLedger('out/spend.json', { requireExisting: true }), spendCapUsd, dailyCapUsd });
 
 console.log(`model: ${model}`);
 const r = await client.respond({ model, input: 'Reply with exactly: ok', maxOutputTokens: 400, label: 'smoke' });

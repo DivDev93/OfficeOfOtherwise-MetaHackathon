@@ -57,14 +57,14 @@ test('no match and paid parse errors retain diagnostics and make only one attemp
   assert.equal(calls, 2);
 });
 
-test('standalone segment diagnostic requires the task checkpoint', t => {
+test('standalone segment diagnostic enforces configured spend ceiling before dispatching and redacts credentials', t => {
   const root = mkdtempSync(join(tmpdir(), 'sam-budget-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const hero = join(root, 'hero.png');
   writeFileSync(hero, PNG.sync.write(new PNG({ width: 2, height: 2 })));
   const script = fileURLToPath(new URL('../scripts/segment-image.js', import.meta.url));
-  const result = spawnSync(process.execPath, [script, hero, 'book'], { cwd: root, env: { ...process.env, META_API_KEY: 'fixture-sentinel' }, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [script, hero, 'book'], { cwd: root, env: { ...process.env, META_API_KEY: 'fixture-sentinel', META_SPEND_CAP_USD: '0' }, encoding: 'utf8' });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /checkpoint/i);
+  assert.match(result.stderr, /spend cap reached/i);
   assert.doesNotMatch(result.stderr, /fixture-sentinel/);
 });

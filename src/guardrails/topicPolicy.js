@@ -4,6 +4,8 @@
 //   2. model layer: Muse Spark judges what the keywords miss (fails CLOSED)
 // Used twice: on the user's "what if" prompt, and on every branch the agent proposes.
 
+import { geographyText } from '../../web/geography.js';
+
 const KEYWORD_RULES = [
   {
     category: 'war',
@@ -129,7 +131,7 @@ export function createTopicPolicy({ classify, classifyPrompt = classify, classif
 
   /** Check proposed branches. Returns { kept, rejected }. Keyword layer is free; model layer runs only on survivors. */
   async function checkBranches(branches) {
-    const results = await Promise.all(branches.map(b => check(`${b.title ?? ''}\n${b.summary ?? ''}`, classifyBranches)));
+    const results = await Promise.all(branches.map(b => check([b.title, b.summary, b.scene, b.causalLink, b.place?.name, geographyText(b.geography)].filter(v => typeof v === 'string').join('\n'), classifyBranches)));
     const kept = [], rejected = [];
     branches.forEach((branch, i) => (results[i].allowed ? kept : rejected).push(results[i].allowed ? branch : { branch, ...results[i] }));
     return { kept, rejected };

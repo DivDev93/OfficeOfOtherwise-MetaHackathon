@@ -14,7 +14,20 @@
       "summary": "Permanent land allows Siberian reindeer herding, sled design, and cold-climate clothing techniques to spread gradually into Alaska by foot and caravan. Northern communities on both sides develop a shared seasonal round, exchanging breeding animals and knowledge each year.",
       "scene": "Herders in fur parkas guide hundreds of reindeer across a wind-packed plain where the sea never formed.",
       "score": 9,
-      "reviewNote": "Livestock and sled technology require land; gradual cultural exchange follows directly."
+      "reviewNote": "Livestock and sled technology require land; gradual cultural exchange follows directly.",
+      "geography": {
+        "version": 1,
+        "changes": [
+          {
+            "id": "curated-beringia-land",
+            "kind": "land",
+            "region": "beringia",
+            "intensity": 0.85,
+            "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+            "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+          }
+        ]
+      }
     },
     {
       "id": "b5",
@@ -28,7 +41,20 @@
       "summary": "Because the Pacific never breaches Beringia, warm currents cannot flow north through a strait and the Arctic Ocean stays colder and fresher. Eighteenth-century naturalists mapping the region document a broad inhabited isthmus instead of open water, forcing new theories of ocean circulation and climate.",
       "scene": "Surveyors plant measuring chains across a frozen river valley while Pacific and Arctic waters lap at opposite ends of the same land.",
       "score": 8,
-      "reviewNote": "Closed strait correctly alters Arctic inflow and exploration, though climatic effect overstated."
+      "reviewNote": "Closed strait correctly alters Arctic inflow and exploration, though climatic effect overstated.",
+      "geography": {
+        "version": 1,
+        "changes": [
+          {
+            "id": "curated-beringia-land",
+            "kind": "land",
+            "region": "beringia",
+            "intensity": 0.85,
+            "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+            "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+          }
+        ]
+      }
     },
     {
       "id": "b1",
@@ -42,7 +68,20 @@
       "summary": "With Beringia remaining dry grassland, mammoths, bison, and horses migrate freely between Siberia and Yukon each season without a sea barrier. Their continuous grazing maintains a vast mammoth steppe that resists forest encroachment long after it vanished elsewhere.",
       "scene": "A herd of woolly mammoths crosses frosted tundra below a low sun, breath clouding above calves walking between adults.",
       "score": 7,
-      "reviewNote": "Continuous grazing-steppe feedback plausible, but human hunting and warming still threaten mammoths."
+      "reviewNote": "Continuous grazing-steppe feedback plausible, but human hunting and warming still threaten mammoths.",
+      "geography": {
+        "version": 1,
+        "changes": [
+          {
+            "id": "curated-beringia-land",
+            "kind": "land",
+            "region": "beringia",
+            "intensity": 0.85,
+            "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+            "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+          }
+        ]
+      }
     }
   ],
   "hero": {

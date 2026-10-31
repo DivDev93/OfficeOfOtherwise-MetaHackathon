@@ -13,7 +13,7 @@ function totalReserved(state) { return Object.values(state.reservations).reduce(
 function dailySpent(state, day) { return state.entries.filter(e => e.at?.slice(0, 10) === day && e.label !== 'chronos-3d').reduce((sum, e) => sum + e.usd, 0) + totalReserved(state); }
 function operations(transact) {
   return {
-    initialize: () => transact(true, () => undefined),
+    initialize: () => transact('init', () => undefined),
     total: () => transact(false, state => state.totalUsd),
     reserved: () => transact(false, totalReserved),
     entries: () => transact(false, state => state.entries.map(e => ({ ...e }))),
@@ -61,15 +61,16 @@ export function fileLedger(path = 'out/spend.json', { requireExisting = false } 
     }
     let temporary;
     try {
+      const existed = existsSync(path);
       let state;
       try { state = validate(JSON.parse(readFileSync(path, 'utf8'))); }
       catch (error) {
         if (error.code !== 'ENOENT') throw error;
-        if (requireExisting || existsSync(join(dirname(path), 'demo-task-budget.json'))) throw new Error('Spend ledger is missing; investigate before continuing');
+        if (requireExisting) throw new Error('Spend ledger is missing; investigate before continuing');
         state = validate({ totalUsd: 0, entries: [], reservations: {} });
       }
       const result = fn(state);
-      if (write) {
+      if (write === true || (write === 'init' && !existed)) {
         temporary = `${path}.${randomUUID()}.tmp`;
         const fd = openSync(temporary, 'wx', 0o600);
         try { writeFileSync(fd, JSON.stringify(state, null, 2)); fsyncSync(fd); } finally { closeSync(fd); }

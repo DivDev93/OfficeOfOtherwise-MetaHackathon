@@ -6,6 +6,8 @@ Through November 4, 2026 (America/Toronto), do not add features or continue pilo
 
 For the October 30 rollback, the operator explicitly authorized recording the rollback directly on `main`, pushing it, and aligning the serving image with that `main` HEAD. This is a scoped exception to the usual develop-to-main integration workflow.
 
+For the October 31 submission release, the operator explicitly authorized one final `codex/meta-submission-release` PR to `main` instead of `develop`, its normal CI and post-merge checks, merging only that new PR, publishing the final video and release artifacts, and restoring the public replay-only app from the exact resulting committed `main` HEAD. This scoped exception supersedes the earlier local-review hold for this release only. Keep `develop` and PR #7 untouched, preserve prior revisions and evidence, and keep Tattva/Chronos private. Do not run private 3D jobs, accept submission consent, or submit the hackathon entry.
+
 This is a **public** repo submitted to the Meta Global AI Developer Hackathon. Everything committed here is visible to judges and the world.
 
 1. **No secrets, ever.** No API keys, no service account JSON, no `*.a.run.app` URLs, no GCS bucket names, no `TATTVA_*` values. Config comes from env; only `.env.example` is committed. CI runs gitleaks with `.gitleaks.toml`.
