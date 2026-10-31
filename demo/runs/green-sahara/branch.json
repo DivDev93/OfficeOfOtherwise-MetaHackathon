@@ -14,7 +14,28 @@
       "summary": "Lake Chad remains a vast inland sea rather than shrinking, connecting distant shorelines by open water. Its communities develop large reed sailboats and navigate by stars, currents, and island landmarks.",
       "scene": "A broad reed sailboat with a curved sail glides past hippos toward a stilt village rising from bright, open water.",
       "score": 10,
-      "reviewNote": "Megalake persistence logically drives reed sailing culture; vivid, coherent inland-sea scene."
+      "reviewNote": "Megalake persistence logically drives reed sailing culture; vivid, coherent inland-sea scene.",
+      "geography": {
+        "version": 1,
+        "changes": [
+          {
+            "id": "curated-green-sahara",
+            "kind": "vegetation",
+            "region": "sahara",
+            "intensity": 0.8,
+            "assumption": "Curated illustration for this saved story: persistent rainfall supports a greener Sahara.",
+            "uncertainty": "The painted region is illustrative; vegetation boundaries and density are not reconstructed."
+          },
+          {
+            "id": "curated-sahara-lakes",
+            "kind": "lake",
+            "region": "sahara",
+            "intensity": 0.9,
+            "assumption": "Curated illustration for this saved story: lakes persist in the Sahara, including an expanded Lake Chad.",
+            "uncertainty": "Lake locations and shorelines are schematic, not a measured reconstruction."
+          }
+        ]
+      }
     },
     {
       "id": "b1",
@@ -28,7 +49,28 @@
       "summary": "Persistent monsoon rains keep seasonal lakes and grasslands on the plateau, allowing herders to settle year-round and select wild sorghum and millet for planting. This stable water supply supports an early, independent centre of farming in the central Sahara.",
       "scene": "At dawn, families thresh golden sorghum beside a reed-fringed lake while cattle wade through green shallows below painted sandstone cliffs.",
       "score": 9,
-      "reviewNote": "Direct, archaeologically grounded farming emergence from persistent lakes and grasslands."
+      "reviewNote": "Direct, archaeologically grounded farming emergence from persistent lakes and grasslands.",
+      "geography": {
+        "version": 1,
+        "changes": [
+          {
+            "id": "curated-green-sahara",
+            "kind": "vegetation",
+            "region": "sahara",
+            "intensity": 0.8,
+            "assumption": "Curated illustration for this saved story: persistent rainfall supports a greener Sahara.",
+            "uncertainty": "The painted region is illustrative; vegetation boundaries and density are not reconstructed."
+          },
+          {
+            "id": "curated-sahara-lakes",
+            "kind": "lake",
+            "region": "sahara",
+            "intensity": 0.9,
+            "assumption": "Curated illustration for this saved story: lakes persist in the Sahara, including an expanded Lake Chad.",
+            "uncertainty": "Lake locations and shorelines are schematic, not a measured reconstruction."
+          }
+        ]
+      }
     },
     {
       "id": "b3",
@@ -42,7 +84,28 @@
       "summary": "The Tamanrasset River keeps flowing from the Hoggar Mountains toward the Atlantic, creating a navigable corridor of woodland and wetlands. Explorers use its channels to chart tributaries, lakes, and portages deep into a green interior.",
       "scene": "Surveyors in wooden canoes sketch waterfalls and gallery forests where a desert canyon would otherwise hold only dry sand.",
       "score": 8,
-      "reviewNote": "Plausible paleoriver corridor, though Atlantic navigability and mapping expedition need elaboration."
+      "reviewNote": "Plausible paleoriver corridor, though Atlantic navigability and mapping expedition need elaboration.",
+      "geography": {
+        "version": 1,
+        "changes": [
+          {
+            "id": "curated-green-sahara",
+            "kind": "vegetation",
+            "region": "sahara",
+            "intensity": 0.8,
+            "assumption": "Curated illustration for this saved story: persistent rainfall supports a greener Sahara.",
+            "uncertainty": "The painted region is illustrative; vegetation boundaries and density are not reconstructed."
+          },
+          {
+            "id": "curated-sahara-lakes",
+            "kind": "lake",
+            "region": "sahara",
+            "intensity": 0.9,
+            "assumption": "Curated illustration for this saved story: lakes persist in the Sahara, including an expanded Lake Chad.",
+            "uncertainty": "Lake locations and shorelines are schematic, not a measured reconstruction."
+          }
+        ]
+      }
     }
   ],
   "hero": {

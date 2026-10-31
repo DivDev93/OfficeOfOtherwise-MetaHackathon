@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "description": "Office of Otherwise — Meta-model-powered alternate-history branching for Chronos. Meta Global AI Developer Hackathon 2026.",
   "type": "module",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "engines": {
     "node": ">=22.9.0"
   },
@@ -19,7 +19,6 @@
     "demo": "node --env-file-if-exists=.env server/index.js",
     "cache-demo": "node --env-file-if-exists=.env scripts/cache-demo.js",
     "cache-guardrail-fixture": "node scripts/cache-guardrail-fixture.js",
-    "init-demo-budget": "node scripts/init-demo-budget.js",
     "models": "node --env-file-if-exists=.env scripts/models.js",
     "smoke": "node --env-file-if-exists=.env scripts/smoke.js",
     "branch": "node --env-file-if-exists=.env scripts/branch.js",

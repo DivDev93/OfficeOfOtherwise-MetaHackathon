@@ -1,0 +1,66 @@
+{
+  "parentRunId": "df5e6d97-9f0d-49a0-bb62-ad52c3ae6d09",
+  "parentBranchId": "b3",
+  "runId": "c892b8d0-36c5-4eeb-a70b-022041a25c98",
+  "status": "complete",
+  "continuation": {
+    "rootRunId": "beringia",
+    "rootDivergence": "What if the Bering land bridge never flooded?",
+    "parentRunId": "df5e6d97-9f0d-49a0-bb62-ad52c3ae6d09",
+    "parentBranchId": "b3",
+    "path": [
+      {
+        "runId": "beringia",
+        "branchId": "b2",
+        "title": "Reindeer Herders Cross Continents",
+        "year": 900,
+        "summary": "Permanent land allows Siberian reindeer herding, sled design, and cold-climate clothing techniques to spread gradually into Alaska by foot and caravan. Northern communities on both sides develop a shared seasonal round, exchanging breeding animals and knowledge each year.",
+        "place": {
+          "name": "Nome, Alaska",
+          "lat": 64.5011,
+          "lon": -165.4064
+        },
+        "geography": {
+          "version": 1,
+          "changes": [
+            {
+              "id": "curated-beringia-land",
+              "kind": "land",
+              "region": "beringia",
+              "intensity": 0.85,
+              "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+              "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+            }
+          ]
+        }
+      },
+      {
+        "runId": "df5e6d97-9f0d-49a0-bb62-ad52c3ae6d09",
+        "branchId": "b3",
+        "title": "Herders Map Interior River Routes",
+        "year": 1380,
+        "summary": "Reindeer sled teams extend seasonal travel inland, producing route maps of Alaskan rivers, passes, and shelter sites shared among northern communities. This exploration is possible because reliable herds, sled designs, and cold-climate clothing from the cross-Beringian exchange reduce the risks of long winter journeys.",
+        "place": {
+          "name": "Fairbanks, Alaska",
+          "lat": 64.8378,
+          "lon": -147.7164
+        },
+        "causalLink": "The established cross-continental seasonal round created dependable herds, staging pastures, and guide knowledge that could be extended from coastal Beringia into Alaska's interior.",
+        "geography": {
+          "version": 1,
+          "changes": [
+            {
+              "id": "curated-beringia-land",
+              "kind": "land",
+              "region": "beringia",
+              "intensity": 0.85,
+              "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+              "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "updatedAt": "2026-10-30T20:37:57.667Z"
+}

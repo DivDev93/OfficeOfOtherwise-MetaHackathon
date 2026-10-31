@@ -1,0 +1,312 @@
+{
+  "id": "cc1b3038-9c20-44d3-83e0-1045c6392d8e",
+  "status": "complete",
+  "rootDivergence": "What if the Bering land bridge never flooded?",
+  "continuation": {
+    "rootRunId": "beringia",
+    "rootDivergence": "What if the Bering land bridge never flooded?",
+    "parentRunId": "df5e6d97-9f0d-49a0-bb62-ad52c3ae6d09",
+    "parentBranchId": "b1",
+    "path": [
+      {
+        "runId": "beringia",
+        "branchId": "b2",
+        "title": "Reindeer Herders Cross Continents",
+        "year": 900,
+        "summary": "Permanent land allows Siberian reindeer herding, sled design, and cold-climate clothing techniques to spread gradually into Alaska by foot and caravan. Northern communities on both sides develop a shared seasonal round, exchanging breeding animals and knowledge each year.",
+        "place": {
+          "name": "Nome, Alaska",
+          "lat": 64.5011,
+          "lon": -165.4064
+        },
+        "geography": {
+          "version": 1,
+          "changes": [
+            {
+              "id": "curated-beringia-land",
+              "kind": "land",
+              "region": "beringia",
+              "intensity": 0.85,
+              "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+              "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+            }
+          ]
+        }
+      },
+      {
+        "runId": "df5e6d97-9f0d-49a0-bb62-ad52c3ae6d09",
+        "branchId": "b1",
+        "title": "Rotating Lichen Pastures Sustain Herds",
+        "year": 1080,
+        "summary": "Communities formalize rotational grazing that lets lichen recover between seasons, improving herd health across the shared seasonal round. This follows because annual exchanges of herders and breeding animals spread observations about overgrazed ground and recovery times to both sides of Beringia.",
+        "place": {
+          "name": "Kotzebue, Alaska",
+          "lat": 66.8983,
+          "lon": -162.5968
+        },
+        "causalLink": "The shared seasonal round from 900 brought herders repeatedly to the same pastures, making lichen depletion visible and prompting agreed rotation schedules exchanged at annual meetings.",
+        "geography": {
+          "version": 1,
+          "changes": [
+            {
+              "id": "curated-beringia-land",
+              "kind": "land",
+              "region": "beringia",
+              "intensity": 0.85,
+              "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+              "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "completion": {
+    "runId": "cc1b3038-9c20-44d3-83e0-1045c6392d8e",
+    "branch": {
+      "divergence": "What if the Bering land bridge never flooded?",
+      "continuation": {
+        "rootRunId": "beringia",
+        "rootDivergence": "What if the Bering land bridge never flooded?",
+        "parentRunId": "df5e6d97-9f0d-49a0-bb62-ad52c3ae6d09",
+        "parentBranchId": "b1",
+        "path": [
+          {
+            "runId": "beringia",
+            "branchId": "b2",
+            "title": "Reindeer Herders Cross Continents",
+            "year": 900,
+            "summary": "Permanent land allows Siberian reindeer herding, sled design, and cold-climate clothing techniques to spread gradually into Alaska by foot and caravan. Northern communities on both sides develop a shared seasonal round, exchanging breeding animals and knowledge each year.",
+            "place": {
+              "name": "Nome, Alaska",
+              "lat": 64.5011,
+              "lon": -165.4064
+            },
+            "geography": {
+              "version": 1,
+              "changes": [
+                {
+                  "id": "curated-beringia-land",
+                  "kind": "land",
+                  "region": "beringia",
+                  "intensity": 0.85,
+                  "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+                  "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+                }
+              ]
+            }
+          },
+          {
+            "runId": "df5e6d97-9f0d-49a0-bb62-ad52c3ae6d09",
+            "branchId": "b1",
+            "title": "Rotating Lichen Pastures Sustain Herds",
+            "year": 1080,
+            "summary": "Communities formalize rotational grazing that lets lichen recover between seasons, improving herd health across the shared seasonal round. This follows because annual exchanges of herders and breeding animals spread observations about overgrazed ground and recovery times to both sides of Beringia.",
+            "place": {
+              "name": "Kotzebue, Alaska",
+              "lat": 66.8983,
+              "lon": -162.5968
+            },
+            "causalLink": "The shared seasonal round from 900 brought herders repeatedly to the same pastures, making lichen depletion visible and prompting agreed rotation schedules exchanged at annual meetings.",
+            "geography": {
+              "version": 1,
+              "changes": [
+                {
+                  "id": "curated-beringia-land",
+                  "kind": "land",
+                  "region": "beringia",
+                  "intensity": 0.85,
+                  "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+                  "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "branches": [
+        {
+          "id": "b1",
+          "title": "Carved Calendars Track Lichen Recovery",
+          "year": 1150,
+          "place": {
+            "name": "Anadyr, Russia",
+            "lat": 64.7349,
+            "lon": 177.5103
+          },
+          "summary": "Herders carve portable antler and bone calendars marking when each pasture was last grazed and when its lichen should be ready again. This follows because the rotation system only works across the wide Beringian seasonal round if distant families share the same recovery timing.",
+          "scene": "At a winter camp near Anadyr, a herder turns a notched antler calendar beside a map of pale lichen fields etched into bone.",
+          "causalLink": "The 1080 rotation schedules created a recurring timing problem across distant pastures, so annual exchanges turned recovery intervals into standardized, portable records.",
+          "geography": {
+            "version": 1,
+            "changes": [
+              {
+                "id": "curated-beringia-land",
+                "kind": "land",
+                "region": "beringia",
+                "intensity": 0.85,
+                "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+                "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b3",
+          "title": "Herders Breed Hardy Travel Reindeer",
+          "year": 1310,
+          "place": {
+            "name": "Markovo, Russia",
+            "lat": 64.68,
+            "lon": 170.41
+          },
+          "summary": "Families systematically pair reindeer that stay sound on long rotations and recover weight quickly, gradually producing travel herds valued for endurance and calm sled behavior. This becomes possible because the post-1080 rotation brings herds from both sides of Beringia together regularly, widening the breeding pool and revealing which traits succeed across different pastures.",
+          "scene": "In a Markovo corral, elders compare antler notches and hoof wear before guiding chosen bulls toward a separate breeding herd.",
+          "causalLink": "Rotation and repeated herd mixing after 1080 let herders compare which bloodlines thrived on particular pastures and journeys, turning informal exchange of breeding animals into deliberate selection.",
+          "geography": {
+            "version": 1,
+            "changes": [
+              {
+                "id": "curated-beringia-land",
+                "kind": "land",
+                "region": "beringia",
+                "intensity": 0.85,
+                "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+                "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+              }
+            ]
+          }
+        },
+        {
+          "id": "b4",
+          "title": "Herders Map Mineral Salt Licks",
+          "year": 1380,
+          "place": {
+            "name": "Teller, Alaska",
+            "lat": 65.2636,
+            "lon": -166.3611
+          },
+          "summary": "During scheduled pasture rests, herders notice reindeer seeking particular salty and mineral-rich soils, and they begin mapping those licks into the rotation so animals visit them at set seasons. This improves understanding of herd nutrition because the same observation that tracked lichen recovery also reveals links between mineral access, coat condition, and calf survival.",
+          "scene": "At a rust-colored seep near Teller, calves lick damp earth while a herder adds a bright shell marker to a pasture chart.",
+          "causalLink": "Resting pastures under the 1080 system gave herders regular opportunities to observe ungrazed ground and animal behavior away from feeding areas, making mineral-seeking patterns visible and worth recording.",
+          "geography": {
+            "version": 1,
+            "changes": [
+              {
+                "id": "curated-beringia-land",
+                "kind": "land",
+                "region": "beringia",
+                "intensity": 0.85,
+                "assumption": "Curated illustration for this saved story: the Bering land connection remains exposed.",
+                "uncertainty": "The painted connection is schematic; its extent and coastline are not reconstructed."
+              }
+            ]
+          }
+        }
+      ],
+      "hero": {
+        "branchId": "b1"
+      },
+      "status": "ok",
+      "trace": [
+        {
+          "step": "topic-policy",
+          "model": "muse-spark-1.3",
+          "ms": 3803,
+          "costUsd": 0.0032655
+        },
+        {
+          "step": "branch-agent:propose",
+          "model": "muse-wonder-1.0",
+          "ms": 38026,
+          "costUsd": 0.10001760000000001
+        },
+        {
+          "step": "topic-policy",
+          "model": "muse-spark-1.3",
+          "ms": 2830,
+          "costUsd": 0.002092
+        },
+        {
+          "step": "topic-policy",
+          "model": "muse-spark-1.3",
+          "ms": 3119,
+          "costUsd": 0.00340245
+        },
+        {
+          "step": "topic-policy",
+          "model": "muse-spark-1.3",
+          "ms": 3341,
+          "costUsd": 0.00226325
+        },
+        {
+          "step": "topic-policy",
+          "model": "muse-spark-1.3",
+          "ms": 3461,
+          "costUsd": 0.0026336999999999997
+        },
+        {
+          "step": "topic-policy",
+          "model": "muse-spark-1.3",
+          "ms": 3754,
+          "costUsd": 0.00399875
+        },
+        {
+          "step": "branch-agent:review",
+          "model": "muse-wonder-1.0",
+          "ms": 10604,
+          "costUsd": 0.026048
+        },
+        {
+          "step": "policy:prompt",
+          "model": "muse-spark-1.3",
+          "ms": 3805,
+          "costUsd": 0
+        },
+        {
+          "step": "propose",
+          "model": "muse-wonder-1.0",
+          "ms": 38027,
+          "costUsd": 0
+        },
+        {
+          "step": "policy:branches",
+          "model": "muse-spark-1.3",
+          "ms": 3828,
+          "costUsd": 0
+        },
+        {
+          "step": "review",
+          "model": "muse-wonder-1.0",
+          "ms": 10604,
+          "costUsd": 0
+        },
+        {
+          "step": "image",
+          "model": "muse-image-1.0",
+          "ms": 24777,
+          "costUsd": 0.1
+        },
+        {
+          "step": "segment",
+          "model": "sam-3.1",
+          "ms": 2675,
+          "costUsd": 0.05
+        },
+        {
+          "step": "segment",
+          "model": "sam-3.1",
+          "ms": 2370,
+          "costUsd": 0.05
+        },
+        {
+          "step": "cutout",
+          "model": "SAM 3.1",
+          "ms": 0,
+          "costUsd": 0
+        }
+      ]
+    }
+  },
+  "updatedAt": "2026-10-31T00:44:22.603Z"
+}

@@ -1,69 +1,55 @@
-# Cloud Run deployment guide
+# Replay-only Cloud Run release guide
 
-This guide prepares a replay-first Cloud Run service. It does not deploy anything by itself. The image defaults `DEMO_REPLAY_ONLY=true`; the server returns 503 for live-run requests before reading credentials or invoking the pipeline. The container listens on `0.0.0.0:$PORT`; Cloud Run supplies `PORT` (8080 by default). `/health` is a lightweight GET/HEAD probe. Replay data comes from the reviewed `demo/runs/` manifests and assets.
+This guide describes a replay-only release for a committed `main` HEAD; it does not deploy anything by itself. The container defaults to `DEMO_REPLAY_ONLY=true` and `DEMO_3D_ENABLED=false`. Live-run requests return `503` before credentials are read or the generation pipeline is invoked. Cloud Run supplies `PORT` (8080 by default); the server listens on `0.0.0.0:$PORT`.
 
-The current public deployment is the [Office of Otherwise replay demo](https://office-otherwise-875096283797.northamerica-northeast2.run.app). It is configured for replay only; live model generation is disabled. Revision names change with releases; inspect the latest ready revision with `gcloud run services describe office-otherwise --region=northamerica-northeast2 --format='value(status.latestReadyRevisionName)'`.
+The existing [Office of Otherwise replay demo](https://office-otherwise-875096283797.northamerica-northeast2.run.app) is the public service. A future deployment must reuse the existing project, region, Artifact Registry repository, Cloud Run service, IAM policy, and private revisions. Inspect them first. Do not run resource-provisioning, IAM, secret-creation, traffic, or revision-cleanup commands from a copied example without a separate explicit operator authorization. This guide does not change IAM or route traffic.
 
-## Build and publish
+## Inspect existing resources
 
-Run these Bash commands from the repository root. Set `PROJECT_ID` to the intended Google Cloud project first. The Artifact Registry repository is created once; image tags use the current Git revision.
+After explicit authorization to prepare a committed `main` release, identify the existing project and service values and inspect current settings before building:
 
 ```bash
-export PROJECT_ID="YOUR_PROJECT_ID"
-export REGION="us-central1"
+export PROJECT_ID="EXISTING_PROJECT_ID"
+export REGION="northamerica-northeast2"
 export REPOSITORY="office-otherwise"
 export IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/office-otherwise:$(git rev-parse --short HEAD)"
 
-gcloud config set project "$PROJECT_ID"
-gcloud services enable artifactregistry.googleapis.com run.googleapis.com secretmanager.googleapis.com
-gcloud artifacts repositories create "$REPOSITORY" --repository-format=docker --location="$REGION"
-gcloud auth configure-docker "$REGION-docker.pkg.dev"
+gcloud run services describe office-otherwise --project="$PROJECT_ID" --region="$REGION"
+gcloud run services get-iam-policy office-otherwise --project="$PROJECT_ID" --region="$REGION"
+gcloud run revisions list --service=office-otherwise --project="$PROJECT_ID" --region="$REGION"
+```
+
+Use the existing Artifact Registry repository and credentials already approved for release. Do not enable APIs or create repositories/services here. Build and publish only after the source commit and release plan are approved:
+
+```bash
 docker buildx build --load --platform linux/amd64 --tag "$IMAGE" .
 docker push "$IMAGE"
 ```
 
-The image uses `node:22-slim`, installs only locked production dependencies, runs as the unprivileged `node` user, and creates a writable `/app/out` directory. `.dockerignore` excludes local output, dependencies, and `.env` files while allowing only the empty/example configuration file.
+The image uses `node:22-slim`, installs locked production dependencies with `npm ci --omit=dev` (matching the `Dockerfile`), runs as the unprivileged `node` user, and creates a writable `/app/out` directory. `.dockerignore` excludes local output, dependencies, and `.env` files while allowing only `.env.example`.
 
-## Store secrets
+## Create a replay-only revision without changing IAM or traffic
 
-Create secrets outside the repository. For example, place the values in temporary local files that are excluded from source control, then remove those files after adding versions:
-
-```bash
-gcloud secrets create META_API_KEY --replication-policy=automatic
-gcloud secrets versions add META_API_KEY --data-file=/secure/path/meta-api-key.txt
-gcloud secrets create DEMO_ACCESS_CODE --replication-policy=automatic
-gcloud secrets versions add DEMO_ACCESS_CODE --data-file=/secure/path/demo-access-code.txt
-
-PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
-RUNTIME_IDENTITY="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
-gcloud secrets add-iam-policy-binding META_API_KEY --member="serviceAccount:$RUNTIME_IDENTITY" --role=roles/secretmanager.secretAccessor
-gcloud secrets add-iam-policy-binding DEMO_ACCESS_CODE --member="serviceAccount:$RUNTIME_IDENTITY" --role=roles/secretmanager.secretAccessor
-```
-
-The Cloud Run runtime identity needs `roles/secretmanager.secretAccessor` on both secrets. Google recommends Secret Manager for sensitive settings and supports exposing secret versions as environment variables at deploy time ([Cloud Run service secrets](https://cloud.google.com/run/docs/configuring/services/secrets)). The project may use a dedicated least-privilege runtime identity instead of the default Compute Engine identity shown above.
-
-## Deploy
+The release example supplies only the two replay-mode environment variables and clears secret bindings from the new candidate revision. It adds no generation credentials, access code, or spend-budget overrides. `--clear-secrets` removes bindings only from that new revision; it does not delete secret resources or modify existing private revisions. `--no-traffic` leaves existing traffic routing unchanged. Do not add `--allow-unauthenticated`, secret bindings, or traffic changes to this command.
 
 ```bash
-META_KEY_ENV="META_API_KEY"
 gcloud run deploy office-otherwise \
+  --project="$PROJECT_ID" \
   --image="$IMAGE" \
   --region="$REGION" \
-  --port=8080 \
-  --timeout=600s \
-  --max-instances=2 \
-  --min-instances=0 \
-  --allow-unauthenticated \
-  --set-env-vars="DEMO_REPLAY_ONLY=true,DEMO_3D_ENABLED=false,DEMO_DAILY_CAP_USD=1,META_SPEND_CAP_USD=2" \
-  --set-secrets="$META_KEY_ENV=META_API_KEY:1,DEMO_ACCESS_CODE=DEMO_ACCESS_CODE:1"
+  --set-env-vars="DEMO_REPLAY_ONLY=true,DEMO_3D_ENABLED=false" \
+  --clear-secrets \
+  --no-traffic
 ```
 
-Unauthenticated Cloud Run ingress is needed for public replay. The live POST route separately requires the secret `x-demo-access-code` header. Cloud Run requires the ingress container to listen on `0.0.0.0` at the configured port, and `gcloud run deploy` accepts `--max-instances` and `--timeout` ([container contract](https://cloud.google.com/run/docs/container-contract), [deploy reference](https://cloud.google.com/sdk/gcloud/reference/run/deploy)).
+This creates a candidate revision with no traffic. Inspect and verify it before any separately authorized traffic change. Public access must continue to follow the service's existing IAM policy; this guide does not make the service public or private.
 
-## Spend and storage limits
+When `DEMO_REPLAY_ONLY=true`, `POST /api/run`, `POST /api/continue`, `POST /api/event-scene`, and `POST /api/event-cutout` remain disabled. Saved replay data and assets are served without model calls.
 
-Treat this Cloud Run setup as **replay-only** until live spending is redesigned around durable shared state. `DEMO_DAILY_CAP_USD` and the file-backed `out/spend.json` ledger are process/instance-local. Cloud Run's writable container filesystem is ephemeral, instances can restart, and two instances can each admit work against their own daily-cap view. With `--max-instances=2`, the daily setting is not a service-wide spend ceiling; it can allow up to two independent instance-local amounts, and fresh instances can lose prior ledger state. `META_SPEND_CAP_USD` is also enforced against a local ledger. Do not represent either setting as a global cap or expose live access on this deployment as financial protection ([Cloud Run's filesystem is disposable and instance-local](https://cloud.google.com/run/docs/overview/what-is-cloud-run)).
+## Future live generation is a separate deployment plan
 
-The current live pipeline additionally fails closed without the pre-established task budget checkpoint and ledger under `out/`. The image intentionally excludes `out/`, so simply supplying secrets does not enable a valid live run. The deployment command wires both requested secrets but keeps `DEMO_REPLAY_ONLY=true`; the server gate prevents the access code from enabling live requests. `DEMO_3D_ENABLED=false` also keeps the optional 3D provider disabled. Do not remove the replay-only setting or initialize/reset a budget to bypass these checks.
+A protected live-generation host would require separate operator authorization, an access-control plan, and durable shared spend accounting. Meta API keys and access codes are optional secrets for that future protected configuration only. They are not part of this replay-only release; no secret creation or attachment is performed by these instructions. The local `out/spend.json` ledger and `DEMO_DAILY_CAP_USD` are instance-local and are not suitable as shared multi-instance Cloud Run limits.
 
-After a replay-only deployment, check `/health`, `/`, `/runs`, and a listed run's assets from an independent client. The pipeline supports Meta-only live generation when `DEMO_3D_ENABLED=false`; 3D remains opt-in and requires the separate confirmed Chronos configuration. Before enabling any live generation, use an approved durable shared ledger/checkpoint with cross-instance atomic reservations, retain the access code privately, and verify that failed/uncertain requests remain accounted for. Do not add credentials, private provider endpoints, or other deployment URLs to this repository. The public replay URL above is intentionally published for the hackathon submission.
+## Verify an authorized public release
+
+Only after the approved release reaches the intended traffic, independently verify `/health`, `/`, `/runs`, and all four saved 3D models (`alexandria`, `beringia`, `green-sahara`, `mechanisms`). Confirm replay-only health and that live-generation requests return `503`. Deploy only the exact committed `main` HEAD; never deploy `develop`, a draft PR, or an unmerged branch.

@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
-import { formatYear } from './logic.js';
+import { formatYear, causalEdges } from './logic.js';
+import { causalArcAltitude } from './globeArc.js';
+import { createGeographyRenderer, drawGeographyCanvas } from './geographyTexture.js';
 
 function setup(el) {
   const scene = new THREE.Scene();
@@ -22,9 +24,11 @@ function setup(el) {
   key.position.set(2, 3, 5);
   scene.add(key);
 
+  renderer.setSize(400, 300);
   function resize() {
-    const width = el.clientWidth || 400;
-    const height = el.clientHeight || 300;
+    if (el.clientWidth <= 0 || el.clientHeight <= 0) return;
+    const width = el.clientWidth;
+    const height = el.clientHeight;
     renderer.setSize(width, height);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
@@ -77,7 +81,11 @@ function makeBranchPin(branch, onSelect) {
 }
 
 export async function createGlobe(el, onBranchSelect = () => {}) {
-  const { default: Globe } = await import('https://esm.sh/globe.gl@2.46.0');
+  // Use the published browser bundle: no CDN dependency-range transformation.
+  // Its internals prefer this shared Three instance over their bundled fallback.
+  window.THREE = THREE;
+  await import('https://cdn.jsdelivr.net/npm/globe.gl@2.46.0/dist/globe.gl.min.js');
+  const Globe = window.Globe;
   if (!document.getElementById('globe-pin-motion-style')) {
     const style = document.createElement('style');
     style.id = 'globe-pin-motion-style';
@@ -90,7 +98,6 @@ export async function createGlobe(el, onBranchSelect = () => {}) {
     rendererConfig: { antialias: true, alpha: true },
   })(el)
     .backgroundColor('rgba(0,0,0,0)')
-    .globeImageUrl('/assets/earth-blue-marble.jpg')
     .bumpImageUrl('/assets/earth-relief.png')
     .showAtmosphere(true)
     .atmosphereColor('#7775d6')
@@ -102,10 +109,10 @@ export async function createGlobe(el, onBranchSelect = () => {}) {
     .arcEndLat('endLat')
     .arcEndLng('endLng')
     .arcColor(d => d.color)
-    .arcAltitude(0.18)
-    .arcStroke(0.45)
-    .arcDashLength(0.45)
-    .arcDashGap(0.24)
+    .arcAltitude(d => causalArcAltitude(d.startLat, d.startLng, d.endLat, d.endLng))
+    .arcStroke(null)
+    .arcDashLength(0.14)
+    .arcDashGap(0.12)
     .arcDashInitialGap(d => d.phase)
     .arcDashAnimateTime(reducedMotion.matches ? 0 : 2400)
     .htmlElementsData([])
@@ -115,17 +122,39 @@ export async function createGlobe(el, onBranchSelect = () => {}) {
     .htmlAltitude(0.018);
 
   globe.globeMaterial().bumpScale = 0.2;
+  let surfaceTexture;
+  const geographyRenderer = createGeographyRenderer({
+    paint(image, geography, mode) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 4096; canvas.height = 2048;
+      drawGeographyCanvas(canvas, image, geography, mode);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return texture;
+    },
+    apply(texture) {
+      const previous = surfaceTexture; surfaceTexture = texture;
+      const material = globe.globeMaterial();
+      // With no globeImageUrl, globe.gl starts with a black material. A map is
+      // multiplied by its diffuse colour, so explicitly enable the canvas colour.
+      material.color.set(0xffffff);
+      material.map = texture;
+      material.needsUpdate = true;
+      previous?.dispose();
+    },
+    onError() { document.getElementById('geography-status').textContent = 'Earth surface unavailable. Geographic assumptions remain listed below.'; },
+  });
+  geographyRenderer.set(undefined);
 
-  // Disable wheel zoom so scrolling through the atlas remains ordinary page scroll.
-  // OrbitControls belongs to globe.gl's renderer; no Three.js objects or materials cross
-  // the library boundary (the Meshopt model viewer keeps the app's existing Three build).
+  // Zoom when interacting with the globe; overlay panels keep their own scrolling.
+  // OrbitControls belongs to globe.gl's renderer; the model viewer uses its own controls.
   const controls = globe.controls();
-  controls.enableZoom = false;
+  controls.enableZoom = true;
   controls.autoRotate = false;
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   const canvas = el.querySelector('canvas');
-  if (canvas) canvas.style.touchAction = 'pan-y';
+  if (canvas) canvas.style.touchAction = 'none';
   globe.pointOfView({ lat: 30, lng: 22, altitude: 1.4 }, 0);
 
   let branches = [];
@@ -135,7 +164,7 @@ export async function createGlobe(el, onBranchSelect = () => {}) {
   let heroId = null;
 
   function panelRects() {
-    return ['.site-header', '#invitation', '#chronicle', '#guardrail', '.map-panel .panel-head']
+    return ['.site-header', '#invitation', '#chronicle', '#guardrail', '#geography-panel', '.map-panel .panel-head']
       .map(selector => document.querySelector(selector))
       .filter(node => node && !node.hidden && getComputedStyle(node).display !== 'none')
       .map(node => node.getBoundingClientRect());
@@ -193,31 +222,27 @@ export async function createGlobe(el, onBranchSelect = () => {}) {
     }
   }
 
-  function setBranches(nextBranches, nextHeroId = null, explicitOrigin = null) {
+  function setBranches(nextBranches, nextHeroId = null, explicitOrigin = null, path = []) {
     branches = Array.isArray(nextBranches) ? nextBranches : [];
     heroId = nextHeroId;
     if (nextHeroId) selectedId = nextHeroId;
     else if (!branches.some(branch => branch.id === selectedId)) selectedId = null;
     if (!branches.some(branch => branch.id === focusId)) focusId = null;
     const places = branches.filter(branch => validPlace(branch.place));
-    const firstOrigin = places[0]?.place;
     const first = branches[0];
-    const origin = validPlace(explicitOrigin?.place) ? explicitOrigin.place
-      : validPlace(explicitOrigin) ? explicitOrigin
-        : validPlace(first?.origin?.place) ? first.origin.place
-          : validPlace(first?.origin) ? first.origin
-            : firstOrigin;
-    const originLat = origin?.lat;
-    const originLng = origin?.lon;
-    globe.arcsData(origin ? places.filter(branch => branch.place.lat !== originLat || branch.place.lon !== originLng).map((branch, index) => ({
-      startLat: originLat,
-      startLng: originLng,
-      endLat: branch.place.lat,
-      endLng: branch.place.lon,
-      color: branch.id === nextHeroId ? '#e6be79' : '#73aaa1',
-      phase: (index % 5) * 0.13,
-    })) : []);
-    pins = places.map(branch => makeBranchPin(branch, selected => select(selected, true)));
+    const origin = validPlace(explicitOrigin?.place) ? explicitOrigin
+      : validPlace(explicitOrigin) ? { place: explicitOrigin }
+        : validPlace(first?.origin?.place) ? first.origin
+          : validPlace(first?.origin) ? { place: first.origin } : null;
+    globe.arcsData(causalEdges(branches, path, origin).map(({ from, to, ancestry }, index) => ({
+      // Keep only the two documented endpoints; the tiny altitude follows the
+      // globe with a gentle lift and does not imply a specific route between them.
+      startLat: from.place.lat, startLng: from.place.lon,
+      endLat: to.place.lat, endLng: to.place.lon,
+      color: ancestry ? '#e6be79' : '#73aaa1', phase: (index % 5) * 0.13,
+    })));
+    const ancestors = path.filter(item => validPlace(item.place)).map((item, index) => ({ ...item, id: `ancestor:${index}:${item.runId}`, ancestorRunId: item.runId, title: `Chosen cause · ${item.title}` }));
+    pins = [...ancestors, ...places].map(branch => makeBranchPin(branch, selected => select(selected, true)));
     globe.htmlElementsData(pins);
     updatePins();
     positionGlobe();
@@ -255,6 +280,7 @@ export async function createGlobe(el, onBranchSelect = () => {}) {
   });
   return {
     setBranches,
+    setGeography: (geography, mode) => geographyRenderer.set(geography, mode),
     focus,
     select: branch => select(branch),
     get selectedId() { return selectedId; },
@@ -277,19 +303,37 @@ export function createModelViewer(el) {
   let object, loadedUrl = '', requestId = 0;
   let frameAspect = null, objectRadius = 1;
   const homeDirection = new THREE.Vector3(2, 1.5, 3).normalize();
+  const disposeObject = root => {
+    root?.traverse?.(child => {
+      child.geometry?.dispose?.();
+      const materials = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
+      for (const material of materials) material?.dispose?.();
+    });
+  };
   const fitDistance = () => {
-    const aspect = el.clientWidth / Math.max(el.clientHeight, 1);
+    const width = el.clientWidth > 0 ? el.clientWidth : 400;
+    const height = el.clientHeight > 0 ? el.clientHeight : 300;
+    const aspect = Math.max(0.1, width / height);
     const vertical = THREE.MathUtils.degToRad(camera.fov);
     const horizontal = 2 * Math.atan(Math.tan(vertical / 2) * aspect);
     return Math.max(3.9, objectRadius * 1.12 / Math.sin(Math.min(vertical, horizontal) / 2));
   };
   const fitCamera = () => {
     if (!object) return;
-    const aspect = el.clientWidth / Math.max(el.clientHeight, 1);
-    if (aspect === frameAspect) return;
+    if (el.clientWidth <= 0 || el.clientHeight <= 0) return;
+    const width = el.clientWidth;
+    const height = el.clientHeight;
+    renderer.setSize(width, height);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    const aspect = width / height;
+    const offset = camera.position.clone().sub(controls.target);
+    const validOffset = Number.isFinite(offset.x) && Number.isFinite(offset.y) && Number.isFinite(offset.z) && offset.lengthSq() > 1e-6;
+    if (aspect === frameAspect && validOffset) return;
     frameAspect = aspect;
-    const direction = camera.position.clone().normalize();
-    camera.position.copy(direction.multiplyScalar(fitDistance()));
+    const direction = validOffset ? offset.normalize() : homeDirection.clone();
+    camera.position.copy(controls.target).addScaledVector(direction, fitDistance());
+    camera.lookAt(controls.target);
     controls.update();
   };
   el.addEventListener('keydown', event => {
@@ -335,14 +379,40 @@ export function createModelViewer(el) {
       controls.autoRotate = Boolean(enabled) && !reducedMotion.matches;
       return controls.autoRotate;
     },
+    clear() {
+      requestId++;
+      if (object) {
+        scene.remove(object);
+        disposeObject(object);
+        object = null;
+      }
+      loadedUrl = '';
+      frameAspect = null;
+    },
+    refresh() {
+      frameAspect = null;
+      fitCamera();
+      controls.update();
+      renderer.render(scene, camera);
+    },
     load(url, callbacks = {}) {
-      if (url === loadedUrl) { callbacks.onLoad?.(); return; }
+      if (url === loadedUrl && object) {
+        frameAspect = null;
+        fitCamera();
+        controls.update();
+        renderer.render(scene, camera);
+        callbacks.onLoad?.();
+        return;
+      }
       const current = ++requestId;
       const loader = new GLTFLoader();
       loader.setMeshoptDecoder(MeshoptDecoder);
       loader.load(url, gltf => {
         if (current !== requestId) return;
-        if (object) scene.remove(object);
+        if (object) {
+          scene.remove(object);
+          disposeObject(object);
+        }
         object = gltf.scene;
         const box = new THREE.Box3().setFromObject(object);
         const center = box.getCenter(new THREE.Vector3());
@@ -355,8 +425,11 @@ export function createModelViewer(el) {
         object.position.multiplyScalar(scale);
         scene.add(object);
         controls.target.set(0, 0, 0);
+        camera.position.copy(homeDirection).multiplyScalar(fitDistance());
+        camera.lookAt(0, 0, 0);
         fitCamera();
         controls.update();
+        renderer.render(scene, camera);
         loadedUrl = url;
         callbacks.onLoad?.(gltf);
       }, event => {

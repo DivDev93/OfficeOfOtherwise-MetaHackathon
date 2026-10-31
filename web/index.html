@@ -6,7 +6,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="/style.css">
-  <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+  <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.183.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.183.0/examples/jsm/"}}</script>
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true"><span class="star star-a"></span><span class="star star-b"></span><span class="star star-c"></span></div>
@@ -16,47 +16,89 @@
   </header>
 
   <main>
+    <aside id="exploration-rail" class="exploration-rail" aria-label="Exploration controls and tree">
     <section id="invitation" class="intro glass-panel" aria-labelledby="page-title">
       <div class="intro-copy"><p class="eyebrow"><span>START HERE</span></p><h1 id="page-title">Pick a moment.<br><em>Change one thing.</em></h1><p class="lede">Choose a turning point. Follow the possibilities. Step inside one.</p></div>
       <div class="input-panel">
         <form id="prompt-form">
           <label for="prompt">YOUR POINT OF DIVERGENCE</label>
           <div class="input-row"><textarea id="prompt" rows="2" required maxlength="500" placeholder="What if the Sahara had stayed green?" autocomplete="off"></textarea><button id="live-submit" class="primary" type="submit" disabled>Explore <span aria-hidden="true">↗</span></button></div>
-          <details id="live-access" hidden><summary>Live access</summary><label for="access">Demo access code</label><input id="access" type="password" autocomplete="off" placeholder="Required for live generation"><small>Without a code, select a cached story below.</small></details>
+          <div id="voice-controls" class="voice-controls" hidden role="group" aria-label="Speak your what-if">
+            <span>Speak your what-if</span>
+            <div class="voice-actions"><button id="voice-record" class="outline" type="button">Record</button><button id="voice-stop" class="outline" type="button" hidden>Stop</button><button id="voice-cancel" class="outline" type="button" hidden>Cancel</button></div>
+            <small id="voice-help">Up to 30 seconds. Audio is sent to Meta for transcription when you stop. Review and edit the question before exploring.</small>
+            <small id="voice-status" role="status" aria-live="polite"></small>
+          </div>
+          <details id="live-access" hidden><summary>Access code</summary><label for="access">Demo access code</label><input id="access" type="password" autocomplete="off" placeholder="Required for voice or live generation"><small>Without a code, select a cached story below.</small></details>
         </form>
-        <div class="starter-block"><p class="eyebrow">OR BEGIN WITH A STARTING QUESTION</p><div class="chips starter-rows" aria-label="Suggested questions">
-          <button type="button" data-prompt="What if the Library of Alexandria never burned?"><span>01</span><span>Library of Alexandria · 300 BCE</span><b aria-hidden="true">↗</b></button>
-          <button type="button" data-prompt="What if the Bering land bridge never flooded?"><span>02</span><span>Beringia · a land bridge remains</span><b aria-hidden="true">↗</b></button>
-          <button type="button" data-prompt="What if the Sahara had stayed green?"><span>03</span><span>Green Sahara · a different climate</span><b aria-hidden="true">↗</b></button>
-          <button type="button" data-prompt="What if Antikythera-style mechanisms had scaled into industry?"><span>04</span><span>Ancient mechanisms · scaled into industry</span><b aria-hidden="true">↗</b></button>
-        </div></div>
-        <div id="branch-list" class="branch-list" aria-label="Story branches"></div>
-        <p id="map-empty" class="empty"><span aria-hidden="true">✳</span> A question opens the map. Choose a saved possibility to begin.</p>
-        <div class="archive-picker"><label for="runs">THE ARCHIVE <span>· CACHED RUNS</span></label><div class="input-row"><select id="runs"><option value="">Loading archive…</option></select><button id="load-run" class="outline" type="button">Open ↗</button></div></div>
+        <details class="starter-block"><summary>Starting questions</summary><div class="chips starter-rows" aria-label="Suggested questions">
+          <button type="button" data-run="alexandria" data-prompt="What if the Library of Alexandria never burned?"><span>01</span><span>Library of Alexandria · 300 BCE</span><b aria-hidden="true">↗</b></button>
+          <button type="button" data-run="beringia" data-prompt="What if the Bering land bridge never flooded?"><span>02</span><span>Beringia · a land bridge remains</span><b aria-hidden="true">↗</b></button>
+          <button type="button" data-run="green-sahara" data-prompt="What if the Sahara had stayed green?"><span>03</span><span>Green Sahara · a different climate</span><b aria-hidden="true">↗</b></button>
+          <button type="button" data-run="mechanisms" data-prompt="What if Antikythera-style mechanisms had scaled into industry?"><span>04</span><span>Ancient mechanisms · scaled into industry</span><b aria-hidden="true">↗</b></button>
+        </div></details>
+        <div class="archive-picker"><label for="runs">THE ARCHIVE <span>· STORIES</span></label><div class="input-row"><select id="runs"><option value="">Loading archive…</option></select><button id="load-run" class="outline" type="button">Open ↗</button></div><button id="archive-history-toggle" class="outline" type="button" aria-pressed="false">Show previous explorations</button><small id="archive-history-hint" role="status"></small></div>
+      </div>
+    </section>
+    <section id="exploration-tree" class="exploration-tree glass-panel" aria-label="Exploration tree">
+      <div class="exploration-tree-heading">
+        <div><p class="eyebrow">YOUR STORY</p><h2>Exploration tree</h2></div>
+        <button id="open-exploration-map" class="map-open-action" type="button" popovertarget="exploration-map-panel" aria-controls="exploration-map-panel">
+          <span class="map-open-icon" aria-hidden="true">✳</span><span>Exploration map</span><span class="map-open-arrow" aria-hidden="true">↗</span>
+        </button>
+      </div>
+      <p class="exploration-tree-help">Choose a possibility from this list, or open the spatial map to see how paths connect.</p>
+      <div id="root-generation-status" class="root-generation-status" role="status" aria-live="polite" hidden><span id="root-generation-indicator" class="activity-indicator" aria-hidden="true"></span><span id="root-generation-message"></span></div>
+      <div id="exploration-tree-status" aria-live="polite"></div>
+      <nav id="world-navigation" class="world-navigation" aria-label="Chosen speculative history" hidden><button id="world-back" class="outline" type="button" hidden>← Previous world</button><div id="world-path"></div><small>Speculative causes and consequences · generated possibilities, not historical facts. Choose a path to expand; saved futures reopen without generation.</small></nav>
+      <div id="branch-list" class="branch-list" aria-label="Story branches"></div>
+      <p id="map-empty" class="empty"><span aria-hidden="true">✳</span> A question opens the map. Choose a saved possibility to begin.</p>
+    </section>
+    </aside>
+
+    <section id="exploration-map-panel" class="exploration-map-panel" popover="manual" aria-labelledby="exploration-map-title">
+      <div class="exploration-map-shell">
+        <header class="exploration-map-heading">
+          <div><p class="eyebrow">POSSIBLE PATHS</p><h2 id="exploration-map-title">Exploration map</h2><p class="exploration-map-help">Select a node to open that possibility. Left-drag to orbit; right-drag or Shift-drag to pan; scroll to zoom. Use the arrow keys to orbit, or Shift + arrow keys to pan.</p></div>
+          <button id="close-exploration-map" class="map-close-action" type="button" popovertarget="exploration-map-panel" popovertargetaction="hide" aria-label="Close exploration map"><span aria-hidden="true">×</span><span class="map-close-label">Close</span></button>
+        </header>
+        <div id="starmap" class="starmap-host" role="region" aria-label="Spatial map of exploration paths" aria-describedby="exploration-map-instructions"></div>
+        <p id="exploration-map-instructions" class="visually-hidden">Use the exploration tree list to navigate if the spatial map is unavailable. In the map, select a node to open a possibility, left-drag to orbit, right-drag or hold Shift while dragging to pan, and scroll to zoom. Arrow keys orbit; hold Shift with the arrow keys to pan.</p>
+        <div class="exploration-map-footer"><span>Selection stays linked to the story and globe.</span><span>Press Escape to close</span></div>
       </div>
     </section>
 
     <section id="guardrail" class="guardrail glass-panel" hidden role="alert"><div><span class="eyebrow">A DIFFERENT DIRECTION</span><h2>Let's reframe that question.</h2><p id="reason"></p><p id="reframe"></p></div><button id="retry" class="outline" type="button">Try the suggestion ↗</button></section>
 
     <section id="workspace" class="workspace" aria-label="Possible worlds workspace">
+
       <section class="map-panel" aria-labelledby="atlas-title">
-        <div class="panel-head glass-veil"><div><p class="eyebrow">POSSIBLE PATHS</p><h2 id="atlas-title">The branching atlas</h2></div><span id="map-status" class="muted map-status" aria-live="polite">DRAG TO EXPLORE</span></div>
+        <div class="panel-head glass-veil"><div><p class="eyebrow">POSSIBLE PATHS</p><h2 id="atlas-title">The branching atlas</h2></div><span id="map-status" class="muted map-status" aria-live="polite">DRAG · SCROLL TO ZOOM</span></div>
         <div id="globe" aria-label="Interactive Earth globe showing branch pins and possible paths" aria-describedby="branch-list"></div>
         <p id="globe-fallback" class="muted fallback-note" hidden>Globe unavailable; explore branches using the list.</p>
+        <section id="geography-panel" class="geography-panel glass-vault" aria-label="Scenario geography">
+          <div class="geography-heading"><strong>Earth surface</strong><div role="group" aria-label="Earth surface comparison"><button id="geography-present" type="button" class="outline" aria-pressed="false">Present day</button><button id="geography-scenario" type="button" class="outline" aria-pressed="true">Scenario</button></div></div>
+          <p id="geography-status" role="status">Present-day reference · no scenario geography recorded.</p>
+          <p class="geography-caution">Illustrative approximation · curated regional masks, not calculated coastlines or a physical simulation.</p>
+          <ul id="geography-legend"></ul>
+          <figure id="geography-detail" hidden><figcaption>Ram Setu / Palk Strait · regional detail</figcaption><canvas id="geography-inset" width="540" height="210" role="img" aria-label="Illustrative Ram Setu regional surface comparison"></canvas><small>Local drawing enlarged for visibility. Shape and coverage are approximate.</small></figure>
+        </section>
       </section>
 
       <section id="chronicle" class="hero-panel glass-vault" aria-labelledby="hero-title">
         <div class="chronicle-heading"><div><p class="eyebrow">THE SELECTED WORLD</p><h2 id="hero-title">A world to step into</h2></div><span id="hero-tag" class="archive-stamp muted">AWAITING A STORY</span></div>
         <p id="selected-branch-context" class="selected-branch-context" hidden></p>
         <div class="view-switch glass-veil" role="tablist" aria-label="Selected world views"><button id="scene-view" type="button" role="tab" aria-selected="true" aria-controls="chronicle-stage">Scene</button><button id="cutout-view" type="button" role="tab" aria-selected="false" aria-controls="chronicle-stage">SAM cutout</button><button id="model-button" type="button" role="tab" aria-selected="false" aria-controls="chronicle-stage">3D object</button><button id="orbit-button" type="button" aria-pressed="false" hidden>Orbit object</button><button id="back-to-atlas" type="button" class="outline" hidden>Back to atlas</button></div>
-        <div id="chronicle-stage" class="stage" role="tabpanel" aria-labelledby="scene-view"><img id="hero-image" alt="Generated scene" hidden><img id="cutout-image" alt="Isolated subject cutout" hidden><div id="model-view" hidden aria-label="Interactive 3D model"></div><div id="model-loading" class="model-loading" hidden role="status" aria-live="polite"><strong>Loading 3D model</strong><progress id="model-progress" max="100" value="0"></progress><span id="model-progress-text">Preparing 3D model…</span></div><div id="model-error" class="model-error" hidden role="alert"><strong>3D model could not be loaded.</strong><button id="retry-model" type="button" class="outline">Retry model load</button></div><div id="stage-empty"><span aria-hidden="true">✳</span><p>A scene, a subject, a new dimension.</p></div><div id="generation" hidden>◌ &nbsp; Generating 3D <small>~1–3 min</small></div><p id="viewer-hint" class="viewer-hint"><span aria-hidden="true">✦</span> Drag or arrow keys to orbit · + / − to zoom · Home to reset</p></div>
-        <p id="hero-description" class="hero-description">The strongest branch becomes a scene, then a subject to explore in three dimensions.</p><div id="hero-models" class="hero-models" aria-label="Meta model roles and recorded timing and cost" hidden></div>
+        <span id="view-loading-indicator" class="activity-indicator" aria-hidden="true" hidden></span><p id="view-status" class="run-status" role="status" aria-live="polite" hidden></p>
+        <div id="chronicle-stage" class="stage" role="tabpanel" aria-labelledby="scene-view"><img id="hero-image" alt="Generated scene" role="button" tabindex="0" aria-haspopup="dialog" aria-label="Enlarge scene image" hidden><img id="cutout-image" alt="Isolated subject cutout" hidden><div id="model-view" hidden aria-label="Interactive 3D model"></div><div id="scene-loading" class="stage-loading" role="status" aria-live="polite" hidden><span class="activity-indicator" aria-hidden="true"></span><span id="scene-loading-text">Checking the selected scene…</span></div><div id="model-loading" class="model-loading" hidden role="status" aria-live="polite"><strong><span id="model-loading-indicator" class="activity-indicator" aria-hidden="true"></span><span id="model-loading-label">Loading saved 3D model</span></strong><progress id="model-progress" max="100" value="0"></progress><span id="model-progress-text">Preparing 3D model…</span></div><div id="model-error" class="model-error" hidden role="alert"><strong>3D model could not be loaded.</strong><button id="retry-model" type="button" class="outline">Retry model load</button></div><div id="stage-empty"><span aria-hidden="true">✳</span><p>A scene, a subject, a new dimension.</p></div><div id="generation" hidden>◌ &nbsp; Generating 3D <small>~1–3 min</small></div><p id="viewer-hint" class="viewer-hint"><span aria-hidden="true">✦</span> Drag or arrow keys to orbit · + / − to zoom · Home to reset</p></div>
+        <p id="hero-description" class="hero-description">The strongest branch becomes a scene, then a subject to explore in three dimensions.</p><section id="event-consequences" class="event-consequences" hidden aria-label="Consequences of the selected event"><h3>What could happen next</h3><div class="event-progress-row"><span id="event-loading-indicator" class="activity-indicator" aria-hidden="true" hidden></span><p id="event-progress" role="status" aria-live="polite"></p></div><div id="event-children"></div><button id="event-retry" class="outline" type="button" hidden>Try again</button></section><div id="hero-models" class="hero-models" aria-label="Meta model roles and recorded timing and cost" hidden></div>
         <p id="status" class="run-status" role="status" aria-live="polite">Ready to explore</p>
       </section>
     </section>
 
   </main>
-  <footer><span>OFFICE OF OTHERWISE</span><span>Showing saved runs · live generation by invite</span></footer>
-  <script type="module" src="/app.js"></script>
+  <dialog id="scene-lightbox" class="scene-lightbox" aria-label="Enlarged scene image"><button id="scene-lightbox-close" class="outline" type="button" aria-label="Close enlarged image">Close <span aria-hidden="true">×</span></button><img id="scene-lightbox-image" alt=""></dialog>
+  <footer><span>OFFICE OF OTHERWISE</span><span id="footer-service-mode">Saved stories · run locally with your own Meta API key for fresh exploration</span></footer>
+  <script type="module" src="/app.js?v=event-preview-2"></script>
 </body>
 </html>

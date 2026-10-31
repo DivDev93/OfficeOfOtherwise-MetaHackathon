@@ -4,37 +4,58 @@ import { pathToFileURL } from 'node:url';
 import { createMetaClient } from '../src/lib/metaClient.js';
 import { fileLedger } from '../src/lib/spendLedger.js';
 import { createTopicPolicy, createModelClassifier, categoriesFromEnv } from '../src/guardrails/topicPolicy.js';
-import { createBranchAgent } from '../src/agents/branchAgent.js';
+import { createBranchAgent, normalizeContinuation } from '../src/agents/branchAgent.js';
 import { createMetaImage } from '../src/providers/metaImage.js';
 import { createSamMask } from '../src/providers/samMask.js';
 import { writeMaskPng, writeCutoutPng, decodePng } from '../src/lib/png.js';
 import { createChronos3dClient, chronosIdempotencyKey } from '../src/providers/chronos3d.js';
-import { taskSpendCap } from '../src/demo/budget.js';
+import { configuredSpendCap, configuredDailyCap } from '../src/demo/budget.js';
+import { normalizeGeography, geographyText, withGeographyPrompt } from '../web/geography.js';
 
 /** Run the chain with a single metered client. Dependencies may be injected for tests. */
-export async function runHarness({ divergence, from, subjectOverride, client, agent, image, sam, policy, outputRoot = 'out', timestamp = Date.now(), log = console.log, apiCalls = [], onStep, chronos3d, no3d = true, signal }) {
+export async function runHarness(options) {
+  const client = options.client;
+  if (!options.runAccounting && typeof client?.createInvocation === 'function' && typeof client.runWithInvocation === 'function') {
+    const invocation = client.createInvocation();
+    return client.runWithInvocation(invocation, () => runHarness({ ...options, runAccounting: invocation }));
+  }
+  const { divergence, continuation, from, subjectOverride, runAccounting, agent, image, sam, policy, outputRoot = 'out', timestamp = Date.now(), log = console.log, apiCalls = [], onStep, chronos3d, no3d = true, signal } = options;
+  const context = normalizeContinuation(continuation);
+  if (from && context) throw new Error('Continuation cannot reuse a saved render');
   if (subjectOverride !== undefined && (!from || typeof subjectOverride !== 'string' || !subjectOverride.trim())) throw new Error('A nonempty subject override requires a saved branch');
   if (!no3d && typeof chronos3d?.generate !== 'function') throw new Error('Chronos 3D client is required');
   const throwIfAborted = () => { if (signal?.aborted) throw new Error('Run aborted'); };
   const runId = String(timestamp);
   const emit = event => onStep?.({ ...event, runId });
   const url = name => `/runs/${encodeURIComponent(runId)}/${name}`;
-  const startedSpent = client.spent();
+  const runSpent = () => typeof runAccounting?.spent === 'function' ? runAccounting.spent() : client.spent();
+  const startedSpent = runSpent();
   const directory = join(outputRoot, String(timestamp));
   mkdirSync(directory, { recursive: true });
   const trace = [];
   let selection = null;
-  const persistTrace = () => writeFileSync(join(directory, 'trace.json'), JSON.stringify({ source: from ? resolve(from) : null, subjectOverride: subjectOverride?.trim() ?? null, steps: trace, selection, renderStatus: branch?.renderStatus ?? null, costUsd: client.spent() - startedSpent }, null, 2));
+  const persistTrace = () => writeFileSync(join(directory, 'trace.json'), JSON.stringify({ source: from ? resolve(from) : null, ...(context ? { continuation: context } : {}), subjectOverride: subjectOverride?.trim() ?? null, steps: trace, selection, renderStatus: branch?.renderStatus ?? null, costUsd: runSpent() - startedSpent }, null, 2));
   let branch;
   try {
     throwIfAborted();
-    branch = from ? JSON.parse(readFileSync(from, 'utf8')) : await agent.run({ divergence, count: 3, onStep: emit, signal });
+    branch = from ? JSON.parse(readFileSync(from, 'utf8')) : await agent.run({ divergence, count: 3, onStep: emit, signal, ...(context ? { continuation: context } : {}) });
   } catch (error) {
     trace.push(...apiCalls, { step: 'agent', error: error.message });
     persistTrace();
     throw error;
   }
   if (!branch || !['ok', 'blocked', 'empty'].includes(branch.status)) throw new Error('Invalid saved branch status');
+  const branchContext = context ?? normalizeContinuation(branch.continuation);
+  if (branchContext) branch = { ...branch, continuation: branchContext };
+  // Validate persisted structured state too; saved renders must use the same
+  // bounds and geography-aware image prompt as newly planned branches.
+  if (Array.isArray(branch.branches)) branch.branches = branch.branches.map(item => {
+    const geography = normalizeGeography(item.geography, { inherited: branchContext?.path.at(-1).geography });
+    return { ...item, ...(geography !== undefined ? { geography } : {}) };
+  });
+  const heroBranch = branch.branches?.find(item => item.id === branch.hero?.branchId);
+  if (branch.status === 'ok' && branch.branches?.some(item => item.geography !== undefined) && !heroBranch) throw new Error('Branch geography requires a saved hero branch');
+  if (heroBranch?.geography && branch.hero?.imagePrompt) branch.hero = { ...branch.hero, imagePrompt: withGeographyPrompt(branch.hero.imagePrompt, heroBranch.geography) };
   writeFileSync(join(directory, 'branch.json'), JSON.stringify(branch, null, 2));
   // Agent policy traces are aggregate summaries; record each actual API call separately.
   trace.push(...apiCalls);
@@ -45,14 +66,14 @@ export async function runHarness({ divergence, from, subjectOverride, client, ag
     if (branch.reframe) log(`reframe: ${branch.reframe}`);
     if (branch.reason) log(`reason: ${branch.reason}`);
     for (const r of branch.rejected ?? []) log(`rejected: ${r.category ?? r.reason ?? 'off policy'}`);
-    log(`run cost: $${(client.spent() - startedSpent).toFixed(5)} | saved: ${directory}`);
-    return { directory, branch, trace, costUsd: client.spent() - startedSpent };
+    log(`run cost: $${(runSpent() - startedSpent).toFixed(5)} | saved: ${directory}`);
+    return { directory, branch, trace, costUsd: runSpent() - startedSpent };
   }
   if (!branch.hero?.imagePrompt || !branch.hero?.subject) throw new Error('Branch hero requires an image prompt and subject');
   if (from) {
     if (!policy?.checkPrompt) throw new Error('Saved branches require a topic policy check');
-    const text = [branch.divergence ?? '', ...(branch.branches ?? []).flatMap(b => [b.title ?? '', b.summary ?? '', b.scene ?? '']), branch.hero.imagePrompt, branch.hero.subject, subjectOverride ?? ''].join('\n');
-    const callStart = apiCalls.length, start = performance.now(), before = client.spent();
+    const text = [branch.divergence ?? '', ...(branch.branches ?? []).flatMap(b => [b.title ?? '', b.summary ?? '', b.scene ?? '', b.causalLink ?? '', b.place?.name ?? '', geographyText(b.geography)]), branch.continuation ? JSON.stringify(normalizeContinuation(branch.continuation)) : '', branch.hero.imagePrompt, branch.hero.subject, subjectOverride ?? ''].join('\n');
+    const callStart = apiCalls.length, start = performance.now(), before = runSpent();
     let gate;
     try { throwIfAborted(); gate = await policy.checkPrompt(text); }
     catch (error) {
@@ -60,23 +81,23 @@ export async function runHarness({ divergence, from, subjectOverride, client, ag
       persistTrace();
       throw error;
     }
-    trace.push(...apiCalls.slice(callStart), { step: 'policy:reuse', model: gate.layer === 'model' ? (process.env.META_TEXT_MODEL_POLICY_PROMPT || 'muse-spark-1.3') : gate.layer, ms: Math.round(performance.now() - start), costUsd: 0, originalCostUsd: client.spent() - before, summary: true, allowed: gate.allowed });
+    trace.push(...apiCalls.slice(callStart), { step: 'policy:reuse', model: gate.layer === 'model' ? (process.env.META_TEXT_MODEL_POLICY_PROMPT || 'muse-spark-1.3') : gate.layer, ms: Math.round(performance.now() - start), costUsd: 0, originalCostUsd: runSpent() - before, summary: true, allowed: gate.allowed });
     persistTrace();
     if (!gate.allowed) {
       log(`status: blocked\nreframe: ${gate.reframe ?? ''}\nreason: ${gate.reason ?? gate.matched ?? gate.category ?? 'topic policy'}`);
-      log(`run cost: $${(client.spent() - startedSpent).toFixed(5)} | saved: ${directory}`);
-      return { directory, branch, trace, costUsd: client.spent() - startedSpent, blocked: true };
+      log(`run cost: $${(runSpent() - startedSpent).toFixed(5)} | saved: ${directory}`);
+      return { directory, branch, trace, costUsd: runSpent() - startedSpent, blocked: true };
     }
   }
   throwIfAborted();
   let start = performance.now();
-  let before = client.spent();
+  let before = runSpent();
   let generated;
   try {
     generated = await image.generate({ prompt: branch.hero.imagePrompt, size: '1024x1024' });
   } catch (error) {
     if (error.rawResponse !== undefined) writeFileSync(join(directory, 'image-response.json'), JSON.stringify(error.rawResponse, null, 2));
-    trace.push({ step: 'image', model: process.env.META_IMAGE_MODEL ?? 'muse-image-1.0', ms: Math.round(performance.now() - start), costUsd: client.spent() - before, error: error.message });
+    trace.push({ step: 'image', model: process.env.META_IMAGE_MODEL ?? 'muse-image-1.0', ms: Math.round(performance.now() - start), costUsd: runSpent() - before, error: error.message });
     persistTrace();
     throw error;
   }
@@ -91,13 +112,13 @@ export async function runHarness({ divergence, from, subjectOverride, client, ag
   };
   let segmented;
   start = performance.now();
-  before = client.spent();
+  before = runSpent();
   try {
     throwIfAborted();
     segmented = await sam.segment({ image: generated.buffer, mime: generated.mime, prompt: subjectOverride?.trim() ?? branch.hero.subject });
   } catch (error) {
     appendSam(error);
-    if (!error.trace?.length) trace.push({ step: 'segment', model: process.env.META_SEGMENT_MODEL ?? 'sam-3.1', ms: Math.round(performance.now() - start), costUsd: client.spent() - before, error: error.message });
+    if (!error.trace?.length) trace.push({ step: 'segment', model: process.env.META_SEGMENT_MODEL ?? 'sam-3.1', ms: Math.round(performance.now() - start), costUsd: runSpent() - before, error: error.message });
     else trace.push({ step: 'segment:error', error: error.message });
     persistTrace();
     throw error;
@@ -116,7 +137,7 @@ export async function runHarness({ divergence, from, subjectOverride, client, ag
     persistTrace();
     emit({ ...record, message: 'No segmentation mask was returned; showing the generated 2D scene.' });
     log('2D preview only: no segmentation mask was returned; showing the full generated scene.');
-    const costUsd = client.spent() - startedSpent;
+    const costUsd = runSpent() - startedSpent;
     log(`run cost: $${costUsd.toFixed(5)} | total spent: $${client.spent().toFixed(5)} | saved: ${directory}`);
     return { directory, branch, trace, costUsd, selectedMask: null, area: 0, renderStatus: '2d-only' };
   }
@@ -147,7 +168,7 @@ export async function runHarness({ divergence, from, subjectOverride, client, ag
   log(`hero subject: ${subjectOverride?.trim() ?? branch.hero.subject}`);
   log(`selected mask: confidence ${mask.confidence ?? 'unknown'}, area ${area} pixels`);
   for (const t of trace) log(`${t.step}: ${t.model ?? 'unknown'} ${t.ms ?? 0}ms $${(t.costUsd == null ? 'unknown' : Number(t.costUsd).toFixed(5))}${t.reused ? ' (reused)' : ''}`);
-  const costUsd = client.spent() - startedSpent;
+  const costUsd = runSpent() - startedSpent;
   log(`run cost: $${costUsd.toFixed(5)} | total spent: $${client.spent().toFixed(5)} | saved: ${directory}`);
   return { directory, branch, trace, costUsd, selectedMask: mask, area };
 }
@@ -162,16 +183,16 @@ async function main() {
     from = args[1];
     if (args.length === 4) subjectOverride = args[3];
   } else divergence = args.join(' ') || 'What if the Library of Alexandria never burned?';
-  const ledger = fileLedger('out/spend.json', { requireExisting: true });
+  const ledger = fileLedger('out/spend.json');
   let chronos3d;
   if (!no3d) {
     if (process.env.CHRONOS_3D_CAPABILITY_CONFIRMED !== 'true') throw new Error('Chronos TRELLIS capability must be confirmed before generation');
     const allowedArtifactOrigins = (process.env.CHRONOS_3D_ARTIFACT_ORIGINS ?? '').split(',').map(x => x.trim()).filter(Boolean);
     chronos3d = createChronos3dClient({ jobLedger: ledger, capabilityConfirmed: true, allowedArtifactOrigins });
   }
-  const spendCapUsd = taskSpendCap({ env: process.env, outputRoot: 'out' });
-  const dailyCapUsd = Number(process.env.DEMO_DAILY_CAP_USD ?? 3);
-  const client = createMetaClient({ ledger, spendCapUsd, dailyCapUsd });
+  const spendCapUsd = configuredSpendCap({ env: process.env, outputRoot: 'out' });
+  const dailyCapUsd = configuredDailyCap({ env: process.env, spendCapUsd });
+  const client = createMetaClient({ ledger: fileLedger('out/spend.json', { requireExisting: true }), spendCapUsd, dailyCapUsd });
   const model = process.env.META_TEXT_MODEL_PLANNER || 'muse-wonder-1.0';
   const promptPolicyModel = process.env.META_TEXT_MODEL_POLICY_PROMPT || 'muse-spark-1.3';
   const branchPolicyModel = process.env.META_TEXT_MODEL_POLICY_BRANCHES || 'muse-spark-1.3';

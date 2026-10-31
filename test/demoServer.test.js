@@ -7,13 +7,13 @@ import { createDemoServer } from '../server/index.js';
 
 async function fixture(t, options = {}) {
   const base = await mkdtemp(join(tmpdir(), 'office-demo-'));
-  const runsDir = join(base, 'runs'), webDir = join(base, 'web');
+  const runsDir = join(base, 'runs'), webDir = join(base, 'web'), liveRunsDir = join(base, 'live');
   await mkdir(join(runsDir, 'orrery'), { recursive: true }); await mkdir(webDir);
   await writeFile(join(webDir, 'index.html'), '<h1>Demo</h1>');
   await writeFile(join(runsDir, 'orrery', 'branch.json'), JSON.stringify(options.branch ?? { status: 'ok', divergence: 'What if?', hero: { title: 'Orrery' } }));
   await writeFile(join(runsDir, 'orrery', 'hero.png'), Buffer.from('png'));
   if (options.meshoptModel) await writeFile(join(runsDir, 'orrery', 'model.meshopt.glb'), options.meshoptModel);
-  const server = createDemoServer({ runsDir, webDir, env: { DEMO_ACCESS_CODE: 'private-code', DEMO_DAILY_CAP_USD: '1' }, ...options });
+  const server = createDemoServer({ runsDir, liveRunsDir, webDir, env: { DEMO_ACCESS_CODE: 'private-code', DEMO_DAILY_CAP_USD: '1' }, ...options });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(base, { recursive: true, force: true }); });
   return `http://127.0.0.1:${server.address().port}`;
@@ -47,10 +47,10 @@ test('exposes an unauthenticated health endpoint for container probes', async t 
   const url = await fixture(t);
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { status: 'ok', replayOnly: false });
+  assert.deepEqual(await response.json(), { status: 'ok', replayOnly: false, voiceEnabled: false });
   assert.equal((await fetch(`${url}/health`, { method: 'HEAD' })).status, 200);
   const noAccessCode = await fixture(t, { env: {} });
-  assert.deepEqual(await (await fetch(`${noAccessCode}/health`)).json(), { status: 'ok', replayOnly: true });
+  assert.deepEqual(await (await fetch(`${noAccessCode}/health`)).json(), { status: 'ok', replayOnly: true, voiceEnabled: false });
 });
 
 test('live gate defaults to replay and refuses runners without daily-cap enforcement', async t => {
@@ -68,7 +68,7 @@ test('replay-only mode refuses a configured live runner before invoking it', asy
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: 'Live generation is disabled. Use replay mode.' });
   assert.equal(called, false);
-  assert.deepEqual(await (await fetch(`${url}/health`)).json(), { status: 'ok', replayOnly: true });
+  assert.deepEqual(await (await fetch(`${url}/health`)).json(), { status: 'ok', replayOnly: true, voiceEnabled: false });
 });
 
 test('replay JSON redacts rejected branch text and keeps only safe rejection metadata', async t => {
@@ -98,8 +98,8 @@ test('2D-only branch render status is surfaced in replay metadata and live compl
   assert.equal(list.runs[0].status, 'provisional');
   assert.equal(list.runs[0].renderStatus, '2d-only');
 
-  const liveUrl = await fixture(t, { runPipeline: fake(async () => ({
-    runId: 'render-only', branch: { status: 'ok', renderStatus: '2d-only' }, trace: [],
+  const liveUrl = await fixture(t, { runPipeline: fake(async ({ runId }) => ({
+    runId, branch: { status: 'ok', renderStatus: '2d-only' }, trace: [],
   })) });
   const response = await post(liveUrl);
   const text = await response.text();
@@ -110,10 +110,10 @@ test('2D-only branch render status is surfaced in replay metadata and live compl
 });
 
 test('streams named events in order and redacts credentials', async t => {
-  const runner = fake(async ({ onStep, dailyCapUsd }) => {
+  const runner = fake(async ({ onStep, dailyCapUsd, runId }) => {
     assert.equal(dailyCapUsd, 1);
-    for (const step of ['policy', 'propose', 'review', 'image', 'cutout', '3d']) onStep({ step, runId: 'sample', message: 'private-code', token: 'hidden' });
-    return { runId: 'sample', rejected: [{ branch: { id: 'bad-1', title: 'Blocked SSE title' }, category: 'war', reason: 'Private SSE reason' }] };
+    for (const step of ['policy', 'propose', 'review', 'image', 'cutout', '3d']) onStep({ step, runId, message: 'private-code', token: 'hidden' });
+    return { runId, rejected: [{ branch: { id: 'bad-1', title: 'Blocked SSE title' }, category: 'war', reason: 'Private SSE reason' }] };
   });
   const url = await fixture(t, { runPipeline: runner });
   const response = await post(url); assert.equal(response.status, 200);
@@ -124,15 +124,34 @@ test('streams named events in order and redacts credentials', async t => {
   assert.match(text, /"rejected":\[\{"id":"bad-1","category":"war"\}\]/);
 });
 
+test('root completion cannot claim an output ID other than its reserved run ID', async t => {
+  const runner = fake(async () => ({ runId: 'unrelated-output', branch: { status: 'ok' } }));
+  const url = await fixture(t, { runPipeline: runner });
+  const response = await post(url);
+  const text = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(text, /event: error/);
+  assert.doesNotMatch(text, /event: complete/);
+  assert.equal((await fetch(`${url}/runs/unrelated-output`)).status, 404);
+});
+
 test('rate limits and excludes concurrent sessions', async t => {
   let release, started;
+  let calls = 0;
   const ready = new Promise(r => { started = r; });
-  const runner = fake(async () => { started(); await new Promise(r => { release = r; }); return { runId: 'one' }; });
-  const url = await fixture(t, { runPipeline: runner, rateLimit: 2 });
+  const runner = fake(async ({ runId }) => { calls++; if (calls === 1) { started(); await new Promise(r => { release = r; }); } return { runId }; });
+  const url = await fixture(t, { runPipeline: runner, rateLimit: 2, maxConcurrentJobs: 1 });
   const first = await post(url); await ready;
   assert.equal((await post(url)).status, 429);
   assert.equal((await post(url)).status, 429);
   release(); await first.text();
+  const afterBusyResponses = await post(url);
+  assert.equal(afterBusyResponses.status, 200);
+  assert.match(await afterBusyResponses.text(), /event: complete/);
+  assert.equal(calls, 2, 'busy responses did not consume the second rate-limit allowance');
+  const rateLimited = await post(url);
+  assert.equal(rateLimited.status, 429);
+  assert.equal((await rateLimited.json()).status, 'retryable');
 });
 
 test('serves only registered live run assets after progress and rejects traversal', async t => {
@@ -141,31 +160,39 @@ test('serves only registered live run assets after progress and rejects traversa
   await mkdir(join(liveRunsDir, 'run-123'));
   await writeFile(join(liveRunsDir, 'spend.json'), '{"private":true}');
   await writeFile(join(liveRunsDir, 'run-123', 'hero.png'), Buffer.from('live image'));
-  let release, signalReady;
+  let release, signalReady, generatedRunId;
   const ready = new Promise(resolve => { signalReady = resolve; });
-  const runner = fake(async ({ onStep }) => {
-    onStep({ step: 'image', runId: 'run-123' });
+  const runner = fake(async ({ onStep, runId }) => {
+    generatedRunId = runId;
+    await mkdir(join(liveRunsDir, runId), { recursive: true });
+    await writeFile(join(liveRunsDir, runId, 'hero.png'), Buffer.from('live image'));
+    onStep({ step: 'image', runId });
     signalReady();
     await new Promise(resolve => { release = resolve; });
-    return { runId: 'run-123' };
+    return { runId };
   });
   const url = await fixture(t, { runPipeline: runner, liveRunsDir });
   assert.equal((await fetch(`${url}/runs/run-123/hero.png`)).status, 404);
   const response = await post(url); await ready;
-  const head = await fetch(`${url}/runs/run-123/hero.png`, { method: 'HEAD' });
+  const head = await fetch(`${url}/runs/${generatedRunId}/hero.png`, { method: 'HEAD' });
   assert.equal(head.status, 200); assert.equal(head.headers.get('content-type'), 'image/png');
-  assert.equal(await (await fetch(`${url}/runs/run-123/hero.png`)).text(), 'live image');
-  assert.equal((await fetch(`${url}/runs/run-123/spend.json`)).status, 404);
-  assert.equal((await fetch(`${url}/runs/run-123/%2e%2e%2fspend.json`)).status, 404);
+  assert.equal(await (await fetch(`${url}/runs/${generatedRunId}/hero.png`)).text(), 'live image');
+  assert.equal((await fetch(`${url}/runs/${generatedRunId}/spend.json`)).status, 404);
+  assert.equal((await fetch(`${url}/runs/${generatedRunId}/%2e%2e%2fspend.json`)).status, 404);
   release(); await response.text();
 });
 
 test('run manifests expose only safe metadata for cached and registered live runs', async t => {
   const liveRunsDir = await mkdtemp(join(tmpdir(), 'office-manifest-'));
   t.after(() => rm(liveRunsDir, { recursive: true, force: true }));
-  await mkdir(join(liveRunsDir, 'live-1'));
-  await writeFile(join(liveRunsDir, 'live-1', 'branch.json'), JSON.stringify({ status: 'ok', divergence: 'Geography', secret: 'hidden', hero: { title: 'Live' } }));
-  const runner = fake(async ({ onStep }) => { onStep({ step: 'policy', runId: 'live-1' }); return { runId: 'live-1' }; });
+  let liveRunId;
+  const runner = fake(async ({ onStep, runId }) => {
+    liveRunId = runId;
+    await mkdir(join(liveRunsDir, runId), { recursive: true });
+    await writeFile(join(liveRunsDir, runId, 'branch.json'), JSON.stringify({ status: 'ok', divergence: 'Geography', secret: 'hidden', hero: { title: 'Live' } }));
+    onStep({ step: 'policy', runId });
+    return { runId };
+  });
   const url = await fixture(t, { liveRunsDir, runPipeline: runner });
   const cached = await (await fetch(`${url}/runs/orrery`)).json();
   assert.equal(cached.id, 'orrery'); assert.equal(cached.branch.divergence, 'What if?');
@@ -173,10 +200,10 @@ test('run manifests expose only safe metadata for cached and registered live run
   assert.equal(cached.hasModel, false);
   assert.equal((await fetch(`${url}/runs/live-1`)).status, 404);
   await (await post(url)).text();
-  const live = await (await fetch(`${url}/runs/live-1`)).json();
-  assert.equal(live.id, 'live-1'); assert.equal(live.branch.divergence, 'Geography');
-  assert.equal(live.branch.secret, undefined); assert.equal(live.assetUrls['branch.json'], '/runs/live-1/branch.json');
-  assert.equal((await fetch(`${url}/runs/live-1`, { method: 'HEAD' })).status, 200);
+  const live = await (await fetch(`${url}/runs/${liveRunId}`)).json();
+  assert.equal(live.id, liveRunId); assert.equal(live.branch.divergence, 'Geography');
+  assert.equal(live.branch.secret, undefined); assert.equal(live.assetUrls['branch.json'], `/runs/${liveRunId}/branch.json`);
+  assert.equal((await fetch(`${url}/runs/${liveRunId}`, { method: 'HEAD' })).status, 200);
   assert.equal((await fetch(`${url}/runs/%2e%2e%2flive-1`)).status, 404);
 });
 

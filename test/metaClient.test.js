@@ -1,9 +1,35 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMetaClient, SpendCapError, MetaApiError, outputText } from '../src/lib/metaClient.js';
+import { createMetaClient, SpendCapError, MetaApiError, outputText, markUndispatchedBudgetError } from '../src/lib/metaClient.js';
 import { costFromUsage } from '../src/lib/pricing.js';
 import { memoryLedger } from '../src/lib/spendLedger.js';
 
+test('only budget refusal before any Meta dispatch is marked safe to retry', async () => {
+  const client = createMetaClient({ apiKey: 'test-key', spendCapUsd: 0, fetch: async () => { throw new Error('must not dispatch'); } });
+  const start = client.dispatchCount();
+  let error;
+  try { await client.meteredPost('/images', { model: 'test' }, { costUsd: 0.1 }); } catch (caught) { error = caught; }
+  assert.ok(error instanceof SpendCapError);
+  assert.equal(markUndispatchedBudgetError(error, client, start).continuationRetryable, true);
+  assert.equal(client.dispatchCount(), 0);
+
+  const sent = createMetaClient({ apiKey: 'test-key', spendCapUsd: 1, fetch: async () => { throw new Error('network uncertain'); } });
+  const before = sent.dispatchCount();
+  await assert.rejects(sent.meteredPost('/images', { model: 'test' }, { costUsd: 0.1 }));
+  assert.equal(sent.dispatchCount(), 1);
+  let refused;
+  try { await sent.meteredPost('/images', { model: 'test' }, { costUsd: 0.1 }); } catch (caught) { refused = caught; }
+  assert.ok(refused instanceof SpendCapError);
+  assert.equal(markUndispatchedBudgetError(refused, sent, before).continuationRetryable, undefined);
+
+  const charged = createMetaClient({ apiKey: 'test-key', spendCapUsd: 0.15, fetch: async () => Response.json({ ok: true }) });
+  const runStart = charged.dispatchCount();
+  await charged.meteredPost('/images', { model: 'test' }, { costUsd: 0.1 });
+  let later;
+  try { await charged.meteredPost('/images', { model: 'test' }, { costUsd: 0.1 }); } catch (caught) { later = caught; }
+  assert.ok(later instanceof SpendCapError);
+  assert.equal(markUndispatchedBudgetError(later, charged, runStart).continuationRetryable, undefined, 'a settled earlier request is still a dispatch');
+});
 // Recorded shape of a Meta Responses payload (per dev.meta.ai/docs/quickstart).
 const RESPONSE_FIXTURE = {
   id: 'resp_1', object: 'response', status: 'completed', model: 'muse-spark-1.3',
@@ -153,6 +179,46 @@ test('daily cap is shared between clients using the same ledger', async () => {
   assert.equal(secondCalls, 0);
   resolveFirst(); await running;
   await assert.rejects(second.meteredPost('/images', {}, { costUsd: 0.06 }), SpendCapError);
+});
+
+test('shared client scopes dispatch and settled spend to concurrent invocations', async () => {
+  const ledger = memoryLedger();
+  const releases = new Map(), started = new Set();
+  const client = createMetaClient({ ...base, ledger, spendCapUsd: 1, fetch: async (_url, init) => {
+    const label = JSON.parse(init.body).label;
+    started.add(label);
+    await new Promise(resolve => releases.set(label, resolve));
+    return Response.json({ ok: true });
+  } });
+  const a = client.createInvocation(), b = client.createInvocation();
+  const runA = client.runWithInvocation(a, () => client.meteredPost('/images', { label: 'a' }, { costUsd: 0.04 }));
+  const runB = client.runWithInvocation(b, () => client.meteredPost('/images', { label: 'b' }, { costUsd: 0.07 }));
+  while (started.size < 2) await new Promise(resolve => setTimeout(resolve, 1));
+  releases.get('b')(); await runB;
+  releases.get('a')(); await runA;
+  assert.equal(a.dispatchCount(), 1); assert.equal(b.dispatchCount(), 1);
+  assert.equal(a.spent(), 0.04); assert.equal(b.spent(), 0.07);
+  assert.ok(Math.abs(ledger.total() - 0.11) < 1e-12);
+});
+
+test('shared-client spend refusal is classified using only that invocation dispatches', async () => {
+  const ledger = memoryLedger();
+  let release;
+  const client = createMetaClient({ ...base, ledger, spendCapUsd: 0.1, fetch: async () => {
+    await new Promise(resolve => { release = resolve; });
+    return Response.json({ ok: true });
+  } });
+  const first = client.createInvocation(), second = client.createInvocation();
+  const running = client.runWithInvocation(first, () => client.meteredPost('/images', {}, { costUsd: 0.08 }));
+  while (!release) await new Promise(resolve => setTimeout(resolve, 1));
+  let refusal;
+  try { await client.runWithInvocation(second, () => client.meteredPost('/images', {}, { costUsd: 0.08 })); }
+  catch (error) { refusal = error; }
+  assert.ok(refusal instanceof SpendCapError);
+  assert.equal(markUndispatchedBudgetError(refusal, second, 0).continuationRetryable, true);
+  assert.equal(first.dispatchCount(), 1); assert.equal(second.dispatchCount(), 0);
+  release(); await running;
+  assert.equal(first.spent(), 0.08); assert.equal(second.spent(), 0);
 });
 
 test('missing usage retains its reservation and blocks future calls', async () => {
