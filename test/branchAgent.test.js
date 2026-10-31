@@ -285,6 +285,23 @@ test('model geography survives planning, review, streaming and the selected hero
   assert.match(client.calls[0].instructions, /"sahara":\["vegetation","lake"\]/);
 });
 
+test('v2 continuation instructions retain the selected full state and omitted descendant geography inherits it', async () => {
+  const geography={version:2,seaLevelMeters:-120,continentalTransforms:[],changes:[{id:'doggerland-wetland-plain',kind:'vegetation',intensity:0.75,
+    bounds:[-2,50,8,58.5],assumption:'Exposed shelf supports marsh, grassland, and mixed woodland.',uncertainty:'Vegetation density varies locally with rivers, soils, and climate.'}]};
+  const context={...CONTINUATION,path:CONTINUATION.path.map((event,index)=>({...event,...(index===0?{geography}:{})}))};
+  const child={...BRANCHES[1],causalLink:'Inherited wetlands support botanical study.'};
+  const client=fakeClient({propose:JSON.stringify([child]),review:REVIEW});
+  const out=await createBranchAgent({client,policy:allowAll}).run({divergence:context.rootDivergence,continuation:context});
+  assert.equal(out.status,'ok');
+  assert.deepEqual(out.branches[0].geography,geography);
+  assert.deepEqual(out.continuation.path[0].geography,geography);
+  assert.match(client.calls[0].instructions,/uses geography version 2/);
+  assert.match(client.calls[0].instructions,/replaces the version 1 geography example/);
+  assert.match(client.calls[0].instructions,/Do not downgrade version 2 to version 1/);
+  assert.ok(client.calls[0].input.includes('seaLevelMeters'));
+  assert.ok(client.calls[0].input.includes('Exposed shelf supports marsh, grassland, and mixed woodland.'));
+});
+
 test('malformed or ancestry-erasing geography never reaches review or stream, while omission inherits', async () => {
   const context = { ...CONTINUATION, path: CONTINUATION.path.map(event => ({ ...event, geography: GEOGRAPHY })) };
   const child = { ...BRANCHES[1], causalLink: 'The inherited grassland supports botanical workshops.' };

@@ -2,13 +2,64 @@ import { retryPrompt, formatYear, modelCardSteps, replayTraceGroups, parseSseBlo
 import { createVoiceInput } from './voice.js';
 import { safeGeography, visibleChanges, createGeographyRenderer, drawGeographyCanvas } from './geographyTexture.js';
 import { REGIONS, GEOGRAPHY_STYLES } from './geographyRegions.js';
+import { geographyLabel, geographyKindLabel, geographyTechnicalDetails, geographyDisplayChanges } from './geographyLabels.js';
+import { createSavedPreviewPopover } from './savedPreview.js';
 import { createStarMap } from './starmap.js?v=event-preview-2';
 const $ = id => document.getElementById(id);
+const savedPreview = createSavedPreviewPopover(document.body, { document, viewport: () => ({ width:window.innerWidth || 1024, height:window.innerHeight || 768 }) });
 const voice = createVoiceInput({ prompt: $('prompt'), access: $('access'), controls: $('voice-controls'), record: $('voice-record'), stop: $('voice-stop'), cancel: $('voice-cancel'), message: $('voice-status') });
 let voiceEnabled = false, localReviewAccess = false;
 const hasLiveAccess = () => localReviewAccess || !!$('access').value;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', globeApi = null, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0;
+let expansionLimit = 20, serverExpansionUsed = 0, activeExpansion = null, preserveGraphUntilReady = false;
+const enteredNodes = new Set();
+const pendingExpansionNodes = new Set();
+function enterNode(runId, branchId) {
+  const key = eventKey(runId, branchId);
+  if (activeExpansion?.key !== key) {
+    activeExpansion?.controller.abort();
+    activeExpansion = { key, controller: new AbortController() };
+  }
+  return activeExpansion;
+}
+function reserveExpansion(runId, branchId, { allowDuplicate = false } = {}) {
+  const key = eventKey(runId, branchId);
+  if (enteredNodes.has(key)) {
+    if (!allowDuplicate) return { allowed:false, duplicate:true, tracked:false };
+    pendingExpansionNodes.add(key);
+    return { allowed:true, duplicate:true, tracked:false };
+  }
+  if (serverExpansionUsed + pendingExpansionNodes.size >= expansionLimit) {
+    status(`This browser session reached its exploration limit (${expansionLimit}).`);
+    return { allowed:false, tracked:false };
+  }
+  enteredNodes.add(key);
+  pendingExpansionNodes.add(key);
+  try { sessionStorage.setItem('otherwise-expanded-nodes', JSON.stringify([...enteredNodes])); } catch {}
+  return { allowed:true, tracked:true };
+}
+function unreserveExpansion(runId, branchId, tracked = true) {
+  const key = eventKey(runId, branchId);
+  pendingExpansionNodes.delete(key);
+  if (!tracked) return;
+  enteredNodes.delete(key);
+  try { sessionStorage.setItem('otherwise-expanded-nodes', JSON.stringify([...enteredNodes])); } catch {}
+}
+function reconcileExpansion(response, detail, runId, branchId, tracked) {
+  const key = eventKey(runId, branchId);
+  const rawHeaderUsed = response.headers?.get?.('x-expansion-used');
+  const headerUsed = rawHeaderUsed === null || rawHeaderUsed === undefined ? NaN : Number(rawHeaderUsed);
+  if (Number.isSafeInteger(headerUsed) && headerUsed >= 0) serverExpansionUsed = headerUsed;
+  else if (response.ok && tracked) serverExpansionUsed = Math.min(expansionLimit, serverExpansionUsed + 1);
+  if (Number.isSafeInteger(detail?.used) && detail.used >= 0) serverExpansionUsed = detail.used;
+  if (Number.isSafeInteger(detail?.limit) && detail.limit > 0) expansionLimit = detail.limit;
+  pendingExpansionNodes.delete(key);
+  if (!response.ok && (detail?.status === 'retryable' || ['session_expansion_limit', 'invalid_expansion_session'].includes(detail?.code))) unreserveExpansion(runId, branchId, tracked);
+}
+try {
+  for (const key of JSON.parse(sessionStorage.getItem('otherwise-expanded-nodes') || '[]')) if (typeof key === 'string') enteredNodes.add(key);
+} catch {}
 const navigation = createNavigationGuard();
 const knownRunMetadata = new Map();
 const knownRunManifests = new Map(), manifestRequests = new Map();
@@ -18,7 +69,7 @@ let lastHandledLocationHash = location.hash;
 let assetLoadRequest = 0, assetsLoading = false;
 let savedNavigationState = '';
 let starMapApi = null, starMapNodes = [];
-let surfaceGeography, surfaceMode = 'scenario', surfaceUnavailable = false;
+let surfaceGeography, surfaceGeographyRaw, surfaceMode = 'scenario', surfaceUnavailable = false;
 const eventWork = new Map();
 const eventQueue = [];
 let activeEventJobs = 0;
@@ -88,6 +139,7 @@ function consequenceState(runId, branchId, manifest = currentManifest) {
 }
 function starNodeId(runId, branchId) { return `${encodeURIComponent(runId)}::${encodeURIComponent(branchId)}`; }
 function localEventThumbnail(runId, branchId, manifest) {
+  if (!manifest?.branch) return undefined;
   const work = eventWork.get(eventKey(runId, branchId));
   const prefix = `/runs/${encodeURIComponent(runId)}/`;
   const localImage = value => {
@@ -113,8 +165,32 @@ function eventSceneStatus(runId, branch, manifest) {
   if (work.sceneOnlyComplete || work.sceneMessage) return 'Scene unavailable';
   return 'Scene not checked';
 }
+function savedPreviewDetails(runId, branch, manifest) {
+  const sceneReference = localEventThumbnail(runId, branch.id, manifest) || null;
+  return { runId, branchId:branch.id, title:branch.title || 'Untitled possibility', year:branch.year,
+    yearLabel:Number.isInteger(branch.year) ? formatYear(branch.year) : 'Year not saved',
+    location:typeof branch.location === 'string' ? branch.location : branch.location?.name || branch.place?.name || (typeof branch.place === 'string' ? branch.place : ''),
+    summary:branch.summary || '', sceneStatus:eventSceneStatus(runId, branch, manifest), sceneReference };
+}
+function showBranchPreview(runId, branch, manifest, anchor) {
+  if (!branch || !anchor) return;
+  const sourceBranch = manifest?.branch?.branches?.find(item => item.id === (branch.branchId || branch.id)) || branch;
+  savedPreview.show(savedPreviewDetails(runId, sourceBranch, manifest), anchor);
+}
+function showGlobeBranchPreview(branch, anchor) {
+  if (!branch) { savedPreview.clear(anchor); return; }
+  const runId = branch.ancestorRunId || currentRunId;
+  const manifest = knownRunManifests.get(runId) || (runId === currentRunId ? currentManifest : null);
+  showBranchPreview(runId, branch, manifest, anchor);
+}
 function buildStarMapNodes(rootManifest) {
   const output = [], visited = new Set();
+  const rootNodeId = `root:${rootManifest?.id || ''}`;
+  if (rootManifest?.id) output.push({
+    id: rootNodeId, rootNodeId, runId: rootManifest.id, role: 'root-question', title: rootManifest.divergence || rootManifest.branch?.divergence || rootManifest.title || 'Root question',
+    prompt: rootManifest.divergence || rootManifest.branch?.divergence || rootManifest.title || '', mapState: rootManifest.continuation?.children?.length ? 'explored' : 'saved-unexplored',
+    parentId: null, lineageIds: [rootNodeId], ready: true, otherTree: false,
+  });
   const walk = (manifest, parentId = null, depth = 0) => {
     if (!manifest?.branch || !manifest.id || depth > 6 || visited.has(manifest.id) || output.length >= 80) return;
     visited.add(manifest.id);
@@ -122,18 +198,28 @@ function buildStarMapNodes(rootManifest) {
     const branchParentId = parent?.runId && parent?.branchId ? starNodeId(parent.runId, parent.branchId) : parentId;
     for (const branch of manifest.branch.branches || []) {
       if (!branch?.id || output.length >= 80) continue;
-      const thumbnail = localEventThumbnail(manifest.id, branch.id, manifest);
-      const sceneStatus = eventSceneStatus(manifest.id, branch, manifest);
+      const preview = savedPreviewDetails(manifest.id, branch, manifest);
+      const thumbnail = preview.sceneReference;
+      const sceneStatus = preview.sceneStatus;
       const consequences = consequenceState(manifest.id, branch.id, manifest);
+      const work = eventWork.get(eventKey(manifest.id, branch.id));
+      const savedEdge = manifest.continuation?.children?.find(item => item.branchId === branch.id);
+      const hasSavedChildren = savedEdge?.status === 'complete' && !!savedEdge.runId || !!work?.childRunId || !!work?.children?.length;
+      const questionRunId = manifest.continuation?.rootRunId || manifest.id;
+      const nodeId = starNodeId(manifest.id, branch.id);
       output.push({
-        id: starNodeId(manifest.id, branch.id),
+        id: nodeId,
+        rootNodeId,
+        lineageIds: [...(manifest.continuation?.path || []).map(item => starNodeId(item.runId, item.branchId)), starNodeId(manifest.id, branch.id)].filter((id, index, ids) => id && ids.indexOf(id) === index),
+        otherTree: questionRunId !== rootManifest.id,
+        mapState: hasSavedChildren || consequences === 'complete' ? 'explored' : work?.childrenRunning || work?.childrenQueued ? 'generating' : ['needs-access', 'failed', 'uncertain'].includes(consequences) ? 'unavailable' : 'saved-unexplored',
         runId: manifest.id,
         branchId: branch.id,
-        title: branch.title || 'Untitled possibility',
+        title: preview.title,
         year: branch.year,
-        summary: branch.summary || '',
+        summary: preview.summary,
         causalLink: branch.causalLink || '',
-        location: typeof branch.location === 'string' ? branch.location : branch.location?.name || branch.place?.name || (typeof branch.place === 'string' ? branch.place : ''),
+        location: preview.location,
         status: sceneStatus,
         sceneStatus,
         consequencesStatus: taskLabel(consequences),
@@ -142,6 +228,28 @@ function buildStarMapNodes(rootManifest) {
         ready: !!thumbnail,
         parentId: branchParentId,
       });
+      // A pending continuation is represented by three undated direct-child
+      // placeholders. They communicate where saved possibilities will appear
+      // without inventing years, titles, or deeper descendants.
+      const activeKey = eventKey(manifest.id, branch.id);
+      const expansionIsActive = activeExpansion?.key === activeKey
+        && !activeExpansion.controller.signal.aborted
+        && (work?.childrenQueued || work?.childrenRunning)
+        && !hasSavedChildren && !work?.childRunId && !work?.children?.length;
+      if (expansionIsActive) {
+        const pathIds = (manifest.continuation?.path || []).map(item => starNodeId(item.runId, item.branchId)).filter(Boolean);
+        for (let index = 1; index <= 3 && output.length < 80; index++) {
+          const id = `placeholder:${nodeId}:${index}`;
+          output.push({
+            id, rootNodeId, runId: manifest.id, branchId: branch.id,
+            role: 'generation-placeholder', isExpansionPlaceholder: true,
+            selectable: false, title: 'Generating possibility', summary: '',
+            year: null, yearCoordinate: null, yearLabel: 'Time unknown', timeLabel: 'Time unknown', mapState: 'generating',
+            parentId: nodeId, lineageIds: [...pathIds, nodeId],
+            otherTree: questionRunId !== rootManifest.id,
+          });
+        }
+      }
     }
     for (const branch of manifest.branch.branches || []) {
       const edge = manifest.continuation?.children?.find(item => item.branchId === branch.id);
@@ -149,14 +257,15 @@ function buildStarMapNodes(rootManifest) {
       if (child) walk(child, starNodeId(manifest.id, branch.id), depth + 1);
     }
   };
-  walk(rootManifest);
+  walk(rootManifest, rootNodeId);
   return output;
 }
 function renderStarMap(rootManifest) {
   starMapNodes = rootManifest ? buildStarMapNodes(rootManifest) : [];
+  const rootNodeId = rootManifest ? `root:${rootManifest.id}` : null;
   const selectedId = starMapNodes.some(node => node.runId === currentRunId && node.branchId === selectedBranchId)
     ? starNodeId(currentRunId, selectedBranchId) : null;
-  starMapApi?.setData({ nodes: starMapNodes, selectedId });
+  starMapApi?.setData({ nodes: starMapNodes, selectedId, rootNodeId });
   if (rootManifest) checkHydratedEventScenes();
 }
 function checkHydratedEventScenes() {
@@ -223,7 +332,12 @@ function checkSavedEventScene(runId, branch, manifest) {
 async function selectStarMapNode(id) {
   const nodeId = typeof id === 'object' && id ? id.id : id;
   const node = starMapNodes.find(item => item.id === nodeId);
-  if (!node?.ready) return;
+  if (!node || node.isExpansionPlaceholder || node.selectable === false) return;
+  if (node.role === 'root-question') {
+    if (node.runId !== currentRunId) await loadRun(node.runId, { animate: false, autoConsequences: false });
+    else { status('Root question · saved story is open'); $('prompt').value = node.prompt || ''; }
+    return;
+  }
   if (node.runId !== currentRunId) await loadRun(node.runId, { animate: false, autoConsequences: false, selectedBranchId: node.branchId });
   if (currentRunId !== node.runId) return;
   const branch = branchState.branches.find(item => item.id === node.branchId);
@@ -244,11 +358,13 @@ $('close-exploration-map')?.addEventListener('click', () => setTimeout(() => $('
 function initializeStarMap() {
   const container = $('starmap');
   if (!container) return;
-  try { starMapApi = createStarMap(container, { nodes: starMapNodes, selectedId: null, onSelect: selectStarMapNode }); }
+  try { starMapApi = createStarMap(container, { nodes: starMapNodes, selectedId: null, rootNodeId: starMapNodes.find(node => node.role === 'root-question')?.id, onSelect: selectStarMapNode }); }
   catch { starMapApi = null; }
 }
 function renderExplorationTree(hydrate = false) {
   const host = $('exploration-tree-status');
+  if (preserveGraphUntilReady && !currentManifest?.branch) return;
+  if (currentManifest?.branch) preserveGraphUntilReady = false;
   if (!host) { renderStarMap(null); return; }
   host.replaceChildren();
   if (!currentManifest?.branch || !currentRunId) { renderStarMap(null); return; }
@@ -294,7 +410,16 @@ function renderExplorationTree(hydrate = false) {
       const onCurrentPath = (continuation.path || []).some(item => item.runId === manifest.id && item.branchId === branch.id);
       if (manifest.id === currentRunId && branch.id === selectedBranchId) event.setAttribute('aria-current', 'true');
       else if (onCurrentPath) event.setAttribute('aria-current', 'step');
+      let pointerPreview=false, focusPreview=false;
+      const refreshPreview=()=>pointerPreview || focusPreview
+        ? showBranchPreview(manifest.id, branch, manifest, event)
+        : savedPreview.clear(event);
+      event.addEventListener('pointerenter',()=>{pointerPreview=true;refreshPreview();});
+      event.addEventListener('pointerleave',()=>{pointerPreview=false;refreshPreview();});
+      event.addEventListener('focus',()=>{focusPreview=true;refreshPreview();});
+      event.addEventListener('blur',()=>{focusPreview=false;refreshPreview();});
       event.addEventListener('click', async () => {
+        savedPreview.clear();
         if (manifest.id !== currentRunId) {
           await loadRun(manifest.id, { animate: false, autoConsequences: false, selectedBranchId: branch.id });
           if (currentRunId !== manifest.id) return;
@@ -363,6 +488,7 @@ function showGeography(branch) {
   // Some saved descendants predate materialising the full state on each branch.
   // Inherit only omitted metadata; malformed explicit states stay unsupported.
   const value = branch && branch.geography === undefined ? continuation.path?.findLast(item => item.geography !== undefined)?.geography : branch?.geography;
+  surfaceGeographyRaw = value;
   surfaceGeography = safeGeography(value);
   surfaceUnavailable = value !== undefined && !surfaceGeography;
   renderGeography();
@@ -375,15 +501,24 @@ function renderGeography() {
   $('geography-scenario').disabled = changes.length === 0;
   if (!changes.length) $('geography-present').setAttribute('aria-pressed', 'true');
   if (!changes.length) $('geography-scenario').setAttribute('aria-pressed', 'false');
-  $('geography-status').textContent = surfaceUnavailable ? 'Present-day reference · this scenario geography is unsupported and cannot be mapped.' : !surfaceGeography ? 'Present-day reference · no scenario geography recorded. Legacy stories retain their original map.' : !changes.length ? 'Present-day reference · no supported surface masks recorded. Other geographic changes are not mapped.' : surfaceMode === 'present' ? 'Present-day reference · compare with the selected scenario.' : `${changes.length} illustrative surface ${changes.length === 1 ? 'change' : 'changes'} · selected scenario`;
+  $('geography-status').textContent = surfaceUnavailable ? 'Present-day reference · this scenario geography is unsupported by the atlas; recorded assumptions remain listed below.' : !surfaceGeography ? 'Present-day reference · no scenario geography recorded. Legacy stories retain their original map.' : !changes.length ? 'Present-day reference · no supported surface masks recorded. Other geographic changes are not mapped.' : surfaceMode === 'present' ? 'Present-day reference · compare with the selected scenario.' : `${changes.length} illustrative surface ${changes.length === 1 ? 'change' : 'changes'} · selected scenario`;
   const legend = $('geography-legend'); legend.replaceChildren();
-  for (const change of surfaceGeography?.changes || []) {
+  const legendChanges = surfaceGeography?.changes || geographyDisplayChanges(surfaceGeographyRaw);
+  for (const change of legendChanges) {
     const item = document.createElement('li');
-    const label = document.createElement('strong'); label.textContent = `${REGIONS[change.region].label} · ${GEOGRAPHY_STYLES[change.kind].label}${change.intensity === 0 ? ' · inactive' : ''}`;
-    const swatch = document.createElement('span'); swatch.className = 'geography-swatch'; swatch.style.backgroundColor = GEOGRAPHY_STYLES[change.kind].color; swatch.setAttribute('aria-hidden', 'true');
-    const assumption = document.createElement('span'); assumption.textContent = `Assumption: ${change.assumption}`;
-    const uncertainty = document.createElement('small'); uncertainty.textContent = `Uncertainty: ${change.uncertainty}`;
-    item.append(swatch, label, assumption, uncertainty); legend.append(item);
+    const details = document.createElement('details'); details.className = 'geography-change-details';
+    const summary = document.createElement('summary'); summary.textContent = `${geographyLabel(change)} · ${geographyKindLabel(change)}${change.intensity === 0 ? ' · inactive' : ''}`;
+    const swatch = document.createElement('span'); swatch.className = 'geography-swatch'; swatch.style.backgroundColor = GEOGRAPHY_STYLES[change.kind]?.color || '#7b8c93'; swatch.setAttribute('aria-hidden', 'true');
+    const assumption = document.createElement('span'); assumption.textContent = `Assumption: ${change.assumption || 'Not recorded'}`;
+    const uncertainty = document.createElement('small'); uncertainty.textContent = `Uncertainty: ${change.uncertainty || 'Not recorded'}`;
+    details.append(summary, assumption, uncertainty);
+    const technical = geographyTechnicalDetails(change);
+    if (Object.keys(technical).length) {
+      const metadata = document.createElement('details'); const metadataSummary = document.createElement('summary');
+      metadataSummary.textContent = 'Technical details'; metadata.append(metadataSummary);
+      const value = document.createElement('code'); value.textContent = JSON.stringify(technical); metadata.append(value); details.append(metadata);
+    }
+    item.append(swatch, details); legend.append(item);
   }
   $('geography-detail').hidden = !changes.some(change => change.region === 'ram-setu');
   const mode = changes.length ? surfaceMode : 'present';
@@ -412,6 +547,12 @@ const setStageMessage = text => { const copy = $('stage-empty').querySelector('p
 const asset = name => `${base}/${name}`;
 function applyServiceMode(mode) {
   serviceMode = mode;
+  const voiceDisclosure = $('voice-disclosure');
+  if (voiceDisclosure) {
+    voiceDisclosure.hidden = !voiceEnabled;
+    const invitationOpen = !document.body.classList.contains('has-story') || document.body.classList.contains('invitation-open');
+    voiceDisclosure.open = voiceEnabled && invitationOpen;
+  }
   $('live-access').hidden = localReviewAccess || (mode !== 'live-enabled' && !voiceEnabled);
   $('live-submit').disabled = mode !== 'live-enabled' || streamBusy;
   const replayMessage = 'Saved stories · run locally with your own Meta API key for fresh exploration';
@@ -427,13 +568,23 @@ async function loadServiceMode() {
     const response = await fetch('/health');
     if (!response.ok) throw new Error('Health endpoint unavailable');
     const health = await response.json();
+    if (Number.isSafeInteger(health.expansionLimit) && health.expansionLimit > 0) expansionLimit = health.expansionLimit;
+    if (Number.isSafeInteger(health.expansionUsed) && health.expansionUsed >= 0) serverExpansionUsed = health.expansionUsed;
     voiceEnabled = health.status === 'ok' && health.voiceEnabled === true;
     localReviewAccess = health.status === 'ok' && health.localReviewAccess === true;
     voice.setLocalAccess?.(localReviewAccess);
     voice.setEnabled(voiceEnabled);
     applyServiceMode(liveAccessMode(health));
+    if (serverExpansionUsed >= expansionLimit) status(`This browser session reached its exploration limit (${expansionLimit}).`);
     if (localReviewAccess) refreshHistory().catch(() => {});
   } catch { voiceEnabled = false; localReviewAccess = false; voice.setLocalAccess?.(false); voice.setEnabled(false); applyServiceMode('unknown'); }
+}
+function setInvitationOpen(open) {
+  document.body.classList.toggle('invitation-open', open);
+  const hasStory = document.body.classList.contains('has-story');
+  $('show-invitation').setAttribute('aria-expanded', String(!hasStory || open));
+  const disclosure = $('voice-disclosure');
+  if (disclosure) disclosure.open = voiceEnabled && open;
 }
 function setView(view, userSelected = false) {
   if (userSelected) continuationViewSelection = view;
@@ -497,7 +648,7 @@ function showGuard(data) {
 }
 function renderBranches() {
   document.body.classList.toggle('has-story', branchState.branches.length > 0 || !!selectedContext || !!savedNavigationState);
-  $('show-invitation').setAttribute('aria-expanded', String(!matchMedia('(max-width: 700px)').matches || document.body.classList.contains('invitation-open')));
+  $('show-invitation').setAttribute('aria-expanded', String(!document.body.classList.contains('has-story') || document.body.classList.contains('invitation-open')));
   $('branch-list').replaceChildren(); $('map-empty').hidden = branchState.branches.length > 0 || branchState.phase === 'policy-checking' || rootGenerationActive;
   const selected = branchState.branches.find(item => item.id === selectedBranchId);
   if (branchState.phase === 'policy-checking') {
@@ -531,6 +682,7 @@ function selectBranch(branch, { persistLocation = true } = {}) {
   if (!branch?.id) return;
   if (branch.ancestorRunId) { openAncestor(branch.ancestorRunId, branch.branchId); return; }
   if (streamBusy || replayActive) return;
+  savedPreview.clear();
   selectedBranchId = branch.id;
   if (persistLocation && currentRunId) updateRunLocation(currentRunId, branch.id);
   viewStatus('');
@@ -562,10 +714,16 @@ function renderEventWork() {
   const list = $('event-children'); list.replaceChildren();
   if (!work) { $('event-loading-indicator').hidden = true; renderExplorationTree(); return; }
   setView(activeView);
-  $('event-progress').textContent = [work.sceneLoading && activeView === 'scene' ? '' : work.sceneMessage, work.childrenMessage, work.cutoutMessage].filter(Boolean).join(' · ');
+  const sceneProgress = work.sceneMessage || (work.sceneRetryable ? 'Scene unavailable · saved consequences remain available' : '');
+  $('event-progress').textContent = [work.sceneLoading && activeView === 'scene' ? '' : sceneProgress, work.childrenMessage, work.cutoutMessage].filter(Boolean).join(' · ');
   $('event-loading-indicator').hidden = !work.childrenLoading || !work.running;
   if (!work.sceneUrl && work.sceneMessage) setStageMessage(work.sceneMessage + '.');
-  $('event-retry').hidden = !work.retryable || work.running;
+  const hasSavedChildren = !!work.childRunId || !!work.children?.length;
+  const retrySceneOnly = work.sceneRetryable && (hasSavedChildren || !work.childrenRetryable && !work.budgetFailureRetryable);
+  const retryConsequences = work.childrenRetryable && !hasSavedChildren;
+  $('event-retry').hidden = !(retrySceneOnly || retryConsequences) || work.running;
+  $('event-retry').textContent = retrySceneOnly ? 'Retry scene' : 'Try again';
+  $('event-retry').setAttribute('aria-label', retrySceneOnly ? `Retry scene for ${work.title || 'this event'}` : `Try this event again`);
   if (work.sceneUrl && isSelected(work.runId, work.branchId)) {
     if (activeView === 'scene') setView('scene');
   }
@@ -609,7 +767,7 @@ function queueSceneTask(runId, branch, work, access, allowGeneration, refresh, r
         work.sceneUrl = result.url; work.sceneMessage = ''; work.sceneRetryable = false;
         if (work.sceneOnlyPrefetch && !work.childrenRunning) work.sceneOnlyComplete = true;
       } else if (result.status === 'missing') {
-        work.sceneMessage = serviceMode === 'replay-only' ? 'Run locally with your own Meta API key for fresh scene generation' : 'Scene generation needs live access'; work.sceneRetryable = false;
+        work.sceneMessage = serviceMode === 'replay-only' ? 'Run locally with your own Meta API key for fresh scene generation' : 'No saved scene is available for this event.'; work.sceneRetryable = false;
         if (work.sceneOnlyPrefetch) work.sceneOnlyComplete = true;
       } else {
         work.sceneMessage = result.status === 'in-progress' ? 'Scene generation is in progress' : 'Scene generation did not complete; retry to check';
@@ -640,7 +798,7 @@ function prefetchEventScenes(branches, runId, manifest) {
   if (!runId || !Array.isArray(branches) || !branches.length || serviceMode !== 'live-enabled' || !hasLiveAccess() || streamBusy || replayActive) return;
   // Scene-only work warms hover previews for this immediate child set. It never
   // queues consequences, so generated scenes cannot recursively expand worlds.
-  const access = $('access').value, allowGeneration = serviceMode === 'live-enabled' && hasLiveAccess();
+  const access = $('access').value, allowGeneration = false;
   for (const branch of branches) {
     if (!branch?.id) continue;
     const key = eventKey(runId, branch.id);
@@ -669,6 +827,11 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
   const ownerBranch = ownerManifest?.branch;
   const ownerHeroId = ownerBranch?.heroId || ownerBranch?.hero?.branchId || ownerBranch?.hero?.id || (runId === currentRunId ? branchState.heroId : null);
   const ownerChildren = ownerManifest?.continuation?.children || (runId === currentRunId ? continuation.children : []);
+  const existingEdge = ownerChildren.find(item => item.branchId === branch.id);
+  const existingWork = eventWork.get(eventKey(runId, branch.id));
+  const allowGeneration = serviceMode === 'live-enabled' && hasLiveAccess();
+  if (!background && !sceneOnly) enterNode(runId, branch.id);
+  const requestController = activeExpansion?.key === eventKey(runId, branch.id) ? activeExpansion.controller : null;
   let work = eventWork.get(key);
   const promoteScenePrefetch = !!work?.sceneOnlyPrefetch && !sceneOnly && !background;
   const promoteSavedSceneCheck = !!work?.sceneCheckOnly && !sceneOnly;
@@ -690,10 +853,23 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
   else if (!work.childRunId) work.childrenMessage = 'Queued to find consequences';
   const access = $('access').value;
   if (branch.id === ownerHeroId && runId === currentRunId && hasImage && !work.sceneUrl) { work.sceneUrl = asset('hero.png'); work.sceneMessage = ''; work.sceneLoading = false; }
-  const allowGeneration = serviceMode === 'live-enabled' && hasLiveAccess();
+  if (!work.sceneUrl) {
+    const savedPreview = localEventThumbnail(runId, branch.id, ownerManifest);
+    if (savedPreview) { work.sceneUrl = savedPreview; work.sceneMessage = ''; work.sceneLoading = false; }
+  }
   let savedChild = ownerChildren.find(item => item.branchId === branch.id);
+  const ownerPath = ownerManifest?.continuation?.path || (runId === currentRunId ? continuation.path : []);
+  const entryAction = continuationAction({runId, branchId:branch.id, children:savedChild ? [savedChild] : [], path:ownerPath, mode:serviceMode, access:allowGeneration});
   let continuationDispatched = false;
   const refresh = () => { if (isSelected(runId, branch.id)) renderEventWork(); else renderBranches(); };
+  if (!allowGeneration && savedChild?.status !== 'complete') {
+    work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = false;
+    work.consequenceStatus = savedChild?.status || 'not-started';
+    work.childrenMessage = savedChild?.status ? 'This saved attempt needs review; automatic retries are disabled' : serviceMode === 'replay-only' ? 'Not explored yet · run locally with your own Meta API key for fresh exploration' : 'Not explored yet · live access is required to explore this event';
+    work.sceneMessage ||= work.sceneUrl ? '' : '';
+    work.retryable = false; work.interrupted = true;
+    renderEventWork(); return;
+  }
   const job = async () => {
     // Activation is an explicit request. Preserve it through queue wait and navigation;
     // all presentation updates remain scoped to this run/branch in refresh().
@@ -703,6 +879,13 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
     if (!work.childRunId && !savedChild) work.consequenceStatus = 'queued';
     refresh();
     try {
+      // This job may have waited behind other entered nodes. If navigation
+      // cancelled it before dispatch, do not reserve local or server capacity.
+      if (requestController?.signal.aborted) {
+        work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = false;
+        work.consequenceStatus = work.childRunId ? 'complete' : 'not-started';
+        work.childrenMessage = work.childRunId ? '' : 'Not explored yet'; refresh(); return;
+      }
       if (savedChild?.status === 'complete' && savedChild.runId) {
         const response = await fetch(`/runs/${encodeURIComponent(savedChild.runId)}/branch.json`);
         if (!response.ok) throw new Error('Could not load saved consequences');
@@ -738,15 +921,47 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
           } else work.childrenMessage = 'This saved attempt needs review; automatic retries are disabled';
           refresh(); return;
         }
-        const ownerPath = ownerManifest?.continuation?.path || (runId === currentRunId ? continuation.path : []);
         const action = continuationAction({runId, branchId:branch.id, children:savedChild && !budgetRetryRequested ? [savedChild] : [], path:ownerPath, mode:serviceMode, access:allowGeneration});
         if (action.type === 'generate') {
+          if (requestController?.signal.aborted) {
+            work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = false;
+            work.consequenceStatus = 'not-started'; work.childrenMessage = 'Not explored yet'; refresh(); return;
+          }
+          if (!budgetRetryRequested && (work.childRunId || work.children?.length)) {
+            work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = false;
+            work.childrenRetryable = false; work.consequenceStatus = 'complete';
+            work.childrenMessage = work.children.length ? '' : 'Saved consequences are already available'; refresh(); return;
+          }
+          const reservation = reserveExpansion(runId, branch.id, { allowDuplicate:budgetRetryRequested });
+          if (!reservation.allowed) {
+            work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = false;
+            if (reservation.duplicate) {
+              work.consequenceStatus = 'uncertain'; work.childrenMessage = 'An earlier continuation was already submitted. Check its saved result before trying again.';
+            } else {
+              work.consequenceStatus = 'session-limit-reached'; work.childrenMessage = `This browser session reached its exploration limit (${expansionLimit}).`;
+            }
+            refresh(); return;
+          }
           work.consequenceStatus = 'queued'; work.childrenMessage = 'Queued to explore consequences'; refresh();
           continuationDispatched = true;
-          const started = await postWithCapacityRetry('/api/continue', {
-            method:'POST', headers:{'content-type':'application/json','x-demo-access-code':access}, body:JSON.stringify({runId,branchId:branch.id, ...(budgetRetryRequested ? {retryBudgetFailure:true} : {})}),
+          let started;
+          try { started = await postWithCapacityRetry('/api/continue', {
+            method:'POST', signal:requestController?.signal || navigation.signal, headers:{'content-type':'application/json','x-demo-access-code':access}, body:JSON.stringify({runId,branchId:branch.id, ...(budgetRetryRequested ? {retryBudgetFailure:true} : {})}),
           }, (delay, attempt, limit) => { work.consequenceStatus = 'queued'; work.childrenMessage = `Continuation queued · server busy, retry ${attempt}/${limit} in ${delay} ms`; refresh(); });
+          } catch (error) {
+            // A network error or abort is ambiguous: the server may have
+            // received the request, so retain the local dedupe reservation.
+            if (error?.name !== 'AbortError') throw error;
+            work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = false;
+            work.consequenceStatus = 'uncertain'; work.childrenMessage = 'Request stopped after dispatch; check the saved world before retrying'; refresh(); return;
+          }
+          reconcileExpansion(started.response, started.detail, runId, branch.id, reservation.tracked);
           if (!started.response.ok || !started.response.body) {
+            if (started.detail.code === 'session_expansion_limit') {
+              work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = false;
+              work.consequenceStatus = 'session-limit-reached'; work.childrenMessage = `This browser session reached its exploration limit (${expansionLimit}).`;
+              status(work.childrenMessage); refresh(); return;
+            }
             work.consequenceStatus = started.detail.status || (started.response.status === 403 || started.response.status === 429 ? 'retryable' : 'uncertain');
             work.budgetFailureRetryable = ['failed', 'retryable'].includes(work.consequenceStatus) && started.detail.code === 'budget_exhausted';
             throw new Error(started.detail.error || 'Could not explore consequences');
@@ -799,10 +1014,10 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
       work.retryable = !!(work.sceneRetryable || work.childrenRetryable); refresh();
     }
   };
-  const scenePromise = !work.sceneUrl
+  const scenePromise = !allowGeneration ? Promise.resolve(true) : !work.sceneUrl
     ? work.sceneCheckPromise && !work.sceneCheckDone
-      ? work.sceneCheckPromise.then(hasSavedScene => hasSavedScene || queueSceneTask(runId, branch, work, access, allowGeneration, refresh, true, background))
-      : queueSceneTask(runId, branch, work, access, allowGeneration, refresh, retry, background)
+      ? work.sceneCheckPromise.then(hasSavedScene => hasSavedScene || queueSceneTask(runId, branch, work, access, false, refresh, true, background))
+      : queueSceneTask(runId, branch, work, access, false, refresh, retry, background)
     : Promise.resolve(true);
   if (!sceneOnly) { work.childrenQueued = true; work.childrenLoading = true; work.running = true; work.childrenMessage ||= 'Queued to find consequences'; }
   const childrenPromise = sceneOnly ? null : enqueueEventJob(job).catch(error => {
@@ -816,7 +1031,17 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
   if (background) renderBranches(); else renderEventWork();
   work.running = !!(work.sceneRunning || work.childrenRunning);
 }
-$('event-retry').addEventListener('click', () => { const branch = branchState.branches.find(item => item.id === selectedBranchId); if (branch) activateBranch(branch, true); });
+$('event-retry').addEventListener('click', () => {
+  const branch = branchState.branches.find(item => item.id === selectedBranchId), work = eventWork.get(eventKey(currentRunId, selectedBranchId));
+  if (!branch || !work) return;
+  if (work.sceneRetryable && (!!work.childRunId || !!work.children?.length || !work.childrenRetryable && !work.budgetFailureRetryable)) {
+    const runId = currentRunId;
+    const refresh = () => { if (isSelected(runId, branch.id)) renderEventWork(); else renderBranches(); };
+    queueSceneTask(runId, branch, work, $('access').value, serviceMode === 'live-enabled' && hasLiveAccess(), refresh, true, false);
+    return;
+  }
+  activateBranch(branch, true);
+});
 async function restoreSelectedConsequences(runId, branch) {
   const saved = continuation.children?.find(item => item.branchId === branch?.id && item.status === 'complete' && item.runId);
   if (!saved) return;
@@ -875,6 +1100,8 @@ async function expandBranch(branch) {
   selectBranch(branch);
   const parentRunId = currentRunId;
   const event = eventWork.get(eventKey(parentRunId, branch.id));
+  const savedEdge = continuation.children?.find(item => item.branchId === branch.id);
+  enterNode(parentRunId, branch.id);
   if (event?.sceneOnlyPrefetch && !event.childRunId) {
     activateBranch(branch);
     await event.childrenTaskPromise;
@@ -907,8 +1134,10 @@ async function expandBranch(branch) {
     }
     return;
   }
+  const expansionReservation = reserveExpansion(parentRunId, branch.id);
+  if (!expansionReservation.allowed) return;
   const parentPath = continuation.path || [], rootRunId = continuation.rootRunId || currentRunId;
-  viewStatus(''); reset(); const request = replayRequest;
+  viewStatus(''); reset({ preserveExpansion: true }); activeExpansion = { key: eventKey(parentRunId, branch.id), controller: new AbortController() }; const request = replayRequest;
   continuation = { rootRunId, parentRunId, parentBranchId: branch.id, path: [...parentPath, { runId: parentRunId, branchId: branch.id, title: branch.title, year: branch.year, summary: branch.summary, causalLink: branch.causalLink, place: branch.place, geography: branch.geography }], children: [] };
   selectedContext = branch;
   showGeography(branch);
@@ -916,7 +1145,7 @@ async function expandBranch(branch) {
   $('hero-tag').textContent = 'SELECTED CAUSE · EXPLORING CONSEQUENCES';
   setStageMessage('Creating descendants of this selected path. Their scene will appear here.');
   status(`Following ${branch.title}…`); renderAncestry();
-  await streamRun('/api/continue', { runId: parentRunId, branchId: branch.id }, request);
+  await streamRun('/api/continue', { runId: parentRunId, branchId: branch.id }, request, activeExpansion?.key === eventKey(parentRunId, branch.id) ? activeExpansion.controller.signal : navigation.signal, expansionReservation);
   if (request === replayRequest && currentRunId !== parentRunId) prefetchEventScenes(branchState.branches, currentRunId, currentManifest);
 }
 const archiveCachedIds = new Set(['alexandria', 'beringia', 'green-sahara', 'mechanisms']);
@@ -984,7 +1213,7 @@ function renderHeroModels() {
     card.append(model, role, metrics); host.append(card);
   }
 }
-function reset({ preservePanel = false } = {}) { finishRootGenerationProgress(); assetLoadRequest++; assetsLoading = false; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); globeApi?.select(null); document.body.classList.remove('invitation-open'); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'The strongest branch becomes a scene, then a subject to explore in three dimensions.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
+function reset({ preservePanel = false, preserveExpansion = false } = {}) { savedPreview.clear(); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; starMapNodes = starMapNodes.filter(node => !node.isExpansionPlaceholder); if (preservePanel) { const selectedId = starMapNodes.some(node => node.runId === currentRunId && node.branchId === selectedBranchId) ? starNodeId(currentRunId, selectedBranchId) : null; starMapApi?.setData({ nodes: starMapNodes, selectedId, rootNodeId: starMapNodes.find(node => node.role === 'root-question')?.id }); } } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { globeApi?.select(null); starMapApi?.setData({ nodes: starMapNodes, selectedId: null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
 function setBranch(data, event = 'complete') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchState.phase === 'final' ? (continuation.path?.length ? 'POSSIBLE CONSEQUENCE' : 'SELECTED EVENT') : branchPhaseLabel(branchState.phase);
@@ -1153,10 +1382,16 @@ async function loadRun(id, { animate = true, autoConsequences = true, selectedBr
       if (continuation.children?.some(item => item.branchId === selected.id && item.status === 'complete')) {
         try { await restoreSelectedConsequences(id, selected); }
         catch (error) { if (request === replayRequest) status(error.message || 'Could not load saved consequences'); }
+      } else {
+        const key = eventKey(id, selected.id), work = eventWork.get(key) || { runId: id, branchId: selected.id, title: selected.title, children: [] };
+        work.consequenceStatus = 'not-started'; work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.interrupted = true;
+        work.childrenMessage = serviceMode === 'replay-only' ? 'Not explored yet · run locally with your own Meta API key for fresh exploration' : 'Not explored yet';
+        eventWork.set(key, work);
+        renderEventWork();
       }
     }
     renderExplorationTree(true);
-    if (autoConsequences && selected && request === replayRequest) activateBranch(selected, false, { persistSelection: false });
+    // Opening a saved run restores its selected event and previews only; entry is explicit.
     status(manifest.status === 'simulated' ? 'Simulated guardrail · no classifier was called' : branch.status === 'blocked' ? 'This question needs a reframe' : branch.renderStatus === '2d-only' ? completionStatus(branch) : manifest.status === 'provisional' ? '2D preview · 3D model not generated' : 'Saved story ready');
   } catch (e) {
     if (request === replayRequest && e.name !== 'AbortError') {
@@ -1213,14 +1448,24 @@ async function handleEvent(type, data, request) {
     renderAncestry(); renderBranches(); renderExplorationTree(true); status(data.reused ? 'Saved future reopened · no generation call' : completionStatus(result));
   }
 }
-async function streamRun(endpoint, body, request) {
+async function streamRun(endpoint, body, request, signalOverride, expansionReservation = null) {
   if (endpoint === '/api/run') startRootGenerationProgress();
   streamBusy = true; $('live-submit').disabled = true; renderBranches();
-  const signal = navigation.signal;
+  const signal = signalOverride || navigation.signal;
   try {
     const response = await fetch(endpoint, { method:'POST', signal, headers:{'content-type':'application/json','x-demo-access-code':$('access').value}, body:JSON.stringify(body) });
     if (request !== replayRequest) return;
-    if (!response.ok || !response.body) { let msg = `Unable to start (${response.status})`; try { const data = await response.json(); msg = data.error || msg; } catch {} throw new Error(msg); }
+    if (!response.ok || !response.body) {
+      let msg = `Unable to start (${response.status})`, data = {};
+      try { data = await response.json(); msg = data.error || msg; } catch {}
+      if (endpoint === '/api/continue') {
+        const detailResponse = { ok:false, headers:response.headers };
+        reconcileExpansion(detailResponse, data, body.runId, body.branchId, expansionReservation?.tracked || false);
+        if (data.code === 'session_expansion_limit') { msg = `This browser session reached its exploration limit (${expansionLimit}).`; status(msg); }
+      }
+      throw new Error(msg);
+    }
+    if (endpoint === '/api/continue') reconcileExpansion(response, {}, body.runId, body.branchId, expansionReservation?.tracked || false);
     const reader = response.body.getReader(), decoder = new TextDecoder(); let buffer = '';
     while (request === replayRequest) {
       const {value,done} = await reader.read();
@@ -1239,10 +1484,7 @@ async function streamRun(endpoint, body, request) {
     if (request === replayRequest) {
       if (rootGenerationActive) finishRootGenerationProgress('The exploration ended before it could be saved.');
       streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; renderBranches();
-      if (endpoint === '/api/run' && currentRunId) {
-        const selected = branchState.branches.find(branch => branch.id === selectedBranchId) || branchState.branches.find(branch => branch.id === branchState.heroId);
-        if (selected && branchState.phase === 'final') activateBranch(selected, false, { background: true });
-      }
+      // Consequence generation starts only after an explicit branch entry.
     }
   }
 }
@@ -1256,10 +1498,7 @@ async function runPrompt(prompt) {
 }
 $('prompt-form').addEventListener('submit', e => { e.preventDefault(); runPrompt($('prompt').value); });
  $('show-invitation').addEventListener('click', () => {
-  if (matchMedia('(max-width: 700px)').matches) {
-    document.body.classList.toggle('invitation-open');
-    $('show-invitation').setAttribute('aria-expanded', String(document.body.classList.contains('invitation-open')));
-  } else $('show-invitation').setAttribute('aria-expanded', 'true');
+  setInvitationOpen(!document.body.classList.contains('invitation-open'));
   $('prompt').focus({ preventScroll: true });
  });
 document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { voice.cancel(); $('prompt').value = b.dataset.prompt; if (b.dataset.run) loadRun(b.dataset.run); else $('prompt').focus(); }));
@@ -1403,7 +1642,7 @@ import('./visuals.js').then(async ({createGlobe,createModelViewer}) => {
   try { modelApi = createModelViewer($('model-view')); setView(activeView); }
   catch { modelApi = null; setView(activeView); }
   try {
-    globeApi = await createGlobe($('globe'), activateBranch);
+    globeApi = await createGlobe($('globe'), activateBranch, (branch, anchor) => showGlobeBranchPreview(branch, anchor));
     renderGeography();
     renderBranches();
     const visibleBranch = branchState.phase === 'replay' ? branchState.branches.at(-1) : branchState.branches.find(branch => branch.id === branchState.heroId);

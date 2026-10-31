@@ -59,7 +59,7 @@ test('validateStartupConfig and createConfiguredDemoServer support replay-only w
   await new Promise(resolve => replayInstance.server.listen(0, replayInstance.host, resolve));
   t.after(() => new Promise(resolve => replayInstance.server.close(resolve)));
   const replayUrl = `http://${replayInstance.host}:${replayInstance.server.address().port}`;
-  assert.deepEqual(await (await fetch(`${replayUrl}/health`)).json(), { status: 'ok', replayOnly: true, voiceEnabled: false });
+  assert.deepEqual(await (await fetch(`${replayUrl}/health`)).json(), { status: 'ok', replayOnly: true, voiceEnabled: false, expansionLimit:20, expansionUsed:0 });
 
   const liveInstance = createConfiguredDemoServer({
     outputRoot: root,
@@ -69,7 +69,7 @@ test('validateStartupConfig and createConfiguredDemoServer support replay-only w
   t.after(() => new Promise(resolve => liveInstance.server.close(resolve)));
   const liveUrl = `http://${liveInstance.host}:${liveInstance.server.address().port}`;
   const health = await (await fetch(`${liveUrl}/health`, { headers: { origin: liveUrl, 'sec-fetch-site': 'same-origin' } })).json();
-  assert.deepEqual(health, { status: 'ok', replayOnly: false, voiceEnabled: true, localReviewAccess: true });
+  assert.deepEqual(health, { status: 'ok', replayOnly: false, voiceEnabled: true, localReviewAccess: true, expansionLimit:20, expansionUsed:0 });
   assert.doesNotMatch(JSON.stringify(health), /fixture-key/);
 
   assert.throws(() => validateStartupConfig({ outputRoot: root, env: { DEMO_ACCESS_CODE: 'code-only', DEMO_REPLAY_ONLY: 'false' } }), /META_API_KEY is required/);

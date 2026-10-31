@@ -44,7 +44,9 @@ test('every real cached branch uses the same continuation runner and leaves cach
     assert.equal(manifest.hasModel, true, `${id} keeps its saved 3D model`);
     assert.equal(digest(Buffer.from(await (await fetch(`${base}/runs/${id}/model.glb`)).arrayBuffer())), before);
     for (const branch of saved.branches) {
-      const response = await fetch(`${base}/api/continue`, { method:'POST', headers:{'content-type':'application/json','x-demo-access-code':'test-code'}, body:JSON.stringify({runId:id, branchId:branch.id}) });
+      const health = await fetch(`${base}/health`);
+      const cookie = health.headers.get('set-cookie')?.split(';')[0];
+      const response = await fetch(`${base}/api/continue`, { method:'POST', headers:{'content-type':'application/json','x-demo-access-code':'test-code',cookie}, body:JSON.stringify({runId:id, branchId:branch.id}) });
       assert.equal(response.status, 200, `${id}/${branch.id}`);
       const events = await response.text();
       assert.match(events, /event: image/);

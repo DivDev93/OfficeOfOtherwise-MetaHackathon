@@ -16,6 +16,14 @@ test('causal connections use directed, dashed gentle arcs with reduced-motion su
   assert.match(source, /globe\.arcDashAnimateTime\(reducedMotion\.matches \? 0 : 2400\)/);
 });
 
+test('globe preview callback is wired to pointer and focus without using the selection callback', () => {
+  assert.match(source,/export async function createGlobe\(el, onBranchSelect = \(\) => \{\}, onBranchPreview = \(\) => \{\}\)/);
+  assert.match(source,/button\.addEventListener\('pointerenter',[\s\S]*?updatePreview\(\)/);
+  assert.match(source,/button\.addEventListener\('focus',[\s\S]*?updatePreview\(\)/);
+  assert.match(source,/onPreview\(pointerOver \|\| focused \? branch : null, button\)/);
+  assert.match(source,/makeBranchPin\(branch, selected => select\(selected, true\), onBranchPreview\)/);
+});
+
 test('causal arc lift follows great-circle distance with a small clearance and capped antipodal height', () => {
   const clearance = causalArcAltitude(45, 20, 45, 20);
   const oneKmAngle = greatCircleAngle(45, 20, 45 + (1 / 6371) * 180 / Math.PI, 20);

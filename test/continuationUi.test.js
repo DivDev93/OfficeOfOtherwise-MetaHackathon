@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import { continuationAction, causalEdges, createNavigationGuard, eventIdFromHash, runIdFromHash, replayLabel } from '../web/logic.js';
 import * as logic from '../web/logic.js';
 import * as geographyTexture from '../web/geographyTexture.js';
+import * as geographyLabels from '../web/geographyLabels.js';
+import * as savedPreviews from '../web/savedPreview.js';
 import { REGIONS, GEOGRAPHY_STYLES } from '../web/geographyRegions.js';
 
 const branch = (id, title, year = 500) => ({ id, title, year, summary: `${title} changes this world.`, place: { name: title, lat: 20, lon: year / 100 } });
@@ -64,15 +66,18 @@ function element() {
   const classes = new Set(), attributes = new Map(), listeners = new Map();
   return { children: [], value: '', hidden: false, textContent: '', dataset: {}, style: {}, classList: { add(...names) { names.forEach(name => classes.add(name)); }, remove(...names) { names.forEach(name => classes.delete(name)); }, contains(name) { return classes.has(name); }, toggle(name, enabled = !classes.has(name)) { enabled ? classes.add(name) : classes.delete(name); return enabled; } },
     append(...nodes) { this.children.push(...nodes); }, replaceChildren(...nodes) { this.children = nodes; }, add(node) { this.children.push(node); },
-    setAttribute(key, value) { attributes.set(key, value); }, getAttribute(key) { return attributes.get(key); }, addEventListener(type, callback) { listeners.set(type, callback); }, click() { return listeners.get('click')?.({target:this}); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; listeners.get('keydown')?.(event); return event; }, matches(selector) { return selector === ':popover-open' && !!this.popoverOpen; }, hidePopover() { this.popoverOpen = false; this.hidePopoverCalls = (this.hidePopoverCalls || 0) + 1; }, scrollIntoView() {}, focus() { this.focused = true; },
-    querySelector() { return this.copy ||= element(); }, querySelectorAll() { return this.children.filter(child => child.dataset?.branchId); }, removeAttribute(key) { attributes.delete(key); } };
+    setAttribute(key, value) { attributes.set(key, value); }, getAttribute(key) { return attributes.get(key); }, addEventListener(type, callback) { listeners.set(type, callback); }, click() { return listeners.get('click')?.({target:this}); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; listeners.get('keydown')?.(event); return event; }, matches(selector) { return selector === ':popover-open' && !!this.popoverOpen; }, hidePopover() { this.popoverOpen = false; this.hidePopoverCalls = (this.hidePopoverCalls || 0) + 1; }, scrollIntoView() {}, focus() { this.focused = true; listeners.get('focus')?.({target:this}); },
+    querySelector() { return this.copy ||= element(); }, querySelectorAll() { return this.children.filter(child => child.dataset?.branchId); }, removeAttribute(key) { attributes.delete(key); },
+    pointerenter() { listeners.get('pointerenter')?.({target:this}); }, pointerleave() { listeners.get('pointerleave')?.({target:this}); },
+    blur() { this.focused=false; listeners.get('blur')?.({target:this}); },
+    getBoundingClientRect() { return {left:80,top:100,right:180,bottom:140,width:100,height:40}; } };
 }
 const textContentDeep = node => `${node?.textContent || ''}${(node?.children || []).map(textContentDeep).join('')}`;
 const findNode = (node, predicate) => predicate(node) ? node : (node?.children || []).map(child => findNode(child, predicate)).find(Boolean) || null;
 function harness(fixtures, onPost = async () => { throw new Error('Unexpected generation'); }, replayOnly = false, initialHash = '', onArchive = () => Response.json({ runs: [] }), onHistory = () => Response.json({runs: []}), localReview = false, onScene = () => Response.json({status:'missing'}), onCutout = () => Response.json({status:'missing'}), scheduleTimer = setTimeout, cancelTimer = clearTimeout, onHead = null, onGet = null) {
   const nodes = new Map(), get = id => { if (!nodes.has(id)) { const node = element(); if (id === 'root-generation-status') { node.hidden = true; node.setAttribute('role','status'); node.setAttribute('aria-live','polite'); } nodes.set(id, node); } return nodes.get(id); };
   const documentListeners = new Map(), document = { getElementById:get, createElement:element, createTextNode:text => ({ textContent:text }), querySelector:get, querySelectorAll:() => [], body:element(), addEventListener(type, callback) { documentListeners.set(type, callback); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; documentListeners.get('keydown')?.(event); return event; } };
-  const windowListeners = new Map(), window = { addEventListener(type, callback) { const callbacks = windowListeners.get(type) || []; callbacks.push(callback); windowListeners.set(type, callbacks); }, dispatch(type) { for (const callback of windowListeners.get(type) || []) callback(); } };
+  const windowListeners = new Map(), window = { innerWidth:390, innerHeight:844, addEventListener(type, callback) { const callbacks = windowListeners.get(type) || []; callbacks.push(callback); windowListeners.set(type, callbacks); }, dispatch(type) { for (const callback of windowListeners.get(type) || []) callback(); } };
   const posts = [], gets = [], heads = [], storage = new Map(), location = { hash: initialHash, pathname: '/', search: '' };
   const fetch = async (url, options = {}) => {
     if (options.method === 'HEAD') { heads.push(url); if (onHead) return onHead(url); const parts = url.split('/'); return new Response('', { status: fixtures[parts[2]]?.assets?.includes(parts[3]) ? 200 : 404 }); }
@@ -81,7 +86,7 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     if (onGet) { const override = await onGet(url); if (override) return override; }
     if (url.startsWith('/api/event-scene?')) return onScene(url);
     if (url.startsWith('/api/event-cutout?')) return onCutout(url);
-    if (url === '/health') return Response.json({ status: 'ok', replayOnly, ...(localReview ? { localReviewAccess: true } : {}) });
+    if (url === '/health') return Response.json({ status: 'ok', replayOnly, expansionLimit:20, expansionUsed:0, ...(localReview ? { localReviewAccess: true } : {}) });
     if (url === '/runs') return onArchive();
     if (url === '/api/history') return onHistory();
     const match = url.match(/^\/runs\/([^/]+)(?:\/(.*))?$/);
@@ -89,7 +94,7 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     if (!fixture) return new Response('', { status: 404 });
     return Response.json(match[2] === 'branch.json' ? fixture.branch : match[2] === 'trace.json' ? { steps: [] } : fixture);
   };
-  const context = vm.createContext({ ...logic, ...geographyTexture, REGIONS, GEOGRAPHY_STYLES, console, fetch, AbortController, TextDecoder, Uint8Array, URLSearchParams, setTimeout:scheduleTimer, clearTimeout:cancelTimer,
+  const context = vm.createContext({ ...logic, ...geographyTexture, ...geographyLabels, ...savedPreviews, REGIONS, GEOGRAPHY_STYLES, console, fetch, AbortController, TextDecoder, Uint8Array, URLSearchParams, setTimeout:scheduleTimer, clearTimeout:cancelTimer,
     createStarMap(container, options) { context.starMap = { container, options, nodes: options.nodes, selectedId: options.selectedId, setData(data) { this.nodes = data.nodes; this.selectedId = data.selectedId; }, select(id) { this.options.onSelect(this.nodes.find(node => node.id === id) || id); }, destroy() {} }; return context.starMap; },
     createVoiceInput: () => ({ cancel() {}, setEnabled() {} }),
     document,
@@ -98,7 +103,7 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) }, Option: function(text, value) { return { text, value }; },
   });
   const source = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace("import('./visuals.js')", "Promise.reject(new Error('No renderer in fixture'))");
-  vm.runInContext(`${source}\n globalThis.ui = {loadRun,selectBranch,activateBranch,expandBranch,runPrompt,setView,setSurfaceMode,refreshHistory,toggleArchiveHistory, setGlobe:api=>{globeApi=api;renderGeography();}, setModelApi:api=>{modelApi=api;}, state:()=>({currentRunId,continuation,streamBusy,selectedContext,hasImage,activeView,surfaceGeography,surfaceMode,hasStory:document.body.classList.contains('has-story'),starMapNodes})};`, context);
+  vm.runInContext(`${source}\n globalThis.ui = {loadRun,selectBranch,activateBranch,selectStarMapNode,expandBranch,runPrompt,setView,setSurfaceMode,refreshHistory,toggleArchiveHistory, setGlobe:api=>{globeApi=api;renderGeography();}, setModelApi:api=>{modelApi=api;}, previewGlobe:(branch,anchor)=>showGlobeBranchPreview(branch,anchor), eventWorkFor:(runId,branchId)=>{const work=eventWork.get(eventKey(runId,branchId));return work?{...work}:null;}, state:()=>({currentRunId,continuation,streamBusy,selectedContext,hasImage,activeView,surfaceGeography,surfaceMode,hasStory:document.body.classList.contains('has-story'),starMapNodes,serverExpansionUsed,expansionLimit,enteredNodesCount:enteredNodes.size,pendingExpansionCount:pendingExpansionNodes.size,selectedBranchId,selectedWork:{...eventWork.get(eventKey(currentRunId,selectedBranchId))},activePreview:savedPreview.activePreview,previewHidden:savedPreview.element.hidden})};`, context);
   return { ui: context.ui, get, posts, gets, heads, storage, location, starMap: context.starMap, document, window, navigate(hash, ...events) { location.hash = hash; for (const event of events) window.dispatch(event); } };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -231,7 +236,7 @@ test('fresh Explore root can expand and a new root does not inherit earlier ance
   assert.ok([...app.storage.values()].every(value => !value.includes('fixture-only')));
 });
 
-test('fresh root completion explores the selected hero once and only prefetches immediate child scenes', async () => {
+test('fresh root completion waits for explicit event entry and does not generate preview scenes', async () => {
   const root = run('fresh-root', choice); root.assets = ['hero.png'];
   const childHero = branch('b', 'Ocean observatories', 600), childAlt = branch('c', 'Coastal observatories', 650);
   const child = run('child', childHero, {rootRunId:'fresh-root',parentRunId:'fresh-root',parentBranchId:'a',path:[{runId:'fresh-root',branchId:'a',...choice}]});
@@ -249,10 +254,12 @@ test('fresh root completion explores the selected hero once and only prefetches 
   }, false, '', undefined, undefined, true, async () => Response.json({status:'missing'}));
   await tick(); app.get('access').value = 'fixture';
   await app.ui.runPrompt('What if observatories spread?');
-  for (let i = 0; i < 60 && (!continuationRequests.length || !app.posts.some(post => post.url === '/api/event-scene')); i++) await tick();
-  for (let i = 0; i < 12; i++) await tick();
+  assert.deepEqual(continuationRequests, []);
+  assert.equal(app.posts.some(post => post.url === '/api/event-scene'), false);
+  app.ui.activateBranch(choice);
+  for (let i = 0; i < 24 && !continuationRequests.length; i++) await tick();
   assert.deepEqual(continuationRequests, [['fresh-root','a']]);
-  assert.deepEqual(app.posts.filter(post => post.url === '/api/event-scene').map(post => [post.body.runId,post.body.branchId]), [['child','c']]);
+  assert.equal(app.posts.some(post => post.url === '/api/event-scene'), false, 'scene previews never trigger generation');
   assert.equal(app.ui.state().currentRunId, 'fresh-root');
   assert.match(app.get('hero-title').textContent, /Open observatory/);
   assert.equal(app.starMap.selectedId, 'fresh-root::a', 'the newly explored event remains the selected root hero');
@@ -347,6 +354,31 @@ test('tree navigation selects the clicked descendant before activation and never
   assert.match(app.get('hero-title').textContent,/Coastal observatories/);
 });
 
+test('tree and globe hover or keyboard focus preview saved metadata without selecting or requesting anything', async () => {
+  const alternate=branch('alt','Mammoth steppe',-4500), root=run('preview-root',choice); root.branch.branches.push(alternate); root.assets=['hero.png'];
+  const app=harness({'preview-root':root},async()=>{throw new Error('Preview must never dispatch a model route');},false);
+  await tick(); await app.ui.loadRun('preview-root',{animate:false,autoConsequences:false});
+  for(let i=0;i<8;i++) await tick();
+  const node=findNode(app.get('exploration-tree-status'),item=>item?.className==='tree-event'&&item.dataset.branchId==='alt');
+  assert.ok(node);
+  const selectedBefore=app.ui.state().selectedBranchId;
+  const sceneChecksBefore=app.gets.filter(url=>url.startsWith('/api/event-scene?')).length;
+  node.pointerenter();
+  assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
+  assert.match(app.ui.state().activePreview.summary,/Mammoth steppe changes this world/);
+  assert.equal(app.ui.state().activePreview.sceneReference,null,'an unknown foreign scene is not inferred from the root hero');
+  assert.equal(app.ui.state().selectedBranchId,selectedBefore);
+  node.pointerleave(); assert.equal(app.ui.state().previewHidden,true);
+  node.focus(); assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
+  node.blur(); assert.equal(app.ui.state().previewHidden,true);
+  app.ui.previewGlobe(alternate,node);
+  assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
+  assert.equal(app.ui.state().selectedBranchId,selectedBefore);
+  app.ui.previewGlobe(null,node); assert.equal(app.ui.state().previewHidden,true);
+  assert.equal(app.posts.length,0,'preview surfaces never call generation APIs');
+  assert.equal(app.gets.filter(url=>url.startsWith('/api/event-scene?')).length,sceneChecksBefore,'previewing adds no scene lookup');
+});
+
 test('starmap hydrates read-only and explicit event selection preserves run-scoped identity and requests consequences', async () => {
   const root = run('root', choice, { children: [{ branchId: 'a', runId: 'child', status: 'complete' }] });
   root.assets = ['hero.png', 'model.glb'];
@@ -398,8 +430,8 @@ test('starmap hydrates read-only and explicit event selection preserves run-scop
   app.ui.activateBranch(alternate);
   for (let i = 0; i < 8; i++) await tick();
   const sceneReadyAlternate = app.starMap.nodes.find(node => node.runId === 'root' && node.branchId === 'alt');
-  assert.equal(sceneReadyAlternate.ready, true, 'a confirmed local scene enables selection even before consequences are ready');
-  assert.equal(sceneReadyAlternate.consequencesStatus, 'Needs live access');
+  assert.equal(sceneReadyAlternate.ready, false, 'missing saved scenes stay unavailable as previews');
+  assert.equal(sceneReadyAlternate.consequencesStatus, 'Not explored');
   assert.equal(app.posts.length, 0, 'scene lookup without access does not generate consequences');
   app.get('exploration-map-panel').popoverOpen = true;
   app.starMap.select(childAltEvent.id);
@@ -470,7 +502,8 @@ test('pending read-only scene checks do not occupy the user event-job workers', 
 });
 
 test('continuation scenes keep the atlas available after cutout/complete and retain a manually chosen view', async () => {
-  const root = run('root'), child = run('child', next, { rootRunId: 'root', parentRunId: 'root', parentBranchId: 'a', path: [{ runId: 'root', branchId: 'a', ...choice }] });
+  const alternate=branch('alt','Mammoth steppe',700), root = run('root'), child = run('child', next, { rootRunId: 'root', parentRunId: 'root', parentBranchId: 'a', path: [{ runId: 'root', branchId: 'a', ...choice }] });
+  root.branch.branches.push(alternate);
   child.assets = ['hero.png', 'cutout.png', 'model.glb'];
   let controller;
   const app = harness({ root, child }, async () => new Response(new ReadableStream({ start(stream) { controller = stream; } })));
@@ -491,7 +524,7 @@ test('continuation scenes keep the atlas available after cutout/complete and ret
   app.get('access').value = '';
   await app.ui.loadRun('root', { animate: false, autoConsequences:false });
   app.get('access').value = 'fixture-only';
-  const manual = app.ui.expandBranch(choice); await tick();
+  const manual = app.ui.expandBranch(alternate); await tick();
   send('cutout', { runId: 'child', status: 'ok' }); await tick();
   app.ui.setView('cutout', true);
   send('complete', { runId: 'child', branch: child.branch, continuation: child.continuation }); controller.close(); await manual;
@@ -558,7 +591,7 @@ test('local preview opens a continuation without exposing or storing an access c
   await app.ui.expandBranch(choice);
   for (let i = 0; i < 8; i++) await tick();
   assert.equal(app.posts.filter(post => post.url === '/api/continue').length,1, 'opening the child does not automatically advance its selected event');
-  assert.ok(app.posts.some(post => post.url === '/api/event-scene' && post.body.runId === 'local-child'),'the immediate child scene is warmed for its hover preview');
+  assert.equal(app.posts.some(post => post.url === '/api/event-scene'), false, 'opening a saved child never generates a preview scene');
   assert.equal(app.ui.state().currentRunId,'local-child');
   assert.equal(app.get('access').value,''); assert.equal(JSON.stringify([...app.storage.values()]).includes('secret-code'),false);
 });
@@ -599,7 +632,7 @@ test('reopening a run restores saved hero consequences in the visible tree witho
   assert.equal(app.posts.length, 0);
 });
 
-test('reopening a saved event prefetches only its immediate missing child scenes', async () => {
+test('reopening a saved event reads only saved previews and never generates child scenes', async () => {
   const root = run('root', choice); root.assets = ['hero.png'];
   const childHero = branch('b', 'Ocean observatories', 600), childAlt = branch('c', 'Coastal observatories', 650);
   const child = run('child', childHero, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}],children:[{branchId:'c',runId:'grandchild',status:'complete'}]});
@@ -614,7 +647,8 @@ test('reopening a saved event prefetches only its immediate missing child scenes
   await tick(); await app.ui.loadRun('root', {animate:false,autoConsequences:false});
   for (let i = 0; i < 24 && !app.posts.some(post => post.url === '/api/event-scene'); i++) await tick();
   for (let i = 0; i < 12; i++) await tick();
-  assert.deepEqual(app.posts.filter(post => post.url === '/api/event-scene').map(post => [post.body.runId,post.body.branchId]), [['child','c']]);
+  assert.equal(app.posts.some(post => post.url === '/api/event-scene'), false);
+  assert.ok(app.gets.some(url => url.startsWith('/api/event-scene?runId=child&branchId=c')), 'saved previews can be checked without generation');
   assert.equal(app.posts.some(post => post.url === '/api/continue'), false, 'scene warming does not generate another consequence level');
   assert.equal(app.ui.state().currentRunId, 'root');
   assert.match(app.get('hero-title').textContent, /Open observatory/);
@@ -657,7 +691,7 @@ test('opening a descendant keeps the complete saved tree rooted at the original 
   assert.equal(app.posts.length, 0);
 });
 
-test('opening a live run auto-explores its selected hero, while replay mode shows access status', async () => {
+test('opening a live run waits for explicit entry, while replay mode stays read-only', async () => {
   const root = run('root', choice), child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
   root.assets = ['hero.png'];
   const replay = harness({root}, undefined, true);
@@ -665,9 +699,9 @@ test('opening a live run auto-explores its selected hero, while replay mode show
   for (let i = 0; i < 8 && !replay.get('event-progress').textContent; i++) await tick();
   assert.match(replay.get('service-mode').textContent, /run locally with your own Meta API key/i);
   assert.match(replay.get('footer-service-mode').textContent, /run locally with your own Meta API key/i);
-  assert.match(textContentDeep(replay.get('exploration-tree-status').children[0]), /Run locally with Meta API key/);
-  assert.match(replay.get('event-progress').textContent, /running locally with your own Meta API key/i);
-  assert.doesNotMatch(replay.get('event-progress').textContent, /access code/i);
+  assert.match(textContentDeep(replay.get('exploration-tree-status').children[0]), /Not explored/);
+  assert.equal(replay.get('event-loading-indicator').hidden, true, 'replay does not show a generation spinner');
+  assert.match(replay.get('event-progress').textContent, /Not explored yet/i);
   assert.equal(replay.posts.length, 0);
   await replay.ui.expandBranch(choice);
   assert.match(replay.get('selected-branch-context').textContent, /running locally with your own Meta API key/i);
@@ -677,19 +711,21 @@ test('opening a live run auto-explores its selected hero, while replay mode show
     assert.equal(url, '/api/continue'); return complete(child);
   }, false, '', undefined, undefined, true);
   await tick(); await live.ui.loadRun('root', {animate:false});
-  for (let i = 0; i < 8 && !live.posts.some(post => post.url === '/api/continue'); i++) await tick();
+  assert.equal(live.posts.some(post => post.url === '/api/continue'), false, 'opening a live run does not expand automatically');
+  live.ui.activateBranch(choice);
+  for (let i = 0; i < 24 && !live.posts.some(post => post.url === '/api/continue'); i++) await tick();
   assert.deepEqual(live.posts.filter(post => post.url === '/api/continue').map(post => [post.body.runId,post.body.branchId]), [['root','a']], 'opening a live run explores only its selected hero');
   live.ui.activateBranch(choice);
   for (let i = 0; i < 24 && !live.posts.some(post => post.url === '/api/event-scene' && post.body.runId === 'child'); i++) await tick();
   assert.equal(live.posts.filter(post => post.url === '/api/continue').length, 1);
-  assert.ok(live.posts.some(post => post.url === '/api/event-scene' && post.body.runId === 'child'), 'the selected event’s immediate child scene is pre-generated');
+  assert.equal(live.posts.some(post => post.url === '/api/event-scene'), false, 'preview scenes remain saved-only');
   for (let i = 0; i < 8; i++) await tick();
   assert.match(textContentDeep(live.get('exploration-tree-status').children[0]), /Saved/);
   assert.equal(live.get('event-children').children.length, 1);
   assert.doesNotMatch(readFileSync(new URL('../web/index.html', import.meta.url), 'utf8'), /id="follow-selected"/);
 });
 
-test('event fragment restores exact selection across reload and back/forward without expanding the wrong hero', async () => {
+test('event fragment restores exact selection across reload without automatic expansion', async () => {
   const alternate = next;
   const root = run('root', choice);
   root.branch.branches.push(alternate);
@@ -703,23 +739,23 @@ test('event fragment restores exact selection across reload and back/forward wit
     return complete(body.branchId === 'b' ? alternateFuture : heroFuture);
   }, false, '#run=root&event=b', undefined, undefined, true);
   const continuationCalls = () => app.posts.filter(post => post.url === '/api/continue').map(post => [post.body.runId, post.body.branchId]);
-  for (let i = 0; i < 30 && !continuationCalls().length; i++) await tick();
+  for (let i = 0; i < 12; i++) await tick();
   assert.match(app.get('hero-title').textContent, /Ocean observatories/);
-  assert.deepEqual(continuationCalls(), [['root','b']], 'reload follows the exact event in the fragment, not the default hero');
+  assert.deepEqual(continuationCalls(), [], 'restoring an event selection does not generate until explicit entry');
   assert.equal(app.location.hash, '#run=root&event=b');
 
   app.navigate('#run=root', 'popstate', 'hashchange');
-  for (let i = 0; i < 30 && continuationCalls().length < 2; i++) await tick();
+  for (let i = 0; i < 12; i++) await tick();
   assert.match(app.get('hero-title').textContent, /Open observatory/);
-  assert.deepEqual(continuationCalls(), [['root','b'],['root','a']], 'plain run fragments retain the legacy default-hero behavior');
+  assert.deepEqual(continuationCalls(), [], 'plain run navigation also stays read-only');
 
   app.navigate('#run=root&event=b', 'popstate', 'hashchange');
   for (let i = 0; i < 30; i++) await tick();
   assert.match(app.get('hero-title').textContent, /Ocean observatories/);
-  assert.deepEqual(continuationCalls(), [['root','b'],['root','a']], 'back/forward restoration does not duplicate or redirect the saved event work');
+  assert.deepEqual(continuationCalls(), [], 'back/forward restoration never expands a node');
 });
 
-test('saved scene check paints the hash-selected event and clears its spinner without a second click', async () => {
+test('saved scene check paints the hash-selected event without automatic consequence generation', async () => {
   const alternate = next, root = run('root', choice);
   root.branch.branches.push(alternate); root.assets = ['hero.png'];
   const child = run('child', choice, {rootRunId:'root',parentRunId:'root',parentBranchId:'b',path:[{runId:'root',branchId:'b',...alternate}]});
@@ -740,7 +776,7 @@ test('saved scene check paints the hash-selected event and clears its spinner wi
   assert.equal(app.get('hero-image').src, sceneUrl, 'the saved scene is shown for the selected event');
   assert.equal(app.get('hero-image').hidden, false);
   assert.equal(app.get('scene-loading').hidden, true, 'the selected scene spinner clears when the saved image arrives');
-  assert.deepEqual(app.posts.filter(post => post.url === '/api/continue').map(post => [post.body.runId,post.body.branchId]), [['root','b']], 'restoration does not dispatch the default hero or sibling continuation');
+  assert.deepEqual(app.posts.filter(post => post.url === '/api/continue'), [], 'restoration is read-only');
 });
 
 test('a 3D tab choice during saved-asset checks survives their completion without generation calls', async () => {
@@ -833,11 +869,11 @@ test('an in-flight event updates its own tree state after selection changes', as
   const altItem = rootNode.children[1].children.find(item => item.children[0]?.dataset?.branchId === 'alt');
   assert.ok(altItem);
   assert.notEqual(altItem.dataset.state, 'queued');
-  assert.match(altItem.children[1].textContent, /Needs live access/);
+  assert.match(altItem.children[1].textContent, /Not explored/);
   assert.equal(app.posts.length, 0, 'stale queued work never dispatches generation');
 });
 
-test('continuation completion checks child scenes within the cap without expanding child continuations', async () => {
+test('continuation completion checks saved child previews without generating scenes or grandchildren', async () => {
   const root = run('root'); root.assets = ['hero.png'];
   const branches = ['c1', 'c2', 'c3', 'c4'].map((id, index) => branch(id, `Event ${id}`, -4500 - index));
   const child = run('child', branches[0], {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
@@ -868,18 +904,13 @@ test('continuation completion checks child scenes within the cap without expandi
   for (let i = 0; i < 8; i++) await tick();
   assert.equal(app.posts.length, 0, 'opening a run does not start a continuation');
   app.ui.activateBranch(choice);
-  for (let i = 0; i < 32 && pending.size < 3; i++) await tick();
-  assert.deepEqual([...pending.keys()].sort(), ['c1', 'c2', 'c3'], `child event scenes are generated with the shared three-slot cap: ${JSON.stringify({posts:app.posts,gets:app.gets})}`);
-  pending.get('c1')(Response.json({status:'complete',url:'/runs/child/event-c1.png'}));
-  for (let i = 0; i < 40 && !pending.has('c4'); i++) await tick();
-  assert.ok(pending.has('c4'), 'the fourth child scene starts when a worker slot frees');
-  for (const resolve of pending.values()) resolve(Response.json({status:'complete',url:'/runs/child/event-scene.png'}));
+  for (let i = 0; i < 40; i++) await tick();
   for (let i = 0; i < 16; i++) await tick();
   assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 1, 'only the explicitly expanded event generates consequences');
   assert.deepEqual(continuationChecks, [['root','a']]);
-  assert.deepEqual(scenePosts.sort(), ['c1','c2','c3','c4'], 'all immediate child scenes are pre-generated, with no descendant continuations');
+  assert.deepEqual(scenePosts, [], 'preview checks never generate scenes');
   assert.equal(app.ui.state().currentRunId, 'root', 'map selection keeps the parent world open while consequences are prepared');
-  assert.ok(sceneChecks.includes('c4'), 'the full child scene set was checked for hover previews');
+  assert.ok(['c1','c2','c3','c4'].every(id => sceneChecks.includes(id)), 'the immediate child set can be checked for saved previews');
 });
 
 test('opening a run leaves its branches untouched until clicked', async () => {
@@ -1077,7 +1108,7 @@ test('continuation retries only machine-marked pre-dispatch HTTP 429 responses w
   assert.equal(app.ui.state().currentRunId, 'root', 'background continuation completion keeps the current world open');
 });
 
-test('scene and SAM cutout retry proven pre-dispatch 429 refusals with the shared backoff', async () => {
+test('node entry does not trigger scene or cutout generation', async () => {
   const alternate = branch('alt','Mammoth steppe',-4500), root = run('root');
   root.branch.branches.push(alternate); root.assets = ['hero.png'];
   let scenePosts = 0, cutoutPosts = 0; const waits = [];
@@ -1095,12 +1126,10 @@ test('scene and SAM cutout retry proven pre-dispatch 429 refusals with the share
   }, false, '', undefined, undefined, false, () => Response.json({status:'missing'}), () => Response.json({status:'missing'}), (callback, delay) => { waits.push(delay); queueMicrotask(callback); return waits.length; });
   await tick(); await app.ui.loadRun('root',{animate:false}); app.get('access').value = 'fixture';
   app.ui.activateBranch(alternate);
-  for (let i=0;i<40 && scenePosts<2;i++) await tick();
-  app.get('cutout-view').click();
-  for (let i=0;i<40 && cutoutPosts<2;i++) await tick();
-  assert.equal(scenePosts,2); assert.equal(cutoutPosts,2);
-  assert.deepEqual(waits,[500,500], 'scene and cutout share the proven-refusal retry policy');
-  assert.equal(app.get('cutout-image').src,'/runs/root/event-alt-cutout.png');
+  for (let i=0;i<12;i++) await tick();
+  assert.equal(scenePosts,0, 'entering a node does not generate its scene');
+  assert.equal(cutoutPosts,0, 'changing views does not create a cutout');
+  assert.deepEqual(waits,[]);
 });
 
 test('capacity retry exhausts at a bounded two-minute budget and leaves the event retryable', async () => {
@@ -1150,7 +1179,7 @@ test('exhausted cutout capacity retry remains visible and manually retryable', a
   assert.match(app.get('event-progress').textContent,/select SAM cutout again to retry/i, JSON.stringify({view:app.get('view-status').textContent,progress:app.get('event-progress').textContent,title:app.get('hero-title').textContent}));
 });
 
-test('selection generates scene then consequences, retains parent, reuses results and ignores stale navigation', async () => {
+test('explicit selection checks only a saved scene, expands consequences once, and retains the parent', async () => {
   const alternate=branch('alt','Mammoth steppe',-4500), root=run('root'), other=run('other'); root.branch.branches.push(alternate); root.assets=['hero.png'];
   const future=run('child',next,{rootRunId:'root',parentRunId:'root',parentBranchId:'alt',path:[{runId:'root',branchId:'alt',...alternate}]}); future.assets=['hero.png'];
   const grandchild=run('grandchild',branch('g','Grandchild',700)); grandchild.branch.branches=[];
@@ -1168,23 +1197,23 @@ test('selection generates scene then consequences, retains parent, reuses result
   assert.match(app.get('event-progress').textContent, /Queued to find consequences/);
   assert.match(app.get('scene-loading-text').textContent, /Checking for a saved scene|Queued to check the scene/);
   app.ui.activateBranch(alternate); await tick();
-  for (let i=0;i<24 && !app.posts.some(post=>post.url==='/api/event-scene');i++) await tick();
-  assert.ok(app.posts.some(post=>post.url==='/api/event-scene') && app.posts.some(post=>post.url==='/api/continue'), 'saved-scene confirmation and consequence work both reach their routes');
-  assert.equal(app.get('scene-loading').hidden, false);
-  assert.match(app.get('scene-loading-text').textContent, /Creating this event/);
+  for (let i=0;i<24 && !app.posts.some(post=>post.url==='/api/continue');i++) await tick();
+  assert.ok(app.gets.some(url=>url.startsWith('/api/event-scene?runId=root&branchId=alt')) && app.posts.some(post=>post.url==='/api/continue'), 'entry checks for a saved scene and expands only consequences');
+  assert.equal(app.posts.some(post=>post.url==='/api/event-scene'), false, 'missing scenes are not generated by node entry');
+  assert.equal(app.get('scene-loading').hidden, true);
   release(); await tick(); await tick(); await tick();
   for(let i=0;i<20&&app.posts.filter(post=>post.url==='/api/continue').length<1;i++) await tick();
   assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1, 'the selected event gets one explicit continuation');
-  assert.equal(app.posts.filter(post=>post.url==='/api/event-scene').length,1, 'the child scene is read from its existing local event asset');
+  assert.equal(app.posts.filter(post=>post.url==='/api/event-scene').length,0, 'the child preview is not generated in the background');
   assert.equal(app.ui.state().currentRunId,'root'); assert.match(app.get('hero-title').textContent,/Mammoth steppe/);
-  assert.equal(app.get('hero-image').src,'/runs/root/event-alt.png'); assert.equal(app.get('event-children').children.length,1);
+  assert.equal(app.get('hero-image').src,'/runs/root/hero.png'); assert.equal(app.get('event-children').children.length,1);
   assert.equal(app.get('scene-loading').hidden, true);
   app.ui.activateBranch(alternate); await tick(); assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1, 'reselect reuses the saved continuation without a child continuation');
   await app.ui.loadRun('other',{animate:false}); assert.equal(app.ui.state().currentRunId,'other');
 });
 
 
-test('navigation during scene generation never paints a different event and reselect resumes consequences', async () => {
+test('navigation while entering a node keeps scene state scoped and reuses its consequence', async () => {
   const alternate=branch('alt','Mammoth steppe',-4500), root=run('root'); root.branch.branches.push(alternate); root.assets=['hero.png'];
   const future=run('child',next,{rootRunId:'root',parentRunId:'root',parentBranchId:'alt',path:[{runId:'root',branchId:'alt',...alternate}]});
   const grandchild=run('grandchild',branch('g','Grandchild',700)); grandchild.branch.branches=[];
@@ -1199,7 +1228,7 @@ test('navigation during scene generation never paints a different event and rese
   assert.equal(app.posts.filter(post => post.url === '/api/continue').length,1, 'only the explicitly requested continuation survives navigation away');
   app.ui.activateBranch(alternate); await tick(); await tick(); await tick();
   assert.equal(app.posts.filter(post => post.url === '/api/continue').length,1, 'reselect does not duplicate the saved continuation');
-  assert.equal(app.get('hero-image').src,'/runs/root/event-alt.png'); assert.equal(app.get('event-children').children.length,1);
+  assert.equal(app.get('hero-image').src,'/runs/root/hero.png'); assert.equal(app.get('event-children').children.length,1);
 });
 
 test('a completed explicit continuation remains in the saved tree after navigation away', async () => {
@@ -1264,4 +1293,224 @@ test('saved model loading indicator clears on success, error, retry and run swit
   assert.equal(app.get('model-loading-indicator').hidden, true);
   pending.callbacks.onLoad();
   assert.equal(app.get('model-loading-indicator').hidden, true);
+});
+
+test('unsupported v2 geography remains visible as bounded labels and assumptions without drawing it', async () => {
+  const root = run('geography-v2');
+  root.branch.branches[0].geography = { version:2, seaLevelMeters:-115, changes:[
+    { id:'sundaland-forest-plain', kind:'forest', intensity:.9, bounds:[95,-8,120,7], assumption:'A forest spreads across the exposed shelf.', uncertainty:'Vegetation varies locally.' },
+    { id:'coastal-mangrove-fringe', kind:'mangrove', intensity:.6, bounds:[100,-5,118,3], assumption:'Mangroves extend inland.', uncertainty:'Coastal extent is hypothetical.' },
+  ] };
+  const app = harness({[root.id]:root}, undefined, true);
+  await tick(); await app.ui.loadRun(root.id, {animate:false,autoConsequences:false});
+  const legend = textContentDeep(app.get('geography-legend'));
+  assert.match(legend, /Sundaland Forest Plain · Forest/);
+  assert.match(legend, /A forest spreads across the exposed shelf/);
+  assert.match(legend, /Vegetation varies locally/);
+  assert.match(legend, /sundaland-forest-plain/);
+  assert.match(legend, /95,-8,120,7/);
+  assert.match(app.get('geography-status').textContent, /unsupported by the atlas/i);
+  assert.equal(app.get('geography-scenario').disabled, true, 'unsupported v2 masks are listed but not drawn');
+});
+
+test('only explicit entry expands one node once; reentry reuses it and child nodes stay unopened', async () => {
+  const alternate = branch('alt', 'Mammoth steppe', -4500);
+  const root = run('entry-root'); root.branch.branches.push(alternate);
+  const child = run('entry-child', branch('grandchild-choice', 'River observatory', 700), {
+    rootRunId:'entry-root', parentRunId:'entry-root', parentBranchId:'a', path:[{runId:'entry-root',branchId:'a',...choice}],
+  });
+  const app = harness({[root.id]:root,[child.id]:child}, async url => {
+    assert.equal(url, '/api/continue');
+    return complete(child);
+  }, false, '', undefined, undefined, true);
+  await tick(); await app.ui.loadRun(root.id, {animate:false,autoConsequences:false});
+  app.ui.activateBranch(choice);
+  for (let i = 0; i < 16 && !app.posts.some(post => post.url === '/api/continue'); i++) await tick();
+  app.ui.activateBranch(choice);
+  for (let i = 0; i < 12; i++) await tick();
+  assert.deepEqual(app.posts.filter(post => post.url === '/api/continue').map(post => [post.body.runId,post.body.branchId]), [['entry-root','a']]);
+  assert.equal(app.ui.state().currentRunId, 'entry-root');
+  assert.equal(app.posts.some(post => post.body?.runId === 'entry-child'), false, 'the generated child is not expanded in the background');
+});
+
+test('an entered node gets three undated direct-child placeholders that disappear when saved children arrive', async () => {
+  const root = run('placeholder-root');
+  const sibling = branch('sibling', 'Another observatory', 700);
+  root.branch.branches.push(sibling);
+  const child = run('placeholder-child', branch('child-choice', 'River observatory', 730), {
+    rootRunId: root.id, parentRunId: root.id, parentBranchId: choice.id,
+    path: [{ runId: root.id, branchId: choice.id, ...choice }],
+  });
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const app = harness({ [root.id]: root, [child.id]: child }, async (url, options) => {
+    assert.equal(url, '/api/continue');
+    return pending;
+  }, false, '', undefined, undefined, true);
+  await tick();
+  await app.ui.loadRun(root.id, { animate:false, autoConsequences:false });
+  app.get('access').value = 'fixture';
+  app.ui.activateBranch(choice);
+  for (let index = 0; index < 16 && !app.posts.some(post => post.url === '/api/continue'); index++) await tick();
+
+  const parentId = `${encodeURIComponent(root.id)}::${encodeURIComponent(choice.id)}`;
+  const state = app.ui.state();
+  const placeholders = state.starMapNodes.filter(node => node.isExpansionPlaceholder);
+  assert.equal(placeholders.length, 3);
+  assert.equal(JSON.stringify(placeholders.map(node => node.id)), JSON.stringify([1, 2, 3].map(index => `placeholder:${parentId}:${index}`)));
+  assert.ok(placeholders.every(node => node.parentId === parentId && node.role === 'generation-placeholder'));
+  assert.ok(placeholders.every(node => node.selectable === false && node.mapState === 'generating'));
+  assert.ok(placeholders.every(node => node.year === null && node.yearCoordinate === null && node.yearLabel === 'Time unknown'));
+  assert.ok(placeholders.every(node => node.lineageIds.at(-1) === parentId));
+  assert.ok(state.starMapNodes.every(node => !node.otherTree), 'descendants under the same root question are not greyed as another tree');
+  const selectedId = parentId;
+  await app.ui.selectStarMapNode(placeholders[0].id);
+  assert.equal(app.ui.state().currentRunId, root.id, 'pending possibility cannot be entered');
+  assert.equal(app.ui.state().selectedBranchId, choice.id);
+  assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 1, 'placeholder selection cannot enqueue generation');
+  assert.equal(app.ui.state().starMapNodes.find(node => node.id === selectedId).mapState, 'generating');
+
+  release(complete(child));
+  for (let index = 0; index < 30 && app.ui.state().starMapNodes.some(node => node.isExpansionPlaceholder); index++) await tick();
+  assert.equal(app.ui.state().starMapNodes.some(node => node.isExpansionPlaceholder), false);
+  assert.ok(app.ui.state().starMapNodes.some(node => node.runId === child.id && node.branchId === 'child-choice'));
+  assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 1, 'saved direct children do not expand in the background');
+});
+
+test('health usage is authoritative when local per-node storage is empty', async () => {
+  const root=run('cap-health'); root.branch.branches.push(choice);
+  const app=harness({ 'cap-health':root },undefined,false,'',undefined,undefined,true,undefined,undefined,setTimeout,clearTimeout,null, url => url==='/health' ? Response.json({status:'ok',replayOnly:false,localReviewAccess:true,expansionLimit:20,expansionUsed:20}) : null);
+  await tick(); await app.ui.loadRun('cap-health',{animate:false,autoConsequences:false});
+  app.get('access').value='fixture'; app.ui.activateBranch(choice); for(let i=0;i<5;i++) await tick();
+  assert.equal(app.ui.state().serverExpansionUsed,20);
+  assert.equal(app.ui.state().enteredNodesCount,0,'server cap usage is separate from browser-tab node dedupe');
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0);
+  assert.match(app.get('status').textContent,/reached its exploration limit \(20\)/i);
+});
+
+test('server cap response reconciles usage and blocks a second node without a spinner', async () => {
+  const root=run('cap-response'); root.branch.branches.push(choice,next);
+  const app=harness({ 'cap-response':root },async url=>Response.json({error:'This browser session reached its exploration limit.',code:'session_expansion_limit',used:20,limit:20},{status:429}),false,'',undefined,undefined,true,undefined,undefined,setTimeout,clearTimeout,null,url=>url==='/health'?Response.json({status:'ok',replayOnly:false,localReviewAccess:true,expansionLimit:20,expansionUsed:19}):null);
+  await tick(); await app.ui.loadRun('cap-response',{animate:false,autoConsequences:false}); app.get('access').value='fixture';
+  app.ui.activateBranch(choice); for(let i=0;i<8;i++) await tick();
+  assert.equal(app.ui.state().serverExpansionUsed,20);
+  assert.equal(app.ui.state().expansionLimit,20);
+  assert.match(app.get('event-progress').textContent,/reached its exploration limit \(20\)/i);
+  assert.equal(app.get('view-loading-indicator').hidden,true);
+  app.ui.activateBranch(next); for(let i=0;i<5;i++) await tick();
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'the authoritative cap blocks another dispatch');
+  assert.equal(app.ui.state().enteredNodesCount,0,'a server refusal does not poison per-node retry dedupe');
+});
+
+test('a queued entry cancelled before dispatch does not consume local expansion capacity', async () => {
+  const branches=[choice,next,branch('queued-3','Queued third',-300),branch('queued-4','Queued fourth',-200),branch('queued-5','Queued fifth',-100)];
+  const root=run('queued-abort'), other=run('queued-abort-target'); root.branch.branches.push(...branches);
+  const app=harness({'queued-abort':root,'queued-abort-target':other},async()=>{throw new Error('No request should dispatch');},false);
+  await tick(); await app.ui.loadRun('queued-abort',{animate:false,autoConsequences:false}); app.get('access').value='fixture';
+  for(const item of branches) app.ui.activateBranch(item);
+  app.ui.loadRun('queued-abort-target',{animate:false,autoConsequences:false});
+  for(let i=0;i<12;i++) await tick();
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0);
+  assert.equal(app.ui.state().enteredNodesCount,0);
+  assert.equal(app.ui.state().pendingExpansionCount,0);
+});
+
+test('scene retry remains available after saved children complete and cannot re-expand the event', async () => {
+  const alternate=branch('alt','Mammoth steppe',-4500), root=run('scene-retry-root'); root.branch.branches.push(alternate); root.assets=['hero.png'];
+  const child=run('scene-retry-child',branch('c','River observatory',-4400));
+  let sceneAttempts=0, sceneChecks=0;
+  const app=harness({ 'scene-retry-root':root,'scene-retry-child':child },async url=>{
+    if(url==='/api/event-scene') { sceneAttempts++; return sceneAttempts===1
+      ? Response.json({error:'Scene service unavailable'},{status:503})
+      : Response.json({status:'complete',url:'/runs/scene-retry-root/event-alt.png'}); }
+    assert.equal(url,'/api/continue'); return complete(child);
+  },false,'',undefined,undefined,true,()=>++sceneChecks<3?Response.json({error:'Scene service unavailable'},{status:503}):Response.json({status:'missing'}));
+  await tick(); await app.ui.loadRun('scene-retry-root',{animate:false,autoConsequences:false}); app.get('access').value='fixture';
+  app.ui.activateBranch(alternate);
+  for(let i=0;i<24 && app.get('event-retry').hidden;i++) await tick();
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1);
+  assert.equal(app.get('event-children').children.length,1,'the selected event has saved consequences');
+  assert.equal(app.get('event-retry').textContent,'Retry scene',JSON.stringify(app.ui.state().selectedWork));
+  assert.match(app.get('event-progress').textContent,/Could not check this event’s scene/);
+  await app.get('event-retry').click();
+  for(let i=0;i<24 && sceneAttempts<2;i++) await tick();
+  for(let i=0;i<12;i++) await tick();
+  assert.equal(sceneAttempts,1,'the explicit retry remains scoped to saved scene availability');
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'scene retry and reentry never expand saved children again');
+  assert.equal(app.get('event-children').children.length,1);
+  app.ui.activateBranch(alternate); for(let i=0;i<8;i++) await tick();
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'re-entering the completed node does not submit a duplicate continuation');
+});
+
+test('leaving an entered node aborts its in-flight continuation request', async () => {
+  const root = run('abort-root'), nextRun = run('abort-target');
+  let requestSignal;
+  const app = harness({[root.id]:root,[nextRun.id]:nextRun}, async (url, options) => {
+    assert.equal(url, '/api/continue'); requestSignal = options.signal;
+    return new Promise(() => {});
+  }, false, '', undefined, undefined, true);
+  await tick(); await app.ui.loadRun(root.id, {animate:false,autoConsequences:false});
+  app.ui.activateBranch(choice);
+  for (let i = 0; i < 12 && !requestSignal; i++) await tick();
+  assert.ok(requestSignal, 'explicit entry starts a continuation');
+  assert.equal(app.ui.state().starMapNodes.filter(node => node.isExpansionPlaceholder).length, 3);
+  const navigation = app.ui.loadRun(nextRun.id, {animate:false,autoConsequences:false});
+  assert.equal(app.ui.state().starMapNodes.some(node => node.isExpansionPlaceholder), false, 'aborting navigation removes pending clouds immediately while the saved graph is loading');
+  await navigation;
+  assert.equal(requestSignal.aborted, true, 'navigation aborts generation for the node being left');
+});
+
+test('clicking a selected saved 1824 event after its scene check dispatches one continuation', async () => {
+  const selected = branch('b1', 'Doggerland Reed Paper Transforms Publishing', 1824);
+  const root = run('selected-1824', branch('hero', 'Saved opening event', 1735));
+  root.branch.branches.push(selected);
+  root.assets = ['hero.png'];
+  const child = run('selected-1824-child', branch('later-paper', 'Later paper workshops', 1900), {
+    rootRunId:root.id, parentRunId:root.id, parentBranchId:selected.id,
+    path:[{runId:root.id,branchId:selected.id,...selected}],
+  });
+  const app = harness({[root.id]:root,[child.id]:child}, async url => {
+    assert.equal(url, '/api/continue');
+    return complete(child);
+  }, false, '', undefined, undefined, true, () => Response.json({status:'complete',url:'/event-scenes/saved-1824.png'}));
+  await tick();
+  await app.ui.loadRun(root.id, {animate:false,autoConsequences:false});
+  for (let index=0; index<20 && !app.ui.eventWorkFor?.(root.id,selected.id)?.sceneCheckDone; index++) await tick();
+  const nodeId = `${encodeURIComponent(root.id)}::${encodeURIComponent(selected.id)}`;
+  const eventNode = app.starMap.nodes.find(node => node.id === nodeId);
+  assert.ok(eventNode, 'the exact saved event is present in the rendered map');
+  assert.equal(eventNode.mapState, 'saved-unexplored');
+  assert.equal(app.ui.eventWorkFor(root.id, selected.id).sceneCheckDone, true, 'the read-only scene check finished before entry');
+  assert.equal(app.ui.eventWorkFor(root.id, selected.id).interrupted, true, 'the completed scene lookup leaves no active work');
+
+  app.starMap.select(nodeId);
+  for (let index=0; index<20 && !app.posts.some(post=>post.url==='/api/continue'); index++) await tick();
+  assert.deepEqual(app.posts.filter(post=>post.url==='/api/continue').map(post=>[post.body.runId,post.body.branchId]), [[root.id,'b1']]);
+  for (let index=0; index<16; index++) await tick();
+  app.starMap.select(nodeId);
+  for (let index=0; index<10; index++) await tick();
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'re-entry reuses the saved children without a duplicate continuation');
+});
+
+test('desktop story mode collapses New exploration and keeps voice disclosure tied to it', async () => {
+  const root=run('desktop-invitation',choice);
+  const app=harness({[root.id]:root},undefined,false,'',undefined,undefined,false,undefined,undefined,setTimeout,clearTimeout,null,url=>url==='/health'
+    ? Response.json({status:'ok',replayOnly:false,localReviewAccess:true,voiceEnabled:true,expansionLimit:20,expansionUsed:0})
+    : null);
+  await tick();
+  await app.ui.loadRun(root.id,{animate:false,autoConsequences:false});
+  const button=app.get('show-invitation'), voiceDisclosure=app.get('voice-disclosure');
+  assert.equal(app.document.body.classList.contains('has-story'),true);
+  assert.equal(app.document.body.classList.contains('invitation-open'),false,'story load closes invitation on desktop too');
+  assert.equal(button.getAttribute('aria-expanded'),'false');
+  assert.equal(voiceDisclosure.open,false,'voice controls stay collapsed while invitation is closed');
+  assert.match(readFileSync(new URL('../web/style.css',import.meta.url),'utf8'),/\.has-story:not\(\.invitation-open\) \.exploration-rail #invitation\s*\{display:none\}/,'desktop CSS hides the invitation while a story is open');
+  button.click();
+  assert.equal(app.document.body.classList.contains('invitation-open'),true);
+  assert.equal(button.getAttribute('aria-expanded'),'true');
+  assert.equal(voiceDisclosure.open,true,'opening the invitation expands available voice controls');
+  button.click();
+  assert.equal(app.document.body.classList.contains('invitation-open'),false);
+  assert.equal(button.getAttribute('aria-expanded'),'false');
+  assert.equal(voiceDisclosure.open,false);
 });

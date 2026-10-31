@@ -14,10 +14,12 @@ import { keywordCheck } from '../src/guardrails/topicPolicy.js';
 import { geographyText } from '../web/geography.js';
 import { SpendCapError } from '../src/lib/metaClient.js';
 import { configuredDailyCap, configuredRateLimit, validateStartupConfig } from '../src/demo/budget.js';
+import { configuredExpansionLimit, createExpansionBudget } from '../src/demo/expansionBudget.js';
 
 const assets = new Set(['branch.json', 'trace.json', 'hero.png', 'mask.png', 'cutout.png', 'model.glb', 'model.meshopt.glb']);
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.glb': 'model/gltf-binary', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
 const safeId = s => typeof s === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(s);
+const expansionCookieId = req => /(?:^|;\s*)otherwise_session=([a-f0-9-]{36})(?:;|$)/i.exec(req.headers.cookie ?? '')?.[1] ?? null;
 const TWO_D_ONLY_REASON = 'SAM 3.1 returned no mask; cutout and 3D model were not generated';
 
 function renderMetadata(branch) {
@@ -60,8 +62,10 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
   let voiceBusy = false, voiceRequests = [];
   const voiceEnabled = env.DEMO_VOICE_ENABLED === 'true' && typeof env.DEMO_ACCESS_CODE === 'string' && env.DEMO_ACCESS_CODE.length > 0;
   const requests = new Map();
+  const expansionLimit = configuredExpansionLimit(env);
   const liveRoots = new Map();
   const root = resolve(webDir), runsRoot = resolve(runsDir), liveRoot = resolve(liveRunsDir);
+  const expansionBudget = createExpansionBudget(expansionLimit, { filePath: join(liveRoot, '.expansion-sessions.json') });
   const store = createContinuationStore(liveRoot, now);
   const scenes = createEventSceneStore(liveRoot);
   const cutouts = createEventCutoutStore(liveRoot);
@@ -265,9 +269,15 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         return json(res, 200, { runs: runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) });
       }
       if ((req.method === 'GET' || req.method === 'HEAD') && path === '/health') {
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+        const cookieId = expansionCookieId(req);
+        const sessionId = expansionBudget.known(cookieId) ? cookieId : expansionBudget.issue();
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        if (!expansionBudget.known(cookieId)) res.setHeader('Set-Cookie', `otherwise_session=${sessionId}; Path=/; HttpOnly; SameSite=Strict`);
+        res.writeHead(200);
         const replayOnly = env.DEMO_REPLAY_ONLY === 'true' || typeof env.DEMO_ACCESS_CODE !== 'string' || env.DEMO_ACCESS_CODE.length === 0;
-        return res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ status: 'ok', replayOnly, voiceEnabled, ...(localBrowserAccess(req) ? { localReviewAccess: true } : {}) }));
+        return res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ status: 'ok', replayOnly, voiceEnabled, expansionLimit, expansionUsed: expansionBudget.usage(sessionId), ...(localBrowserAccess(req) ? { localReviewAccess: true } : {}) }));
       }
       if ((req.method === 'GET' || req.method === 'HEAD') && path === '/runs') return json(res, 200, { runs: await listRuns() });
       if ((req.method === 'GET' || req.method === 'HEAD') && path.startsWith('/event-scenes/')) {
@@ -562,7 +572,17 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         t = now(); previous = (requests.get(ip) ?? []).filter(n => t - n < rateWindowMs);
         if (previous.length >= rateLimit) return json(res, 429, { status: 'retryable', error: 'Rate limit reached. Try replay mode.' });
         if (!acquireJob()) return json(res, 429, { status: 'retryable', error: 'A live run is already in progress. Try replay mode.' });
+        let expansionUsed = null;
         try {
+          if (continuing) {
+            const sessionId = expansionCookieId(req);
+            const reservation = expansionBudget.reserve(sessionId, `${input.runId}/${input.branchId}`);
+            if (!reservation.allowed) {
+              const status = reservation.reason === 'invalid' ? 400 : 429;
+              return json(res, status, { error: reservation.reason === 'invalid' ? 'A valid browser session is required.' : 'This browser session reached its exploration limit.', code: reservation.reason === 'invalid' ? 'invalid_expansion_session' : 'session_expansion_limit', used: reservation.used ?? 0, limit: expansionLimit });
+            }
+            expansionUsed = reservation.used;
+          }
           if (continuing) {
             edge = store.edge(input.runId, input.branchId);
             if (edge) {
@@ -588,7 +608,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           }
           const reservedRunId = edge?.runId ?? randomUUID();
           store.save({ id: reservedRunId, status: 'in-progress', rootDivergence: divergence, ...(continuation ? { continuation } : {}) });
-          res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Content-Type-Options': 'nosniff' });
+          res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Content-Type-Options': 'nosniff', ...(expansionUsed === null ? {} : { 'X-Expansion-Used': String(expansionUsed) }) });
           res.flushHeaders();
           const controller = new AbortController();
           res.on('close', () => { if (!res.writableEnded) controller.abort(); });

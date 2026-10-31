@@ -75,7 +75,7 @@ export async function runHarness(options) {
     const text = [branch.divergence ?? '', ...(branch.branches ?? []).flatMap(b => [b.title ?? '', b.summary ?? '', b.scene ?? '', b.causalLink ?? '', b.place?.name ?? '', geographyText(b.geography)]), branch.continuation ? JSON.stringify(normalizeContinuation(branch.continuation)) : '', branch.hero.imagePrompt, branch.hero.subject, subjectOverride ?? ''].join('\n');
     const callStart = apiCalls.length, start = performance.now(), before = runSpent();
     let gate;
-    try { throwIfAborted(); gate = await policy.checkPrompt(text); }
+    try { throwIfAborted(); gate = await policy.checkPrompt(text, { signal }); }
     catch (error) {
       trace.push(...apiCalls.slice(callStart), { step: 'policy:reuse', model: 'policy', ms: Math.round(performance.now() - start), costUsd: 0, summary: true, error: error.message });
       persistTrace();
@@ -94,7 +94,7 @@ export async function runHarness(options) {
   let before = runSpent();
   let generated;
   try {
-    generated = await image.generate({ prompt: branch.hero.imagePrompt, size: '1024x1024' });
+    generated = await image.generate({ prompt: branch.hero.imagePrompt, size: '1024x1024', signal });
   } catch (error) {
     if (error.rawResponse !== undefined) writeFileSync(join(directory, 'image-response.json'), JSON.stringify(error.rawResponse, null, 2));
     trace.push({ step: 'image', model: process.env.META_IMAGE_MODEL ?? 'muse-image-1.0', ms: Math.round(performance.now() - start), costUsd: runSpent() - before, error: error.message });
@@ -115,7 +115,7 @@ export async function runHarness(options) {
   before = runSpent();
   try {
     throwIfAborted();
-    segmented = await sam.segment({ image: generated.buffer, mime: generated.mime, prompt: subjectOverride?.trim() ?? branch.hero.subject });
+    segmented = await sam.segment({ image: generated.buffer, mime: generated.mime, prompt: subjectOverride?.trim() ?? branch.hero.subject, signal });
   } catch (error) {
     appendSam(error);
     if (!error.trace?.length) trace.push({ step: 'segment', model: process.env.META_SEGMENT_MODEL ?? 'sam-3.1', ms: Math.round(performance.now() - start), costUsd: runSpent() - before, error: error.message });

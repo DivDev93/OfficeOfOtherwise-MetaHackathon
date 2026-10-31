@@ -23,12 +23,15 @@
         <form id="prompt-form">
           <label for="prompt">YOUR POINT OF DIVERGENCE</label>
           <div class="input-row"><textarea id="prompt" rows="2" required maxlength="500" placeholder="What if the Sahara had stayed green?" autocomplete="off"></textarea><button id="live-submit" class="primary" type="submit" disabled>Explore <span aria-hidden="true">↗</span></button></div>
+          <details id="voice-disclosure" class="voice-disclosure" hidden>
+            <summary>Voice input</summary>
           <div id="voice-controls" class="voice-controls" hidden role="group" aria-label="Speak your what-if">
             <span>Speak your what-if</span>
             <div class="voice-actions"><button id="voice-record" class="outline" type="button">Record</button><button id="voice-stop" class="outline" type="button" hidden>Stop</button><button id="voice-cancel" class="outline" type="button" hidden>Cancel</button></div>
             <small id="voice-help">Up to 30 seconds. Audio is sent to Meta for transcription when you stop. Review and edit the question before exploring.</small>
             <small id="voice-status" role="status" aria-live="polite"></small>
           </div>
+          </details>
           <details id="live-access" hidden><summary>Access code</summary><label for="access">Demo access code</label><input id="access" type="password" autocomplete="off" placeholder="Required for voice or live generation"><small>Without a code, select a cached story below.</small></details>
         </form>
         <details class="starter-block"><summary>Starting questions</summary><div class="chips starter-rows" aria-label="Suggested questions">
@@ -59,11 +62,11 @@
     <section id="exploration-map-panel" class="exploration-map-panel" popover="manual" aria-labelledby="exploration-map-title">
       <div class="exploration-map-shell">
         <header class="exploration-map-heading">
-          <div><p class="eyebrow">POSSIBLE PATHS</p><h2 id="exploration-map-title">Exploration map</h2><p class="exploration-map-help">Select a node to open that possibility. Left-drag to orbit; right-drag or Shift-drag to pan; scroll to zoom. Use the arrow keys to orbit, or Shift + arrow keys to pan.</p></div>
+          <div><p class="eyebrow">POSSIBLE PATHS</p><h2 id="exploration-map-title">Exploration map</h2><p class="exploration-map-help">The map defaults to a flat timeline, with older events on the left and later events on the right. Use Flat or Orbit to change the layout. In Orbit mode, drag or use the arrow keys to turn, Shift-drag to pan, + / − to zoom, and Home to reset. Hover to preview; click or press Enter to open a story node. Press Escape to dismiss a preview or close the map.</p></div>
           <button id="close-exploration-map" class="map-close-action" type="button" popovertarget="exploration-map-panel" popovertargetaction="hide" aria-label="Close exploration map"><span aria-hidden="true">×</span><span class="map-close-label">Close</span></button>
         </header>
         <div id="starmap" class="starmap-host" role="region" aria-label="Spatial map of exploration paths" aria-describedby="exploration-map-instructions"></div>
-        <p id="exploration-map-instructions" class="visually-hidden">Use the exploration tree list to navigate if the spatial map is unavailable. In the map, select a node to open a possibility, left-drag to orbit, right-drag or hold Shift while dragging to pan, and scroll to zoom. Arrow keys orbit; hold Shift with the arrow keys to pan.</p>
+        <p id="exploration-map-instructions" class="visually-hidden">The map defaults to a flat left-to-right timeline from older to later events. Use the Flat or Orbit buttons to change the layout. In Orbit mode, drag or use the arrow keys to turn, hold Shift while dragging to pan, press + or minus to zoom, and Home to reset the view. Hover over a node to preview it without opening the story. Click a node or focus it and press Enter to open its story. Press Escape to dismiss the preview or close the map. Use the exploration tree list to navigate if the map is unavailable.</p>
         <div class="exploration-map-footer"><span>Selection stays linked to the story and globe.</span><span>Press Escape to close</span></div>
       </div>
     </section>
@@ -99,6 +102,6 @@
   </main>
   <dialog id="scene-lightbox" class="scene-lightbox" aria-label="Enlarged scene image"><button id="scene-lightbox-close" class="outline" type="button" aria-label="Close enlarged image">Close <span aria-hidden="true">×</span></button><img id="scene-lightbox-image" alt=""></dialog>
   <footer><span>OFFICE OF OTHERWISE</span><span id="footer-service-mode">Saved stories · run locally with your own Meta API key for fresh exploration</span></footer>
-  <script type="module" src="/app.js?v=event-preview-2"></script>
+  <script type="module" src="/app.js?v=saved-preview-surfaces-1"></script>
 </body>
 </html>

@@ -88,13 +88,14 @@ export function parseVerdict(text) {
 // worst case is still under a cent per check.
 export function createModelClassifier(client, { model = 'muse-spark-1.3', maxOutputTokens = 2500, onResponse, categories = ALL_CATEGORIES } = {}) {
   const instructions = classifierInstructions(categories);
-  const classify = async function classify(text) {
+  const classify = async function classify(text, { signal } = {}) {
     const { text: out, response } = await client.respond({
       model,
       instructions,
       input: `<text>${text}</text>`,
       maxOutputTokens,
       label: 'topic-policy',
+      signal,
     });
     onResponse?.(response, out);
     return parseVerdict(out);
@@ -113,11 +114,11 @@ export function createModelClassifier(client, { model = 'muse-spark-1.3', maxOut
  */
 export function createTopicPolicy({ classify, classifyPrompt = classify, classifyBranches = classify, categories = ALL_CATEGORIES } = {}) {
   const off = categories.length === 0;
-  async function check(text, classifier) {
+  async function check(text, classifier, options) {
     if (off) return { allowed: true, layer: 'off' };
     const kw = keywordCheck(text, categories);
     if (!kw.allowed || !classifier) return kw;
-    const v = await classifier(text);
+    const v = await classifier(text, options);
     if (!v) return { allowed: false, layer: 'model', model: classifier.model, category: 'unverifiable', reason: 'classifier returned no usable verdict', reframe: reframeFor('unverifiable') };
     if (v.verdict === 'block') {
       const category = v.category ?? 'other';
@@ -127,11 +128,11 @@ export function createTopicPolicy({ classify, classifyPrompt = classify, classif
   }
 
   /** Check the user's what-if prompt before any generation is spent. */
-  const checkPrompt = prompt => check(prompt, classifyPrompt);
+  const checkPrompt = (prompt, options) => check(prompt, classifyPrompt, options);
 
   /** Check proposed branches. Returns { kept, rejected }. Keyword layer is free; model layer runs only on survivors. */
-  async function checkBranches(branches) {
-    const results = await Promise.all(branches.map(b => check([b.title, b.summary, b.scene, b.causalLink, b.place?.name, geographyText(b.geography)].filter(v => typeof v === 'string').join('\n'), classifyBranches)));
+  async function checkBranches(branches, options) {
+    const results = await Promise.all(branches.map(b => check([b.title, b.summary, b.scene, b.causalLink, b.place?.name, geographyText(b.geography)].filter(v => typeof v === 'string').join('\n'), classifyBranches, options)));
     const kept = [], rejected = [];
     branches.forEach((branch, i) => (results[i].allowed ? kept : rejected).push(results[i].allowed ? branch : { branch, ...results[i] }));
     return { kept, rejected };

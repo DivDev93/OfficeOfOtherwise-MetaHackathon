@@ -12,6 +12,8 @@ gcp-*.json
 credentials*.json
 # generated outputs (cached demo assets live in Supabase / GCS, not git)
 out/
+# Runtime browser-session quota ledger for the public replay fixture.
+demo/replay-history/.expansion-sessions.json
 *.glb
 !demo/runs/**/model.glb
 !demo/runs/**/model.meshopt.glb
