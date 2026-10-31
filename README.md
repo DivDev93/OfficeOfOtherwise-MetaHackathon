@@ -6,11 +6,11 @@ Office of Otherwise is a counterfactual worldbuilding workbench for writers and 
 
 Built for the **Meta Global AI Developer Hackathon** (October 26–November 4, 2026), **Startups Track**, theme **Build for Your World**. Divakar Dev is the sole contributor and startup representative.
 
-## Public demo
+## Judge access
 
-**Judge replay demo:** [Open Office of Otherwise](https://office-otherwise-875096283797.northamerica-northeast2.run.app) to inspect the saved worlds in replay-only mode, without credentials or model spend.
+Judges can clone this public repository and run its saved replay locally without credentials or model spend. For fresh Meta functionality, supply your own server-side Meta Model API key locally. The [v2 saved-result walkthrough video](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/releases/download/hackathon-submission-2026-10-31/office-of-otherwise-submission-1080p-v2.mp4) is available as a GitHub release asset under tag `hackathon-submission-2026-10-31`. No hosted app is part of judge access.
 
-The final submission release is integrated through one PR from `codex/meta-submission-release` to `main`, as an exception to the normal `develop` → `main` flow. PR #7 remains open, draft, and unmerged; `develop` and its parked pilot work remain intact. The v2 video is published as the GitHub release asset [`office-of-otherwise-submission-1080p-v2.mp4`](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/releases/download/hackathon-submission-2026-10-31/office-of-otherwise-submission-1080p-v2.mp4) under tag `hackathon-submission-2026-10-31`.
+The source documentation describes local judge access; the video tag and its earlier capture provenance remain unchanged and distinct from this corrective source snapshot. PR #7 remains open, draft, and unmerged; `develop` and its parked pilot source remain intact. The hackathon entry is not submitted here.
 
 ## Saved replay examples
 
@@ -106,7 +106,7 @@ PNG encoding uses Node's built-in `zlib`; decoding uses MIT-licensed `pngjs`. SA
 
 Hackathon work begins with functional commit `ba7110f` (**2026-10-26 13:38:22 -04:00 EDT**, after the noon kickoff; `53a83c0` is a pre-kickoff scaffold) and includes Meta Model API providers and the shared spend ledger, topic guardrails, Wonder branching and continuation agents, event scene and cutout runners, voice transcription, scenario geography masks and the Ram Setu regional inset, the interactive exploration tree and spatial starmap, the 3D globe and GLB viewer, and provenance display. The preexisting private Tattva/Chronos 3D infrastructure is excluded, as described above. See [docs/HACKATHON.md](docs/HACKATHON.md), [docs/SUBMISSION.md](docs/SUBMISSION.md), and [docs/CONTINUATION.md](docs/CONTINUATION.md).
 
-The final release came through one integration PR from `codex/meta-submission-release` to `main`; the exact resulting `main` HEAD is deployed in replay-only mode. `develop` and its parked pilot work remain untouched, and PR #7 stays open, draft, and unmerged. The hackathon entry is not submitted here.
+The October 31 implementation release was integrated through PR #8. The corrective source release documents local judge access; its exact commit and source-package identity are recorded in the release verification asset. The video tag and earlier capture provenance remain unchanged. PR #7 remains open, draft and unmerged, and its parked pilot source on `develop` is preserved. The hackathon entry remains unsubmitted.
 
 ## License
 
