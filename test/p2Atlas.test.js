@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   ATLAS_REAL_SPHERE_LIMIT, AXIS_ANIMATION_MS, AXIS_MODES, ATLAS_TIME_SCALE_LABEL, FUTURE_EXTENSION_WIDTH, PRESENT_DAY_REFERENCE,
   atlasLOD, axisTransitionProgress, buildAtlasTimeline, formatHistoricalYear,
-  focusContextTimeX, interpolateAtlasPoint, layoutLogTimeTicks, logDistanceX, planQuestionRootConnections, worldDistanceMap,
+  focusContextTimeX, interpolateAtlasPoint, layoutLogTimeTicks, logDistanceX, planQuestionRootConnections, sampleAtlasEdgePath, worldDistanceMap,
 } from '../web/atlas/p2Atlas.js';
 
 function sampleGraph() {
@@ -69,12 +69,14 @@ test('log tick labels keep a minimum projected gap and retain the present label'
   for (let index = 1; index < ticks.length; index++) assert.ok(ticks[index].x - ticks[index - 1].x >= 0.7);
 });
 
-test('three axis modes produce distinct coordinates and question divergence attaches to the trunk', () => {
+test('three axis modes keep chronological x and tidy branch slots while question divergence attaches to the trunk', () => {
   const graph = sampleGraph();
   const layouts = AXIS_MODES.map(mode => buildAtlasTimeline(graph, 'child-a', mode));
-  const positionFor = layout => layout.positions.get('child-a');
-  assert.notEqual(positionFor(layouts[0]).y, positionFor(layouts[1]).y);
-  assert.notEqual(positionFor(layouts[1]).y, positionFor(layouts[2]).y);
+  for (const layout of layouts) {
+    assert.ok(layout.positions.get('sibling').y < layout.positions.get('child-a').y, 'sibling branch remains in its ordered slot');
+    assert.ok(layout.positions.get('grandchild').x > layout.positions.get('child-a').x, 'time remains the horizontal axis');
+    assert.ok(layout.parentChildPaths.some(path => path.parentId === 'child-a' && path.childId === 'grandchild'));
+  }
   const inactive = layouts[0].questionBranches.find(branch => branch.questionId === 'q-b');
   assert.equal(inactive.divergenceYear, -5000);
   assert.match(inactive.label, /Sahara remained green/i);
@@ -130,16 +132,100 @@ test('equal semantic distances receive deterministic small vertical sub-lanes wi
   }
 });
 
-test('large tied groups wrap into four bounded rows instead of expanding the camera to portrait scale', () => {
+test('large root groups receive deterministic separate branch slots while preserving time positions', () => {
   const worlds = Array.from({ length: 30 }, (_, index) => ({
     id: `tied-${index}`, parentId: null, questionId: 'q', year: 1900 + index, boldness: .5,
   }));
   const layout = buildAtlasTimeline({ worlds }, 'tied-0');
   const points = worlds.map(world => layout.positions.get(world.id));
-  assert.equal(new Set(points.map(point => point.y)).size, 4);
-  assert.ok(Math.max(...points.map(point => point.y)) - Math.min(...points.map(point => point.y)) <= 1.44);
+  assert.equal(new Set(points.map(point => point.y)).size, 30);
+  assert.ok(Math.max(...points.map(point => point.y)) - Math.min(...points.map(point => point.y)) > 20);
   const expected = worlds.map(world => focusContextTimeX(world.year, { earliestYear: 1900, latestYear: 2026, focusStartYear: 1900, focusEndYear: 1929 }));
   points.forEach((point, index) => assert.ok(Math.abs(point.x - expected[index]) < 1e-9));
+});
+
+test('a long active chain gives every world its own row instead of stacking ancestors together', () => {
+  const worlds = Array.from({ length: 30 }, (_, index) => ({
+    id: `chain-${index}`, parentId: index ? `chain-${index - 1}` : null, questionId: 'active', year: 1800 + index,
+  }));
+  const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'active', divergenceYear: 1800 }] }, 'chain-29');
+  const rows = worlds.map(world => layout.positions.get(world.id).y);
+  assert.equal(new Set(rows).size, worlds.length, 'ancestors and descendants never share a slot');
+  assert.ok(rows.every((row, index) => index === 0 || row > rows[index - 1]));
+  assert.ok(rows.at(-1) - rows[0] > 20, 'the full active tree receives meaningful vertical span');
+  for (const path of layout.parentChildPaths) {
+    assert.ok(Math.abs(path.to.y - path.from.y) >= 0.71, 'parent and child rows have visible separation');
+  }
+});
+
+test('folded worlds do not consume active tree rows or alter its vertical span', () => {
+  const active = [
+    { id: 'active-root', parentId: null, questionId: 'active', year: 1800 },
+    { id: 'active-child', parentId: 'active-root', questionId: 'active', year: 1810 },
+  ];
+  const crowded = Array.from({ length: 20 }, (_, index) => ({
+    id: `folded-${index}`, parentId: index ? `folded-${index - 1}` : null,
+    questionId: 'inactive', year: 500 + index,
+  }));
+  const questions = [
+    { id: 'active', divergenceYear: 1800 },
+    { id: 'inactive', divergenceYear: 500 },
+  ];
+  const compact = buildAtlasTimeline({ worlds: active, questions }, 'active-child');
+  const withFolded = buildAtlasTimeline({ worlds: [...active, ...crowded], questions }, 'active-child');
+  assert.equal(withFolded.foldedIds.length, 20);
+  assert.equal(withFolded.treeSpan, compact.treeSpan);
+  assert.deepEqual(active.map(world => withFolded.positions.get(world.id).y), active.map(world => compact.positions.get(world.id).y));
+  assert.equal(withFolded.parentChildPaths.length, 1, 'folded parent-child edges are not laid out');
+});
+
+test('a visible child whose parent is folded becomes a layout root without a dangling edge', () => {
+  const graph = {
+    worlds: [
+      { id: 'current-root', parentId: null, questionId: 'active', year: 1800 },
+      { id: 'folded-parent', parentId: null, questionId: 'inactive', year: 1700 },
+      { id: 'visible-child', parentId: 'folded-parent', questionId: 'active', year: 1850 },
+    ],
+    questions: [{ id: 'active', divergenceYear: 1800 }, { id: 'inactive', divergenceYear: 1700 }],
+  };
+  const layout = buildAtlasTimeline(graph, 'current-root');
+  assert.ok(layout.foldedIds.includes('folded-parent'));
+  assert.ok(Number.isFinite(layout.positions.get('visible-child').y));
+  assert.ok(!layout.parentChildPaths.some(path => path.childId === 'visible-child'));
+});
+
+test('optional frame aspect widens time coordinates in proportion without changing focus/context ratios', () => {
+  const worlds = Array.from({ length: 30 }, (_, index) => ({
+    id: `aspect-${index}`, parentId: index ? `aspect-${index - 1}` : null, questionId: 'active', year: 1800 + index * 8,
+  }));
+  const graph = { worlds, questions: [{ id: 'active', divergenceYear: 1800 }] };
+  const base = buildAtlasTimeline(graph, 'aspect-29');
+  const aspect = 1.6;
+  const framed = buildAtlasTimeline(graph, 'aspect-29', 'history-distance', { frameAspect: aspect });
+  assert.ok(framed.horizontalScale > 1);
+  assert.equal(framed.frameAspect, aspect);
+  assert.ok(Math.abs((framed.trunk.right - framed.trunk.left) / (base.trunk.right - base.trunk.left) - framed.horizontalScale) < 1e-12);
+  const baseFocusWidth = base.focusContext.right - base.focusContext.left;
+  const framedFocusWidth = framed.focusContext.right - framed.focusContext.left;
+  assert.ok(Math.abs(framedFocusWidth / baseFocusWidth - framed.horizontalScale) < 1e-12);
+  const baseInterval = base.positions.get('aspect-20').x - base.positions.get('aspect-10').x;
+  const framedInterval = framed.positions.get('aspect-20').x - framed.positions.get('aspect-10').x;
+  assert.ok(Math.abs(framedInterval / baseInterval - framed.horizontalScale) < 1e-12);
+  assert.ok(framed.positions.get('aspect-10').x < framed.positions.get('aspect-20').x, 'chronological order is retained');
+  assert.equal(buildAtlasTimeline(graph, 'aspect-29').horizontalScale, 1, 'default layout keeps its established time width');
+});
+
+test('tree rows keep sibling subtrees ordered and parent-child curves are smooth and bounded', () => {
+  const layout = buildAtlasTimeline(sampleGraph(), 'child-a', 'branch-order');
+  const y = id => layout.positions.get(id).y;
+  assert.ok(y('sibling') < y('child-a') && y('child-a') < y('grandchild'));
+  const path = layout.parentChildPaths.find(edge => edge.parentId === 'child-a' && edge.childId === 'grandchild');
+  assert.equal(path.points.length, 13);
+  assert.deepEqual(path.points[0], path.from);
+  assert.deepEqual(path.points.at(-1), path.to);
+  const sampled = sampleAtlasEdgePath({ x: 0, y: 0 }, { x: 2, y: 1 }, 4);
+  assert.equal(sampled.length, 5);
+  assert.ok(sampled[1].x > sampled[0].x && sampled[1].x < sampled.at(-1).x);
 });
 
 test('current-world question metadata attaches a parchment question branch to its declared parent', () => {

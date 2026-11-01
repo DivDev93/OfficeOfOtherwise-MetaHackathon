@@ -234,16 +234,79 @@ const THEME_LANES = Object.freeze({
   'culture-daily-life': -1.35,
 });
 
-function questionLaneY(questionId, questionIndex, mode) {
-  if (mode === 'theme') return 0;
-  if (mode === 'branch-order') return questionIndex;
-  return 0.55;
+const TREE_ROW_GAP = 0.72;
+const TREE_SUBTREE_GAP = 0.46;
+const TREE_ROOT_GAP = 0.72;
+const TREE_QUESTION_GAP = 1.1;
+const TREE_BASELINE = 0.9;
+
+function compareBranchOrder(a, b, mode = 'history-distance') {
+  const themeOrder = (THEME_LANES[a.theme] ?? 0) - (THEME_LANES[b.theme] ?? 0);
+  return (mode === 'theme' ? themeOrder : 0)
+    || (mode === 'branch-order' ? proposedOrder(a) - proposedOrder(b) : 0)
+    || (safeYear(a.year) ?? Number.POSITIVE_INFINITY) - (safeYear(b.year) ?? Number.POSITIVE_INFINITY)
+    || idOf(a).localeCompare(idOf(b));
 }
 
-function nodeAxisY(world, mode, questionIndex, siblingOrder, depth) {
-  if (mode === 'history-distance') return 0.55 + clamp(Number(world.boldness) || 0, 0, 1) * 2.3;
-  if (mode === 'branch-order') return questionIndex + (siblingOrder - 0.5) * 0.3 + Math.min(depth, 8) * 0.08;
-  return (THEME_LANES[world.theme] ?? 0) + Math.min(depth, 8) * 0.075;
+/** Give every node its own row while keeping each ordered subtree contiguous. */
+function tidyTreeRows(worlds, childrenByParent, mode) {
+  const byId = new Map(worlds.map(world => [idOf(world), world]));
+  const children = new Map();
+  for (const [parentId, members] of childrenByParent) {
+    if (parentId && byId.has(parentId)) children.set(parentId, members.filter(member => idOf(member) !== parentId));
+  }
+  for (const members of children.values()) members.sort((a, b) => compareBranchOrder(a, b, mode));
+
+  const roots = worlds.filter(world => world.parentId == null || !byId.has(String(world.parentId)))
+    .sort((a, b) => String(a.questionId ?? '').localeCompare(String(b.questionId ?? '')) || compareBranchOrder(a, b, mode));
+  const rows = new Map(), visiting = new Set(), placed = new Set();
+  let cursor = 0;
+  function place(world) {
+    const id = idOf(world);
+    if (placed.has(id) || visiting.has(id)) return rows.get(id) ?? cursor * TREE_ROW_GAP;
+    visiting.add(id);
+    const y = cursor * TREE_ROW_GAP;
+    cursor++;
+    rows.set(id, y);
+    placed.add(id);
+    const descendants = (children.get(id) || []).filter(child => !placed.has(idOf(child)) && !visiting.has(idOf(child)));
+    for (let index = 0; index < descendants.length; index++) {
+      place(descendants[index]);
+      if (index < descendants.length - 1) cursor += TREE_SUBTREE_GAP / TREE_ROW_GAP;
+    }
+    visiting.delete(id);
+    return y;
+  }
+  for (let index = 0; index < roots.length; index++) {
+    place(roots[index]);
+    if (index < roots.length - 1) {
+      const sameQuestion = String(roots[index].questionId ?? '') === String(roots[index + 1].questionId ?? '');
+      cursor += (sameQuestion ? TREE_ROOT_GAP : TREE_QUESTION_GAP) / TREE_ROW_GAP;
+    }
+  }
+  // Malformed or cyclic components remain visible and deterministic.
+  for (const world of [...worlds].sort((a, b) => compareBranchOrder(a, b, mode))) if (!placed.has(idOf(world))) place(world);
+  for (const [id, y] of rows) rows.set(id, y + TREE_BASELINE);
+  return rows;
+}
+
+/** Sample a horizontal cubic parent-to-child curve for smooth Atlas edges. */
+export function sampleAtlasEdgePath(from, to, segments = 12) {
+  const count = Math.max(2, Math.floor(Number(segments) || 12));
+  const direction = Math.sign(to.x - from.x) || 1;
+  const bend = Math.min(0.85, Math.abs(to.x - from.x) * 0.42);
+  const control1 = { x: from.x + direction * bend, y: from.y };
+  const control2 = { x: to.x - direction * bend, y: to.y };
+  const points = [];
+  for (let index = 0; index <= count; index++) {
+    const t = index / count, u = 1 - t;
+    points.push({
+      x: u ** 3 * from.x + 3 * u ** 2 * t * control1.x + 3 * u * t ** 2 * control2.x + t ** 3 * to.x,
+      y: u ** 3 * from.y + 3 * u ** 2 * t * control1.y + 3 * u * t ** 2 * control2.y + t ** 3 * to.y,
+      z: (Number(from.z) || 0) * u + (Number(to.z) || 0) * t,
+    });
+  }
+  return points;
 }
 
 function occupied(label, labels, width, height) {
@@ -257,6 +320,7 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
   right = 3.8,
   labelWidth = 1.55,
   labelHeight = 0.42,
+  frameAspect = null,
   ...lodOptions
 } = {}) {
   if (!AXIS_MODES.includes(axisMode)) throw new RangeError(`Unknown atlas axis mode: ${axisMode}`);
@@ -265,6 +329,9 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
   const current = worlds.find(world => idOf(world) === String(currentId));
   const currentQuestionId = String(current?.questionId ?? '');
   const { lineage } = ancestry(worlds, currentId);
+  const lod = atlasLOD(worlds, currentId, currentQuestionId, { ...lodOptions, questions });
+  const folded = new Set(lod.foldedIds);
+  const layoutWorlds = worlds.filter(world => !folded.has(idOf(world)));
   const depth = depthById(worlds);
   const years = worlds.map(world => safeYear(world.year)).filter(year => year != null);
   for (const question of questions) {
@@ -287,54 +354,45 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
   const latestActiveYear = activeYears.length ? Math.max(...activeYears) : focusStartYear;
   const focusEndYear = latestActiveYear == null ? null : Math.min(presentYear, latestActiveYear);
   const useFocusContext = focusStartYear != null && focusEndYear != null && focusEndYear > focusStartYear;
-  const timeOptions = { presentYear, earliestYear, latestYear, left, right, focusStartYear, focusEndYear };
-  const yearToX = year => astronomicalYear(year) > astronomicalYear(presentYear)
-    ? logDistanceX(year, { presentYear, earliestYear, latestYear, left, right })
-    : useFocusContext ? focusContextTimeX(year, timeOptions) : logDistanceX(year, { presentYear, earliestYear, latestYear, left, right });
-  const futureExtension = latestYear > presentYear ? {
-    fromX: right,
-    toX: right + FUTURE_EXTENSION_WIDTH,
-    latestYear,
-    label: `FUTURE · ${latestYear} →`,
-  } : null;
   const qs = [...new Set(worlds.map(world => String(world.questionId ?? '')).filter(Boolean))].sort();
-  const qIndex = new Map(qs.map((id, index) => [id, (index - (qs.length - 1) / 2) * 0.85]));
-  const siblingOrder = new Map();
   const childrenByParent = new Map();
-  for (const world of worlds) {
+  for (const world of layoutWorlds) {
     const parent = world.parentId == null ? '' : String(world.parentId);
     if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
     childrenByParent.get(parent).push(world);
   }
-  for (const siblings of childrenByParent.values()) {
-    siblings.sort((a, b) => proposedOrder(a) - proposedOrder(b) || Number(a.year) - Number(b.year) || idOf(a).localeCompare(idOf(b)));
-    siblings.forEach((world, index) => siblingOrder.set(idOf(world), siblings.length > 1 ? index / (siblings.length - 1) : 0.5));
-  }
+  const treeRows = tidyTreeRows(layoutWorlds, childrenByParent, axisMode);
+  const rowValues = [...treeRows.values()];
+  const treeSpan = rowValues.length > 1 ? Math.max(...rowValues) - Math.min(...rowValues) : 0;
+  const aspect = Number(frameAspect);
+  const horizontalScale = Number.isFinite(aspect) && aspect > 0 && treeSpan > 0
+    ? Math.max(1, treeSpan * aspect / (right - left)) : 1;
+  const baseMidpoint = (left + right) / 2;
+  const scaleX = x => horizontalScale === 1 ? x : baseMidpoint + (x - baseMidpoint) * horizontalScale;
+  const layoutLeft = scaleX(left), layoutRight = scaleX(right);
+  const timeOptions = { presentYear, earliestYear, latestYear, left, right, focusStartYear, focusEndYear };
+  const baseYearToX = year => astronomicalYear(year) > astronomicalYear(presentYear)
+    ? logDistanceX(year, { presentYear, earliestYear, latestYear, left, right })
+    : useFocusContext ? focusContextTimeX(year, timeOptions) : logDistanceX(year, { presentYear, earliestYear, latestYear, left, right });
+  const yearToX = year => scaleX(baseYearToX(year));
+  const futureExtension = latestYear > presentYear ? {
+    fromX: layoutRight,
+    toX: layoutRight + FUTURE_EXTENSION_WIDTH * horizontalScale,
+    latestYear,
+    label: `FUTURE · ${latestYear} →`,
+  } : null;
   const positions = new Map();
   const occupiedLabels = [];
   const preliminaryWorlds = worlds.map(world => {
     const id = idOf(world), questionId = String(world.questionId ?? '');
     const x = yearToX(world.year);
-    const laneIndex = qIndex.get(questionId) ?? 0;
-    const y = nodeAxisY(world, axisMode, laneIndex, siblingOrder.get(id) || 0, depth.get(id) || 0);
+    const y = treeRows.get(id) ?? TREE_BASELINE;
     return { id, world, x, y, z: 0, lineage: lineage.has(id), questionId, depth: depth.get(id) || 0 };
   });
-  const tiedRows = new Map();
-  for (const item of preliminaryWorlds) {
-    const key = item.y.toFixed(4);
-    if (!tiedRows.has(key)) tiedRows.set(key, []);
-    tiedRows.get(key).push(item);
-  }
-  for (const row of tiedRows.values()) {
-    if (row.length < 2) continue;
-    row.sort((a, b) => proposedOrder(a.world) - proposedOrder(b.world)
-      || Number(a.world.year) - Number(b.world.year) || a.id.localeCompare(b.id));
-    for (let index = 0; index < row.length; index++) row[index].y += ((index % 4) - 1.5) * 0.48;
-  }
   const laidOutWorlds = preliminaryWorlds;
   for (const item of laidOutWorlds) positions.set(item.id, item);
 
-  const tickLayout = layoutLogTimeTicks({ earliestYear, presentYear, left, right, yearToX });
+  const tickLayout = layoutLogTimeTicks({ earliestYear, presentYear, left: layoutLeft, right: layoutRight, yearToX });
   const tickLabels = [];
   for (const tick of tickLayout) {
     const candidate = { ...tick, y: -0.35 };
@@ -342,13 +400,24 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
   }
 
   const byQuestion = new Map(questions.map(question => [String(question.id), question]));
+  const visibleWorlds = laidOutWorlds.filter(world => !folded.has(world.id));
+  const visibleWorldById = new Map(visibleWorlds.map(world => [world.id, world]));
   const worldById = new Map(laidOutWorlds.map(world => [world.id, world]));
-  const questionBranches = qs.map((questionId, index) => {
+  const parentChildPaths = visibleWorlds.flatMap(child => {
+    const parent = child.world.parentId == null ? null : visibleWorldById.get(String(child.world.parentId));
+    if (!parent) return [];
+    const from = { x: parent.x, y: parent.y, z: parent.z };
+    const to = { x: child.x, y: child.y, z: child.z };
+    return [{ parentId: parent.id, childId: child.id, from, to,
+      lineage: parent.lineage && child.lineage, points: sampleAtlasEdgePath(from, to) }];
+  });
+  const questionBranches = qs.map(questionId => {
     const members = worlds.filter(world => String(world.questionId ?? '') === questionId);
     const question = byQuestion.get(questionId);
     const divergenceYear = safeYear(question?.divergenceYear) ?? (members.length ? Math.min(...members.map(world => safeYear(world.year)).filter(year => year != null)) : null);
     const x = divergenceYear == null ? right : yearToX(divergenceYear);
-    const y = axisMode === 'theme' ? 0 : questionLaneY(questionId, index, axisMode);
+    const questionRows = visibleWorlds.filter(world => world.questionId === questionId).map(world => world.y);
+    const y = questionRows.length ? (Math.min(...questionRows) + Math.max(...questionRows)) / 2 : 0;
     const label = String(question?.label || question?.title || question?.question || questionId).replace(/^what if\s+/i, '').trim();
     const attachmentMode = String(question?.attachmentMode || question?.mode || 'trunk');
     const parentWorldId = question?.parentWorldId == null ? null : String(question.parentWorldId);
@@ -372,8 +441,6 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
     questionId: branch.questionId, ...branch.attachment, label: branch.label, active: branch.active,
   }));
 
-  const lod = atlasLOD(worlds, currentId, currentQuestionId, { ...lodOptions, questions });
-  const folded = new Set(lod.foldedIds);
   const labelPositions = tickLabels.map(tick => ({ x: tick.x, y: tick.y }));
   const worldLabels = new Map();
   for (const entry of [...laidOutWorlds].sort((a, b) => Number(b.id === String(currentId)) - Number(a.id === String(currentId))
@@ -387,7 +454,7 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
 
   const chipPlacements = [];
   const chips = lod.chips.map((chip, index) => {
-    const x = chip.divergenceYear == null ? left + index * 0.9 : yearToX(chip.divergenceYear);
+    const x = chip.divergenceYear == null ? layoutLeft + index * 0.9 * horizontalScale : yearToX(chip.divergenceYear);
     let stack = 0;
     const width = Math.min(2.2, Math.max(0.82, chip.label.length * 0.035));
     while (chipPlacements.some(other => Math.abs(other.x - x) < (other.width + width) / 2 + 0.12 && other.stack === stack)) stack++;
@@ -395,7 +462,7 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
     chipPlacements.push(placement);
     return { ...placement, color: 'parchment' };
   });
-  const presentEarth = { x: right, y: 0, year: presentYear, label: 'PRESENT-DAY EARTH · 2026' };
+  const presentEarth = { x: layoutRight, y: 0, year: presentYear, label: 'PRESENT-DAY EARTH · 2026' };
   return {
     ...lod,
     presentYear,
@@ -407,16 +474,20 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
     timeScaleMode: useFocusContext ? 'focus-context' : 'log',
     focusContext: useFocusContext ? { questionId: currentQuestionId, startYear: focusStartYear, endYear: focusEndYear,
       olderContext: focusStartYear > earliestYear, newerContext: focusEndYear < presentYear,
-      left: left + (focusStartYear > earliestYear ? (right - left) * 0.22 : 0),
-      right: left + (focusStartYear > earliestYear ? (right - left) * 0.22 : 0)
-        + (right - left) * (1 - (focusStartYear > earliestYear ? 0.22 : 0) - (focusEndYear < presentYear ? 0.13 : 0)) } : null,
-    trunk: { left, right, y: 0 },
+      left: scaleX(left + (focusStartYear > earliestYear ? (right - left) * 0.22 : 0)),
+      right: scaleX(left + (focusStartYear > earliestYear ? (right - left) * 0.22 : 0)
+        + (right - left) * (1 - (focusStartYear > earliestYear ? 0.22 : 0) - (focusEndYear < presentYear ? 0.13 : 0))) } : null,
+    frameAspect: Number.isFinite(aspect) && aspect > 0 ? aspect : null,
+    horizontalScale,
+    treeSpan,
+    trunk: { left: layoutLeft, right: layoutRight, y: 0 },
     futureExtension,
     presentEarth,
     ticks: tickLayout,
     visibleTicks: tickLabels,
     worlds: laidOutWorlds.map(entry => ({ ...entry, labelVisible: worldLabels.get(entry.id) })),
     positions,
+    parentChildPaths,
     questionBranches,
     questionAttachments,
     chips,
