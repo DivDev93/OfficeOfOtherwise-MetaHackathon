@@ -28,4 +28,6 @@ At 375px, the Other questions control was checked against saved data: opening it
 
 `cluster-hit-1440.png` and `cluster-hit-375.png` show a separate synthetic Surface fixture after hovering approximately 22 CSS pixels to the right of its cluster center. The fan opened at both sizes. This samples one boundary direction and does not establish the hit size of every Atlas or Orbit node.
 
+`atlas-hit-world-{1440,375}.png`, `atlas-hit-chip-{1440,375}.png`, and `orbit-hit-cluster-{1440,375}.png` show a local in-memory fixture after real pointer moves near a target edge. The world and chip previews reported offsets of approximately 21.7–21.9 CSS pixels from their projected centers; the Orbit cluster expanded at an approximately 28px horizontal offset. These sample single directions; they are not exhaustive 44px-boundary or overlap proofs. No saved runs or model calls were used.
+
 In the recorded local replay at 1440×900, successive 120-pixel wheel inputs reached 10, 19, 29, 38, 48, 57 (Orbit), 67, 76, 86, 95 and 100 (Atlas). The reverse pass reached 90, 81, 71, 62, 57 (Orbit), 47, 38, 28, 19, 9 and 0 (Surface). Both passes left the Orbit stop on the next input.
