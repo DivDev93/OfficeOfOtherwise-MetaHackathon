@@ -1136,12 +1136,31 @@ export function createAtlasScene(container, {
     }
     const labelBounds = renderer.domElement.getBoundingClientRect();
     const mobileLabels = labelBounds.width <= 480;
+    const labelDocument = container.ownerDocument || document;
+    const reservedRects = [];
+    const topChromeBottoms = [];
+    for (const element of labelDocument.querySelectorAll?.('.site-header .brand, .site-header .header-actions, .panel-head, #chronicle, #atlas-toolbar, #atlas-world-card, #atlas-compact-controls, #atlas-reopen-controls, .geography-panel') || []) {
+      if (element.hidden) continue;
+      const styles = labelDocument.defaultView?.getComputedStyle?.(element);
+      if (styles?.display === 'none' || styles?.visibility === 'hidden' || Number(styles?.opacity) <= 0.05) continue;
+      const rect = element.getBoundingClientRect();
+      const left = Math.max(labelBounds.left, rect.left), right = Math.min(labelBounds.right, rect.right);
+      const top = Math.max(labelBounds.top, rect.top), bottom = Math.min(labelBounds.bottom, rect.bottom);
+      if (right > left && bottom > top) {
+        reservedRects.push({ x: (left + right) / 2, y: (top + bottom) / 2, width: right - left, height: bottom - top });
+        if (element.matches?.('.site-header .brand, .site-header .header-actions, .panel-head, #atlas-toolbar')) topChromeBottoms.push(bottom);
+      }
+    }
     const safeBounds = {
       left: labelBounds.left + (mobileLabels ? 10 : 4),
       right: labelBounds.right - (mobileLabels ? 10 : 4),
       top: labelBounds.top + (mobileLabels ? 8 : 4),
       bottom: labelBounds.bottom - (bottomOverlap || 0) - (mobileLabels ? 10 : 4),
     };
+    const lineageTop = topChromeBottoms.length
+      ? Math.min(safeBounds.bottom - 24, Math.max(safeBounds.top, ...topChromeBottoms) + 8)
+      : safeBounds.top;
+    const lineageBounds = { ...safeBounds, top: lineageTop };
     const projectPoint = point => {
       const projected = point.clone().project(camera);
       return {
@@ -1168,6 +1187,8 @@ export function createAtlasScene(container, {
       measure: text => ({ width: Math.min(mobileLabels ? 220 : 320, labelBounds.width * (mobileLabels ? 0.64 : 0.7), safeBounds.right - safeBounds.left, Math.max(52, text.length * 7.5 + 8)), height: 18 }),
       yearFirst: mobileLabels,
       bounds: safeBounds,
+      lineageBounds,
+      reservedRects,
       include: entry => state.orbit > 0.3 && state.atlas < 0.6 && entry.orbitVisible && String(entry.parentId) === String(currentId),
     });
     const candidates = [...worldCandidates];
@@ -1247,17 +1268,6 @@ export function createAtlasScene(container, {
     if (p2Renderer.presentEarth.visible) {
       const point = projectPoint(p2Renderer.presentEarth.getWorldPosition(new THREE.Vector3()));
       if (point.visible) candidates.push({ id: 'present-earth', text: 'Present-day Earth · 2026', ...point, width: Math.min(200, safeBounds.right - safeBounds.left), height: 18, priority: 95, kind: 'world' });
-    }
-    const labelDocument = container.ownerDocument || document;
-    const reservedRects = [];
-    for (const element of labelDocument.querySelectorAll?.('#chronicle, #atlas-toolbar, #atlas-world-card, #atlas-compact-controls, #atlas-reopen-controls, .geography-panel') || []) {
-      if (element.hidden) continue;
-      const styles = labelDocument.defaultView?.getComputedStyle?.(element);
-      if (styles?.display === 'none' || styles?.visibility === 'hidden' || Number(styles?.opacity) <= 0.05) continue;
-      const rect = element.getBoundingClientRect();
-      const left = Math.max(labelBounds.left, rect.left), right = Math.min(labelBounds.right, rect.right);
-      const top = Math.max(labelBounds.top, rect.top), bottom = Math.min(labelBounds.bottom, rect.bottom);
-      if (right > left && bottom > top) reservedRects.push({ x: (left + right) / 2, y: (top + bottom) / 2, width: right - left, height: bottom - top });
     }
     const placements = placeScreenLabels(candidates, safeBounds, nodeRects, reservedRects);
     const activeLabelIds = new Set();

@@ -13,6 +13,30 @@ test('offscreen lineage has a directional marker and visible children can be lab
   assert.ok(labels[1].priority > labels[0].priority, 'visible Orbit children take precedence over less immediate lineage labels');
 });
 
+test('ancestors behind top chrome use a short edge marker while Orbit children keep full labels', () => {
+  const bounds = { left: 0, top: 4, right: 300, bottom: 220 };
+  const lineageBounds = { ...bounds, top: 84 };
+  const header = { x: 150, y: 38, width: 300, height: 76 };
+  const candidates = createWorldLabelCandidates([
+    { id: 'ancestor', lineage: true, world: { title: 'Sundaland River Plain Unites Islands', year: 1800 } },
+    { id: 'child', world: { title: 'Canopy Walkway Network', year: 1978 } },
+  ], {
+    currentId: 'current', bounds, lineageBounds, reservedRects: [header],
+    include: entry => entry.id === 'child',
+    project: () => ({ x: 150, y: 10, visible: true }),
+    measure: text => ({ width: Math.min(220, text.length * 7.5 + 8), height: 18 }),
+  });
+  const ancestor = candidates.find(candidate => candidate.id === 'ancestor');
+  const child = candidates.find(candidate => candidate.id === 'child');
+  assert.match(ancestor.text, /^↑ Sundaland River Plain Unites…$/);
+  assert.ok(ancestor.y >= lineageBounds.top + ancestor.height / 2, 'the edge marker is repositioned below the top chrome band');
+  assert.equal(child.text, 'Canopy Walkway Network · 1978', 'direct-child labels do not become edge markers');
+  const placed = placeScreenLabels([ancestor], bounds, [], [header]);
+  assert.equal(placed.length, 1);
+  assert.ok(placed[0].y - placed[0].height / 2 > header.y + header.height / 2,
+    'the marker clears the header instead of clipping under it');
+});
+
 test('world label text is concise and names the year when present', () => {
   assert.equal(worldLabelText({ title: 'Green Sahara', year: 2100 }), 'Green Sahara · 2100');
   assert.equal(worldLabelText({ title: 'Green Sahara', year: -2800 }), 'Green Sahara · 2800 BCE');

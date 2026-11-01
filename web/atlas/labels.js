@@ -59,12 +59,23 @@ export function placeScreenLabels(candidates, bounds, nodeRects = [], reservedRe
   return placed;
 }
 
+function shortEdgeTitle(text, maxLength = 32) {
+  const title = String(text || '').replace(/\s+/g, ' ').trim();
+  if (title.length <= maxLength) return title;
+  const prefix = title.slice(0, maxLength - 1);
+  const wordBoundary = prefix.lastIndexOf(' ');
+  return `${prefix.slice(0, wordBoundary > maxLength * 0.55 ? wordBoundary : maxLength - 1).trimEnd()}…`;
+}
+
 export function edgeMarker(point, bounds, text) {
-  if (!bounds || (point.x >= bounds.left && point.x <= bounds.right && point.y >= bounds.top && point.y <= bounds.bottom)) return null;
+  if (!bounds) return null;
   const dx = point.x < bounds.left ? -1 : point.x > bounds.right ? 1 : 0;
   const dy = point.y < bounds.top ? -1 : point.y > bounds.bottom ? 1 : 0;
-  const arrow = dy < 0 ? (dx < 0 ? '↖' : dx > 0 ? '↗' : '↑') : dy > 0 ? (dx < 0 ? '↙' : dx > 0 ? '↘' : '↓') : dx < 0 ? '←' : '→';
-  return `${arrow} ${String(text).slice(0, 32)}`;
+  if (dx === 0 && dy === 0) return null;
+  const arrow = dy < 0 ? (dx < 0 ? '↖' : dx > 0 ? '↗' : '↑')
+    : dy > 0 ? (dx < 0 ? '↙' : dx > 0 ? '↘' : '↓')
+      : dx < 0 ? '←' : '→';
+  return `${arrow} ${shortEdgeTitle(text)}`;
 }
 
 export function shortQuestionTitle(text, maxWords = 5) {
@@ -72,7 +83,7 @@ export function shortQuestionTitle(text, maxWords = 5) {
   return words.length > maxWords ? `${words.slice(0, maxWords).join(' ')}…` : words.join(' ');
 }
 
-export function createWorldLabelCandidates(entries, { currentId, focusedId, project, measure, yearFirst = false, include = () => false, bounds }) {
+export function createWorldLabelCandidates(entries, { currentId, focusedId, project, measure, yearFirst = false, include = () => false, bounds, lineageBounds = bounds, reservedRects = [] }) {
   const candidates = [];
   for (const entry of entries || []) {
     const included = include(entry);
@@ -80,10 +91,15 @@ export function createWorldLabelCandidates(entries, { currentId, focusedId, proj
     const point = project(entry);
     if (!point || point.visible === false) continue;
     const fullText = worldLabelText(entry.world, { yearFirst });
-    const text = entry.lineage && entry.id !== currentId ? edgeMarker(point, bounds, fullText) || fullText : fullText;
+    const marker = entry.lineage && entry.id !== currentId ? edgeMarker(point, lineageBounds, fullText) : null;
+    const text = marker || fullText;
     const size = measure(text);
+    const markerPoint = marker && lineageBounds ? {
+      x: Math.max(lineageBounds.left + size.width / 2 + 2, Math.min(lineageBounds.right - size.width / 2 - 2, point.x)),
+      y: Math.max(lineageBounds.top + size.height / 2 + 2, Math.min(lineageBounds.bottom - size.height / 2 - 2, point.y)),
+    } : point;
     candidates.push({
-      id: entry.id, text, x: point.x, y: point.y,
+      id: entry.id, text, x: markerPoint.x, y: markerPoint.y,
       width: size.width, height: size.height,
       priority: Math.max(included ? 85 : 0, labelPriority({ id: entry.id, lineage: entry.lineage }, currentId, focusedId)),
       kind: 'world', fullText,

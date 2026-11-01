@@ -40,6 +40,15 @@ test('node hit ownership uses the nearest projected anchor after existing ray an
     'overlapping candidates are owned by nearest screen anchor, with depth then stable ID ties');
 });
 
+test('Orbit ancestor labels reserve top chrome and move edge markers below it', () => {
+  assert.match(scene, /\.site-header \.brand, \.site-header \.header-actions, \.panel-head, #chronicle, #atlas-toolbar/,
+    'page header, Atlas title, and zoom controls are measured as label obstacles');
+  assert.match(scene, /const lineageTop = topChromeBottoms\.length[\s\S]*Math\.max\(safeBounds\.top, \.\.\.topChromeBottoms\) \+ 8[\s\S]*const lineageBounds = \{ \.\.\.safeBounds, top: lineageTop \}/,
+    'ancestor edge markers use a top boundary below active chrome');
+  assert.match(scene, /yearFirst: mobileLabels,[\s\S]*bounds: safeBounds,[\s\S]*lineageBounds,[\s\S]*reservedRects/,
+    'only the lineage marker path receives the chrome-aware boundary while other labels retain the normal viewport');
+});
+
 test('transition edge opacity is stored per rendered edge while retaining gold and dashed styles', () => {
   assert.match(scene, /vertexColors: true/,
     'the pinned Three r183 Line materials accept per-vertex RGBA edge opacity');
