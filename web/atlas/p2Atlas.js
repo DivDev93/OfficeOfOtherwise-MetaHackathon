@@ -573,7 +573,10 @@ export function routeAtlasEdgePaths(edges = [], {
   maxGridVisits = 12_000, nodes = [],
 } = {}) {
   const ordered = (Array.isArray(edges) ? edges : []).filter(edge => edge?.from && edge?.to)
-    .slice().sort((a, b) => String(a.parentId).localeCompare(String(b.parentId)) || String(a.childId).localeCompare(String(b.childId)));
+    .slice().sort((a, b) => Math.hypot(a.to.x - a.from.x, a.to.y - a.from.y)
+      - Math.hypot(b.to.x - b.from.x, b.to.y - b.from.y)
+      || String(a.parentId).localeCompare(String(b.parentId))
+      || String(a.childId).localeCompare(String(b.childId)));
   const routed = [];
   for (const edge of ordered) {
     const endpointIds = new Set([String(edge.parentId), String(edge.childId)]);
@@ -642,7 +645,9 @@ export function routeAtlasEdgePaths(edges = [], {
       routeVisited, routeGridFailure: gridFailures.length ? gridFailures.join(',') : null,
       unresolvedCrossings, unresolvedNodes });
   }
-  return routed;
+  // Route easy, short edges first, but keep the exposed order stable for renderers.
+  return routed.sort((a, b) => String(a.parentId).localeCompare(String(b.parentId))
+    || String(a.childId).localeCompare(String(b.childId)));
 }
 
 function occupied(label, labels, width, height) {

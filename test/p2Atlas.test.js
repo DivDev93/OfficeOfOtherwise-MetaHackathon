@@ -288,7 +288,7 @@ test('uneven chronological branches use a deterministic lane to avoid their cros
   assert.ok(layout.parentChildPaths.every(path => path.unresolvedNodes.length === 0));
 });
 
-test('42-world route stress stays bounded and exposes remaining conflict counts', () => {
+test('42-world short-first routing removes crossings without runaway detours', () => {
   const worlds = [{ id: 'world-0', parentId: null, questionId: 'q', year: 700 }];
   for (let index = 1; index < 42; index++) {
     const parentIndex = Math.floor((index - 1) / 3);
@@ -305,9 +305,9 @@ test('42-world route stress stays bounded and exposes remaining conflict counts'
   const crossingPairs = edgeCrossings(layout.parentChildPaths, { includeIncident: true });
   const unresolvedCrossings = layout.parentChildPaths.reduce((total, path) => total + path.unresolvedCrossings.length, 0);
   const unresolvedNodes = layout.parentChildPaths.reduce((total, path) => total + path.unresolvedNodes.length, 0);
-  assert.ok(crossingPairs.length <= 20, `bounded fallback leaves at most 20 crossing pairs (observed ${crossingPairs.length})`);
-  assert.ok(unresolvedCrossings <= 20, `unresolved crossing metadata remains bounded (observed ${unresolvedCrossings})`);
-  assert.ok(unresolvedNodes <= 5, `unresolved node hits remain bounded (observed ${unresolvedNodes})`);
+  assert.deepEqual(crossingPairs, [], 'short edges route first so this deterministic fixture has no crossings');
+  assert.equal(unresolvedCrossings, 0);
+  assert.equal(unresolvedNodes, 0);
   assert.ok(layout.parentChildPaths.every(path => Math.abs(path.routeOffset) <= 4), 'fallbacks do not create runaway lanes');
   assert.ok(layout.parentChildPaths.every(path => path.routeVisited <= 18_000), 'each route obeys the combined two-attempt search budget');
   assert.ok(duration < 3_000, `42-world routing stays under three seconds (observed ${duration.toFixed(1)} ms)`);
@@ -351,9 +351,9 @@ test('120-world interleaved-date routing bounds conflicts, detours, and search w
   const unresolved = paths.filter(path => path.unresolvedCrossings.length || path.unresolvedNodes.length).length;
   const crossingTotal = paths.reduce((total, path) => total + path.unresolvedCrossings.length, 0);
   const nodeTotal = paths.reduce((total, path) => total + path.unresolvedNodes.length, 0);
-  assert.ok(unresolved <= 50, `unresolved routes stay under 50/119 (observed ${unresolved})`);
-  assert.ok(crossingTotal <= 80, `crossing count stays under 80 (observed ${crossingTotal})`);
-  assert.ok(nodeTotal <= 10, `node hit count stays under 10 (observed ${nodeTotal})`);
+  assert.ok(unresolved <= 10, `short-first routing keeps unresolved routes under 10/119 (observed ${unresolved})`);
+  assert.ok(crossingTotal <= 40, `crossing count stays under 40 (observed ${crossingTotal})`);
+  assert.ok(nodeTotal <= 3, `node hit count stays under 3 (observed ${nodeTotal})`);
   assert.ok(paths.every(path => Math.abs(path.routeOffset) <= 4));
   assert.ok(paths.every(path => path.routeVisited <= 18_000));
   assert.ok(duration < 3_000, `120-world routing stays under three seconds (observed ${duration.toFixed(1)} ms)`);
