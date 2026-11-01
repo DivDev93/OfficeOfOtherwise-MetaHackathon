@@ -186,4 +186,6 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Verify saved Green Sahara textures through the production terrain raster path using synthetic elevation data. | |
 | 2026-11-01 | Atlas round 3: keep Orbit child labels available through a control-clearing drawer or visible host when no collision-free canvas lane fits. | |
 | 2026-11-01 | Atlas round 3: add a bounded simplified-model Orbit-to-Atlas crossing measurement; its projected counts omit production camera fitting and viewport-specific presentation. | |
+| 2026-11-01 | Atlas round 3: ease attached route interiors into their Atlas shapes; the simplified measurement falls from 44 to 26 crossing frames and 358 to 200 pair observations, while peak simultaneous crossings remain 14. | |
 | 2026-11-01 | Atlas round 3: preserve focused Orbit child labels through lane resize/reparent, reveal them by scrolling only their lane, and avoid per-label world rescans. | |
+| 2026-11-01 | Atlas round 3: fade the full Lift panels without overlapping the compact card, prevent hidden panel input, and enlarge zoom slider targets. | |

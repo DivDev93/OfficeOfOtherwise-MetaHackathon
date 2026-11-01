@@ -99,7 +99,7 @@ function transitionRoutes(graph, currentId, progress) {
     const currentTo = lerp(sourceTo, childAtlas, progress);
     const target = transformAtlasEdgeShape(parentAtlas, childAtlas, path.routeShape);
     const helperRoute = interpolateAttachedAtlasEdgeRoute(sourceFrom, sourceTo, target, progress,
-      { from:currentFrom, to:currentTo });
+      { from:currentFrom, to:currentTo, easeInterior:true });
     return { parentId:path.parentId, childId:path.childId, points:helperRoute };
   });
 }
@@ -125,9 +125,7 @@ test('measures simplified-model active-tree route intersections through Orbit-to
   const peakFrame = frames.find(frame => frame.crossings.length === maxCrossings) || null;
   const crossingPairObservations = frames.reduce((total, frame) => total + frame.crossings.length, 0);
   const measurements = `measured ${crossingFrames.length}/101 crossing frames, ${crossingPairObservations} pair-frame observations, peak ${maxCrossings} at zoom=${peakFrame?.zoom}`;
-  assert.ok(crossingFrames.length <= 44, `${measurements}; limit is 44 frames`);
-  assert.ok(crossingPairObservations <= 358, `${measurements}; limit is 358 pair-frame observations`);
+  assert.ok(crossingFrames.length <= 26, `${measurements}; limit is 26 frames`);
+  assert.ok(crossingPairObservations <= 200, `${measurements}; limit is 200 pair-frame observations`);
   assert.ok(maxCrossings <= 14, `${measurements}; limit is 14 simultaneous edge pairs`);
 });
-
-

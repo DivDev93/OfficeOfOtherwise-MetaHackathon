@@ -1841,7 +1841,8 @@ export function createAtlasScene(container, {
       }
       const segments = Math.max(1, atlasCurve.length - 1);
       const directMorph = directMorphActive
-        ? interpolateAttachedAtlasEdgeRoute(orbitFrom, orbitTo, atlasCurve, inAtlas && !suppressAtlasThreads ? state.atlas : 0, { from, to })
+        ? interpolateAttachedAtlasEdgeRoute(orbitFrom, orbitTo, atlasCurve, inAtlas && !suppressAtlasThreads ? state.atlas : 0,
+          { from, to, easeInterior:true })
         : null;
       for (let step = 0; step <= segments; step++) {
         const t = step / segments;

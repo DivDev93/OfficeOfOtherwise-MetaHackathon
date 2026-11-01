@@ -13,8 +13,8 @@ test('Atlas renders exact routed corners and preserves them through axis changes
     'extra Atlas and Orbit endpoints are only computed in the settled direct-morph branch');
   assert.match(scene, /transformAtlasEdgeShape\(routeFrom, routeTo, path\.routeShape\)/,
     'Atlas routes are built in their settled endpoint coordinates');
-  assert.match(scene, /interpolateAttachedAtlasEdgeRoute\(orbitFrom, orbitTo, atlasCurve,[\s\S]*\{ from, to \}\)/,
-    'the Orbit chord morphs to the settled route while staying attached to live endpoints');
+  assert.match(scene, /interpolateAttachedAtlasEdgeRoute\(orbitFrom, orbitTo, atlasCurve,[\s\S]*\{ from, to, easeInterior:true \}\)/,
+    'the Orbit chord morphs its routed interior while staying attached to live endpoints');
   assert.match(scene, /routeVertexFractions\(previousBasis\)[\s\S]*routeVertexFractions\(nextBasis\)/,
     'axis morphs include the cumulative-arc fraction of every old and new corner');
   assert.match(scene, /return fractions\.map\(fraction => \{[\s\S]*return \{ x:a\.x \+ \(b\.x - a\.x\) \* progress/,

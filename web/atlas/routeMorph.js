@@ -3,7 +3,10 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 /** Morph an edge from its source chord to the exact Atlas route while keeping its live endpoints attached. */
 export function interpolateAttachedAtlasEdgeRoute(sourceFrom, sourceTo, targetRoute, progress, attachedEndpoints = {}) {
   if (!sourceFrom || !sourceTo || !Array.isArray(targetRoute) || targetRoute.length < 2) return [];
-  const amount = clamp(Number(progress) || 0, 0, 1);
+  const linearProgress = clamp(Number(progress) || 0, 0, 1);
+  // Let live endpoints travel first, then bring the routed interior into place.
+  // Endpoints still use the caller's exact positions.
+  const amount = attachedEndpoints.easeInterior ? linearProgress ** 4 : linearProgress;
   const targetFrom = targetRoute[0], targetTo = targetRoute.at(-1);
   const lerpPoint = (a, b, t) => ({
     x:Number(a?.x || 0) + (Number(b?.x || 0) - Number(a?.x || 0)) * t,
