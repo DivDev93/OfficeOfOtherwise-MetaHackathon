@@ -12,4 +12,6 @@ At 375px, the Other questions control was checked against saved data: opening it
 
 `undated-1440.jpg` and `undated-375.jpg` show a separate in-memory mixed-date fixture. Undated worlds use a labeled lane outside the calendar trunk; the fixture makes no API calls and does not modify saved stories.
 
+`hover-preview-375.jpg` shows a phone Orbit preview. A local pointer check confirmed the original node point remains on the canvas, a slow pointer transfer reaches the preview, and scrolling it leaves globe zoom unchanged.
+
 In the recorded local replay at 1440×900, successive 120-pixel wheel inputs reached 10, 19, 29, 38, 48, 57 (Orbit), 67, 76, 86, 95 and 100 (Atlas). The reverse pass reached 90, 81, 71, 62, 57 (Orbit), 47, 38, 28, 19, 9 and 0 (Surface). Both passes left the Orbit stop on the next input.
