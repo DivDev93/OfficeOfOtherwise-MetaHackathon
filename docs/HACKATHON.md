@@ -216,3 +216,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas: keep unresolved reveal candidates diagnostic-only and leave continuous scene positioning and saved event paths with the legacy renderer; cover missing Orbit anchors and renderer handoff offline. | |
 | 2026-11-01 | Atlas: preserve selected and ancestry labels on narrow settled views by using collision-checked edge slots when local placements are blocked; cover 390px and 375px layouts offline. | |
 | 2026-11-01 | Atlas entry: initialize the Earth texture before a world is selected and keep the four saved starting questions open on first load. Offline entry tests pass. | |
+| 2026-11-01 | Atlas: fit the Surface globe to the center canvas aspect so narrow panels do not crop it after changing the selected world. | |

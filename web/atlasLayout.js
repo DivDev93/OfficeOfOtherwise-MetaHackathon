@@ -29,6 +29,16 @@ export function altitudeForZoom(value) {
   return SURFACE_CAMERA_DISTANCE * (ATLAS_CAMERA_DISTANCE / SURFACE_CAMERA_DISTANCE) ** zoom;
 }
 
+/** Minimum perspective-camera distance that keeps a sphere inside a viewport's horizontal field of view. */
+export function fitSurfaceCameraDistance(aspect, fovDegrees, radius = 1, padding = 1.06) {
+  const widthToHeight = Number(aspect), fov = Number(fovDegrees), sphereRadius = Number(radius);
+  const margin = Number(padding);
+  if (![widthToHeight, fov, sphereRadius, margin].every(Number.isFinite)
+    || widthToHeight <= 0 || !(fov > 0 && fov < 180) || sphereRadius <= 0 || margin < 1) return SURFACE_CAMERA_DISTANCE;
+  const horizontalHalfAngle = Math.atan(Math.tan(fov * Math.PI / 360) * widthToHeight);
+  return Math.max(SURFACE_CAMERA_DISTANCE, sphereRadius / Math.sin(horizontalHalfAngle) * margin);
+}
+
 /** Inverse of altitudeForZoom; callers can scrub the camera and recover exact zoom. */
 export function zoomForAltitude(value) {
   const altitude = clamp(Number(value) || SURFACE_CAMERA_DISTANCE, SURFACE_CAMERA_DISTANCE, ATLAS_CAMERA_DISTANCE);

@@ -7,6 +7,7 @@ import {
   nearestDirectionalNeighbor, nearestProjectedAnchorHit, selectSurfaceLabels, surfaceFacingRotation, surfaceFacingOrientation, transformSurfaceNormal,
   slerpUnitVector, selectSurfaceWorldLabelIds, worldRadiusForScreenPixels, cappedTextureSize,
   fitCameraDistance, fitCenteredCameraDistance, layoutOrbitNeighborhood, zoomForAltitude,
+  fitSurfaceCameraDistance,
   appendContinuousFrame, atlasPresentationState,
   clampScreenRectCenter, isSurfaceNormalVisible,
   localQuaternionForWorldFacing,
@@ -37,6 +38,17 @@ test('normalized zoom and camera altitude are continuous inverses', () => {
   assert.equal(orbit.lift, 1);
   assert.equal(orbit.atlas, 0);
   assert.equal(orbit.orbit, 1);
+});
+
+test('Surface camera fits the globe into a narrow center viewport without changing wide framing', () => {
+  const fov = 38, radius = 1.025;
+  const wide = fitSurfaceCameraDistance(1.5, fov, radius);
+  const narrow = fitSurfaceCameraDistance(0.62, fov, radius);
+  assert.equal(wide, SURFACE_CAMERA_DISTANCE, 'existing wide-screen Surface distance remains the minimum');
+  assert.ok(narrow > wide, 'narrow center columns move the Surface camera back enough to show the full globe');
+  const horizontalHalfAngle = Math.atan(Math.tan(fov * Math.PI / 360) * 0.62);
+  assert.ok(Math.asin(radius / narrow) < horizontalHalfAngle, 'the padded globe silhouette fits inside the narrow horizontal field of view');
+  assert.equal(fitSurfaceCameraDistance(0.62, fov, radius, 0.9), SURFACE_CAMERA_DISTANCE, 'invalid padding safely falls back to the established distance');
 });
 
 test('world identity records survive repeated altitude and layout reconciliations', () => {

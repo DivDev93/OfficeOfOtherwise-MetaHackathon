@@ -25,7 +25,7 @@ import {
   altitudeForZoom, atlasPresentationState, atlasZoomState, clampAtlasLevel, createWorldRegistry,
   layoutAtlasWorlds, layoutOrbitNeighborhood, measuredFps, surfaceFacingOrientation,
   worldRadiusForScreenPixels, nearestProjectedAnchorHit, projectedWorldTarget, targetOccludedByEarth, pointerRayDistanceAtTargetDepth, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds, slerpUnitVector,
-  cappedTextureSize, allowEarthBodySelection, fitCenteredCameraDistance,
+  cappedTextureSize, allowEarthBodySelection, fitCenteredCameraDistance, fitSurfaceCameraDistance,
   appendContinuousFrame, stableWorldId, localQuaternionForWorldFacing, isSurfaceNormalVisible,
 } from '../atlasLayout.js';
 
@@ -1048,7 +1048,9 @@ export function createAtlasScene(container, {
     const atlasCenter = new THREE.Vector3((frame.left + frame.right) / 2, (frame.bottom + frame.top) / 2, 0);
     const cameraFocus = travelState && !travelState.cut ? earthMesh.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3().lerp(atlasCenter, state.atlas);
     cameraFocus.x += panOffset.x; cameraFocus.y += panOffset.y;
-    liveCameraDistance = state.cameraDistance + (fittedAtlasDistance() - state.cameraDistance) * state.atlas;
+    const surfaceCameraDistance = Math.max(state.cameraDistance,
+      fitSurfaceCameraDistance(camera.aspect, camera.fov, state.earthScale * 1.025));
+    liveCameraDistance = surfaceCameraDistance + (fittedAtlasDistance() - surfaceCameraDistance) * state.atlas;
     container.dataset.atlasCameraDistance = String(liveCameraDistance);
     // Desktop canvas insets already follow the panels. On narrow screens the
     // bottom sheet overlaps the full-width canvas, so frame the remaining area.

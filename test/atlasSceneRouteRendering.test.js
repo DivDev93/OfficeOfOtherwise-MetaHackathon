@@ -7,6 +7,15 @@ const scene = readFileSync(new URL('../web/atlas/scene.js', import.meta.url), 'u
 const p2Renderer = readFileSync(new URL('../web/atlas/p2Renderer.js', import.meta.url), 'utf8');
 const style = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
 
+test('Surface globe framing accounts for the current center-canvas aspect ratio', () => {
+  assert.match(scene, /fitSurfaceCameraDistance\(camera\.aspect, camera\.fov, state\.earthScale \* 1\.025\)/,
+    'the camera fit uses the current canvas width and the rendered Earth plus atmosphere radius');
+  assert.match(scene, /const surfaceCameraDistance = Math\.max\(state\.cameraDistance,[\s\S]*fitSurfaceCameraDistance/,
+    'the adaptive fit only backs the camera out and preserves the established wider-screen framing');
+  assert.match(scene, /liveCameraDistance = surfaceCameraDistance \+ \(fittedAtlasDistance\(\) - surfaceCameraDistance\) \* state\.atlas/,
+    'the Surface fit transitions continuously into the existing fitted Atlas distance');
+});
+
 test('reduced-motion axis changes swap immediately without blanking the canvas', () => {
   const axisModeSwitch = scene.match(/function setAxisMode\(mode\) \{([\s\S]*?)\n  \}\n  function getAxisMode/)?.[1];
   assert.ok(axisModeSwitch, 'the scene exposes its axis-mode switch');
