@@ -563,6 +563,8 @@ export function createAtlasScene(container, {
       xs.push(branch.x, branch.labelX); ys.push(branch.y, branch.labelY);
     }
     for (const chip of atlasTimeline?.chips || []) { xs.push(chip.x); ys.push(chip.y); }
+    const routeBounds = atlasTimeline?.routeBounds;
+    if (routeBounds) { xs.push(routeBounds.left, routeBounds.right); ys.push(routeBounds.bottom, routeBounds.top); }
     xs.push(atlasTimeline?.trunk?.left ?? -4.6, atlasTimeline?.trunk?.right ?? 3.8, atlasTimeline?.futureExtension?.toX ?? 0);
     ys.push(atlasTimeline?.trunk?.y ?? 0, -0.8);
     const validX = xs.filter(Number.isFinite), validY = ys.filter(Number.isFinite);
@@ -1219,10 +1221,16 @@ export function createAtlasScene(container, {
       const segments = 16;
       const path = atlasTimeline?.parentChildPaths?.find(item => item.parentId === parent.id && item.childId === child.id);
       const previousPath = axisTransition?.fromTimeline?.parentChildPaths?.find(item => item.parentId === parent.id && item.childId === child.id);
-      const targetOffset = path?.routeOffset || 0;
       const progress = axisTransition ? axisTransitionProgress(timestamp - axisTransition.startedAt, AXIS_ANIMATION_MS) : 1;
-      const routeOffset = (previousPath?.routeOffset ?? targetOffset) + (targetOffset - (previousPath?.routeOffset ?? targetOffset)) * progress;
-      const atlasCurve = sampleAtlasEdgePath(from, to, segments, { offset: routeOffset });
+      const atlasCurve = sampleAtlasEdgePath(from, to, segments, { routeShape: path?.routeShape });
+      if (previousPath?.routeShape && progress < 1) {
+        const oldCurve = sampleAtlasEdgePath(from, to, segments, { routeShape: previousPath.routeShape });
+        for (let index = 0; index < atlasCurve.length; index++) {
+          atlasCurve[index].x = oldCurve[index].x + (atlasCurve[index].x - oldCurve[index].x) * progress;
+          atlasCurve[index].y = oldCurve[index].y + (atlasCurve[index].y - oldCurve[index].y) * progress;
+          atlasCurve[index].z = oldCurve[index].z + (atlasCurve[index].z - oldCurve[index].z) * progress;
+        }
+      }
       for (let step = 0; step <= segments; step++) {
         const t = step / segments;
         const direction = slerpUnitVector(surfaceFrom, surfaceTo, t);
@@ -1793,13 +1801,19 @@ export function createAtlasScene(container, {
     }
   });
 
+  let resizeLayoutTimer = null;
   const resize = () => {
     if (disposed || !container.clientWidth || !container.clientHeight) return;
     const width = container.clientWidth, height = container.clientHeight;
     renderer.setSize(width, height, false);
     camera.aspect = width / height; camera.updateProjectionMatrix();
-    if (atlasTimeline) refreshAtlasTimeline();
     applyZoom(zoom, false);
+    if (atlasTimeline) {
+      clearTimeout(resizeLayoutTimer);
+      resizeLayoutTimer = setTimeout(() => {
+        if (!disposed) { refreshAtlasTimeline(); applyZoom(zoom, false); }
+      }, 180);
+    }
   };
   const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(resize) : null;
   observer?.observe(container); resize();
@@ -1892,7 +1906,7 @@ export function createAtlasScene(container, {
     getLevelOptions: () => ({ min: 0, max: ATLAS_LEVEL_MAX, surfaceDefault: clampAtlasLevel(surfaceLabelLevel), orbitDefault: clampAtlasLevel(orbitLevel, ORBIT_UNFOLDED_LEVEL) }),
     destroy() {
       if (disposed) return;
-      disposed = true; cancelAnimationFrame(raf); observer?.disconnect();
+      disposed = true; cancelAnimationFrame(raf); clearTimeout(resizeLayoutTimer); observer?.disconnect();
       for (const remove of domListeners) remove();
       worldTextureFactory.dispose();
       registry.clear();

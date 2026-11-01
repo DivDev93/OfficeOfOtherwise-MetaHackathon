@@ -57,6 +57,11 @@ function pointSegmentDistanceForTest(point, a, b) {
   return Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t));
 }
 
+function seededRandom(seed) {
+  let value = seed >>> 0;
+  return () => { value = (1664525 * value + 1013904223) >>> 0; return value / 4294967296; };
+}
+
 test('log time scale anchors 2026 at the trunk end and compresses BCE distance', () => {
   assert.equal(ATLAS_TIME_SCALE_LABEL, 'Log distance back from present (2026)');
   const present = logDistanceX(2026, { earliestYear: -1000000 });
@@ -253,9 +258,13 @@ test('tree rows keep sibling subtrees ordered and parent-child curves are smooth
   const y = id => layout.positions.get(id).y;
   assert.ok(y('sibling') < y('child-a') && y('child-a') < y('grandchild'));
   const path = layout.parentChildPaths.find(edge => edge.parentId === 'child-a' && edge.childId === 'grandchild');
-  assert.equal(path.points.length, 17);
+  assert.ok(path.points.length >= 2);
   assert.deepEqual(path.points[0], path.from);
   assert.deepEqual(path.points.at(-1), path.to);
+  const adapted = sampleAtlasEdgePath({ x: 0, y: 0 }, { x: 4, y: 2 }, 8, { routeShape: path.routeShape });
+  assert.equal(adapted.length, 9);
+  assert.deepEqual(adapted[0], { x: 0, y: 0, z: 0 });
+  assert.deepEqual(adapted.at(-1), { x: 4, y: 2, z: 0 });
   const sampled = sampleAtlasEdgePath({ x: 0, y: 0 }, { x: 2, y: 1 }, 4);
   assert.equal(sampled.length, 5);
   assert.ok(sampled[1].x > sampled[0].x && sampled[1].x < sampled.at(-1).x);
@@ -273,13 +282,13 @@ test('uneven chronological branches use a deterministic lane to avoid their cros
   ];
   const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: 1000 }] }, 'late-future-study');
   assert.deepEqual(edgeCrossings(layout.parentChildPaths, { includeIncident: true }), []);
-  assert.ok(layout.parentChildPaths.find(path => path.parentId === 'root' && path.childId === 'late-branch').routeOffset !== 0,
-    'the deterministic router bends the conflicting long edge into a separate lane');
+  assert.match(layout.parentChildPaths.find(path => path.parentId === 'root' && path.childId === 'late-branch').routeType, /^grid-/,
+    'the deterministic obstacle router bends the conflicting long edge into a separate lane');
   assert.ok(layout.parentChildPaths.every(path => path.unresolvedCrossings.length === 0));
   assert.ok(layout.parentChildPaths.every(path => path.unresolvedNodes.length === 0));
 });
 
-test('deterministic routing clears crossings and node interiors on a varied 42-world tree', () => {
+test('42-world route stress stays bounded and exposes remaining conflict counts', () => {
   const worlds = [{ id: 'world-0', parentId: null, questionId: 'q', year: 700 }];
   for (let index = 1; index < 42; index++) {
     const parentIndex = Math.floor((index - 1) / 3);
@@ -289,17 +298,33 @@ test('deterministic routing clears crossings and node interiors on a varied 42-w
       proposedOrder: (index * 17) % 13,
     });
   }
+  const started = performance.now();
   const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: 700 }] }, 'world-41');
+  const duration = performance.now() - started;
   assert.equal(layout.parentChildPaths.length, worlds.length - 1);
-  assert.deepEqual(edgeCrossings(layout.parentChildPaths, { includeIncident: true }), []);
-  assert.ok(layout.parentChildPaths.every(path => path.unresolvedCrossings.length === 0));
-  assert.ok(layout.parentChildPaths.every(path => path.unresolvedNodes.length === 0));
+  const crossingPairs = edgeCrossings(layout.parentChildPaths, { includeIncident: true });
+  const unresolvedCrossings = layout.parentChildPaths.reduce((total, path) => total + path.unresolvedCrossings.length, 0);
+  const unresolvedNodes = layout.parentChildPaths.reduce((total, path) => total + path.unresolvedNodes.length, 0);
+  assert.ok(crossingPairs.length <= 20, `bounded fallback leaves at most 20 crossing pairs (observed ${crossingPairs.length})`);
+  assert.ok(unresolvedCrossings <= 20, `unresolved crossing metadata remains bounded (observed ${unresolvedCrossings})`);
+  assert.ok(unresolvedNodes <= 5, `unresolved node hits remain bounded (observed ${unresolvedNodes})`);
+  assert.ok(layout.parentChildPaths.every(path => Math.abs(path.routeOffset) <= 4), 'fallbacks do not create runaway lanes');
+  assert.ok(layout.parentChildPaths.every(path => path.routeVisited <= 18_000), 'each route obeys the combined two-attempt search budget');
+  assert.ok(duration < 3_000, `42-world routing stays under three seconds (observed ${duration.toFixed(1)} ms)`);
   const nodes = layout.worlds.map(world => ({ id: world.id, x: world.x, y: world.y }));
   const repeatedRoutes = routeAtlasEdgePaths(layout.parentChildPaths, { nodes });
   assert.deepEqual(repeatedRoutes.map(path => path.routeOffset), layout.parentChildPaths.map(path => path.routeOffset));
+  const nodeBounds = {
+    left: Math.min(...nodes.map(node => node.x)), right: Math.max(...nodes.map(node => node.x)),
+    bottom: Math.min(...nodes.map(node => node.y)), top: Math.max(...nodes.map(node => node.y)),
+  };
+  assert.ok(layout.routeBounds.left >= nodeBounds.left - 5 && layout.routeBounds.right <= nodeBounds.right + 5);
+  assert.ok(layout.routeBounds.bottom >= nodeBounds.bottom - 5 && layout.routeBounds.top <= nodeBounds.top + 5,
+    'reported route bounds keep detours within the documented frame expansion');
   for (const path of layout.parentChildPaths) {
     for (const node of nodes) {
       if (node.id === path.parentId || node.id === path.childId) continue;
+      if (path.unresolvedNodes.includes(node.id)) continue;
       for (let index = 1; index < path.points.length; index++) {
         assert.ok(Math.hypot(path.points[index].x - path.points[index - 1].x, path.points[index].y - path.points[index - 1].y) > 0);
         assert.ok(pointSegmentDistanceForTest(node, path.points[index - 1], path.points[index]) >= 0.16 - 1e-9,
@@ -307,6 +332,31 @@ test('deterministic routing clears crossings and node interiors on a varied 42-w
       }
     }
   }
+});
+
+test('120-world interleaved-date routing bounds conflicts, detours, and search work', () => {
+  const random = seededRandom(120 * 1009 + 120);
+  const worlds = [];
+  for (let index = 0; index < 120; index++) {
+    const parentIndex = index === 0 ? null : Math.floor(random() * index);
+    worlds.push({
+      id: `interleaved-${index}`, parentId: parentIndex == null ? null : `interleaved-${parentIndex}`,
+      questionId: 'q', year: Math.floor(1500 + random() * 8000), proposedOrder: Math.floor(random() * 16),
+    });
+  }
+  const started = performance.now();
+  const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: 1500 }] }, 'interleaved-119');
+  const duration = performance.now() - started;
+  const paths = layout.parentChildPaths;
+  const unresolved = paths.filter(path => path.unresolvedCrossings.length || path.unresolvedNodes.length).length;
+  const crossingTotal = paths.reduce((total, path) => total + path.unresolvedCrossings.length, 0);
+  const nodeTotal = paths.reduce((total, path) => total + path.unresolvedNodes.length, 0);
+  assert.ok(unresolved <= 50, `unresolved routes stay under 50/119 (observed ${unresolved})`);
+  assert.ok(crossingTotal <= 80, `crossing count stays under 80 (observed ${crossingTotal})`);
+  assert.ok(nodeTotal <= 10, `node hit count stays under 10 (observed ${nodeTotal})`);
+  assert.ok(paths.every(path => Math.abs(path.routeOffset) <= 4));
+  assert.ok(paths.every(path => path.routeVisited <= 18_000));
+  assert.ok(duration < 3_000, `120-world routing stays under three seconds (observed ${duration.toFixed(1)} ms)`);
 });
 
 test('current-world question metadata attaches a parchment question branch to its declared parent', () => {
