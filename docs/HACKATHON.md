@@ -226,3 +226,6 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Restore bounded source retrieval and evidence-linked briefs, preserving complete quoted units and uncertainty. | |
 | 2026-11-01 | Continue unsupported or ungrounded topics as explicitly unsourced speculation, without invented citations or additional proposal calls. | |
 | 2026-11-01 | Resolve run manifests and assets through the same valid source, so metadata-only live continuation records do not hide packaged files and real live collisions stay consistent. | |
+| 2026-11-01 | Atlas: pass globe pointer hits through the empty Lift/Orbit rail shell while keeping reopened panels and reduced-motion controls interactive. Added offline pointer-state regression coverage. | |
+| 2026-11-01 | Atlas: make visible world and question titles actionable by pointer and keyboard while keeping axis/year captions informational. Verified visible question-title unfolding and exact event-title navigation in the local browser; added offline regression coverage. | |
+| 2026-11-01 | Expose Generate scene for confirmed missing saved-event images and Retry scene after failures, deduplicate in-flight scene requests, and preserve saved consequences. Verified the cave-event recovery action without generation calls; 642 offline tests pass on Node 22. | |

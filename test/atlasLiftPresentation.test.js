@@ -34,6 +34,7 @@ test('Lift preserves separate panel bands, fades them monotonically, then reveal
   const cardRule = css.match(/body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.atlas-world-card\{([^}]*)\}/)?.[1];
   assert.ok(railRule, 'Lift keeps the canvas-aligned rail container');
   assert.match(railRule, /width:min\(320px,calc\(34vw - 12px\)\);min-width:270px;overflow:visible/);
+  assert.match(railRule, /pointer-events:none/, 'the empty rail container passes globe pointer hits through during Lift');
   assert.doesNotMatch(railRule, /--atlas-rail-width/, 'the desktop rail remains full width independently from the canvas inset');
   assert.ok(railContentRule, 'Lift gives fading rail content its independent full width');
   assert.match(railContentRule, /width:min\(320px,max\(270px,calc\(34vw - 12px\)\)\)/);
@@ -101,6 +102,19 @@ test('reduced-motion Lift holds the original panels until an instant Orbit hando
     'the existing tree, details, and geography remain fully visible and interactive throughout reduced-motion Lift');
   assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.atlas-compact-controls,[\s\S]*?\.atlas-world-card\{opacity:0!important;visibility:hidden!important;pointer-events:none!important;transition:none!important/,
     'the incoming compact controls and card stay entirely hidden until Orbit');
+});
+
+test('Orbit and Lift rail shells pass pointer hits through while visible controls remain interactive', () => {
+  assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.exploration-rail,[\s\S]*?body:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.exploration-rail\{[^}]*pointer-events:none/,
+    'the collapsed Orbit/Atlas rail shell does not intercept globe nodes');
+  assert.match(css, /body\.atlas-panels-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.exploration-rail,[\s\S]*?body\.atlas-panels-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.exploration-rail\{[^}]*pointer-events:auto/,
+    'opening the story panel restores rail hit testing');
+  assert.match(css, /body\.invitation-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.exploration-rail,[\s\S]*?body\.invitation-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.exploration-rail\{[^}]*pointer-events:auto/,
+    'opening New exploration restores rail hit testing');
+  assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.atlas-compact-controls,[\s\S]*?pointer-events:auto/,
+    'compact navigation remains targetable over the pass-through rail');
+  assert.match(css, /@media\(prefers-reduced-motion:reduce\)[\s\S]*?body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.exploration-rail>:not\(\.atlas-compact-controls\),[\s\S]*?pointer-events:auto!important/,
+    'reduced-motion Lift keeps its visible rail contents interactive');
 });
 
 test('reduced-motion Lift preserves the geography panel centering transform at each breakpoint', () => {

@@ -508,7 +508,16 @@ function checkSavedEventScene(runId, branch, manifest) {
   const key = eventKey(runId, branch.id);
   const work = eventWork.get(key) || { runId, branchId: branch.id, title: branch.title, children: [] };
   eventWork.set(key, work);
-  if (localEventThumbnail(runId, branch.id, manifest) || work.sceneTaskPromise || work.sceneCheckDone || work.sceneCheckPromise) return;
+  const savedThumbnail = localEventThumbnail(runId, branch.id, manifest);
+  if (savedThumbnail) {
+    work.sceneUrl = savedThumbnail;
+    work.sceneMessage = '';
+    work.sceneRetryable = false;
+    work.sceneMissing = false;
+    work.sceneInProgress = false;
+    return;
+  }
+  if (work.sceneTaskPromise || work.sceneCheckDone || work.sceneCheckPromise) return;
   work.sceneCheckOnly = true;
   work.sceneQueued = true;
   work.sceneLoading = true;
@@ -529,22 +538,26 @@ function checkSavedEventScene(runId, branch, manifest) {
         work.sceneUrl = result.url;
         work.sceneMessage = '';
         work.sceneRetryable = false;
+        work.sceneMissing = false;
         work.sceneInProgress = false;
       } else if (result.status === 'in-progress') {
         work.sceneMessage = 'Scene generation in progress';
         work.sceneInProgress = true;
         work.sceneRetryable = false;
+        work.sceneMissing = false;
         work.sceneCheckStatus = result.status;
       } else {
         work.sceneMessage = result.status === 'missing' ? 'No saved scene' : 'Saved scene unavailable';
         work.sceneInProgress = false;
         work.sceneRetryable = result.status !== 'missing';
+        work.sceneMissing = result.status === 'missing';
         work.sceneCheckStatus = result.status;
       }
     } catch (error) {
       work.sceneCheckDone = true;
       work.sceneInProgress = false;
       work.sceneRetryable = true;
+      work.sceneMissing = false;
       work.sceneMessage = error.message || 'Could not check the saved scene';
     } finally {
       work.sceneQueued = false;
@@ -1259,11 +1272,13 @@ function renderEventWork() {
   $('event-loading-indicator').hidden = !work.childrenLoading || !work.running;
   if (!work.sceneUrl && work.sceneMessage) setStageMessage(work.sceneMessage + '.');
   const hasSavedChildren = !!work.childRunId || !!work.children?.length;
-  const retrySceneOnly = work.sceneRetryable && (hasSavedChildren || !work.childrenRetryable && !work.budgetFailureRetryable);
+  const canGenerateScene = serviceMode === 'live-enabled' && hasLiveAccess();
+  const retrySceneOnly = (work.sceneRetryable || work.sceneMissing && canGenerateScene)
+    && (hasSavedChildren || !work.childrenRetryable && !work.budgetFailureRetryable);
   const retryConsequences = work.childrenRetryable && !hasSavedChildren;
   $('event-retry').hidden = !(retrySceneOnly || retryConsequences) || work.running;
-  $('event-retry').textContent = retrySceneOnly ? 'Retry scene' : 'Try again';
-  $('event-retry').setAttribute('aria-label', retrySceneOnly ? `Retry scene for ${work.title || 'this event'}` : `Try this event again`);
+  $('event-retry').textContent = retrySceneOnly ? (work.sceneMissing && canGenerateScene ? 'Generate scene' : 'Retry scene') : 'Try again';
+  $('event-retry').setAttribute('aria-label', retrySceneOnly ? `${work.sceneMissing && canGenerateScene ? 'Generate' : 'Retry'} scene for ${work.title || 'this event'}` : `Try this event again`);
   if (work.sceneUrl && isSelected(work.runId, work.branchId)) {
     if (activeView === 'scene') setView('scene');
   }
@@ -1284,7 +1299,7 @@ function renderEventWork() {
 }
 function queueSceneTask(runId, branch, work, access, allowGeneration, refresh, retry = false, background = false) {
   if (work.sceneUrl) return Promise.resolve(true);
-  if (work.sceneTaskPromise && !retry && (work.sceneQueued || work.sceneRunning)) return work.sceneTaskPromise;
+  if (work.sceneTaskPromise && (work.sceneQueued || work.sceneRunning)) return work.sceneTaskPromise;
   work.sceneQueued = true; work.running = true;
   work.sceneLoading = true; work.sceneMessage = 'Queued to check the scene'; refresh();
   const task = enqueueEventJob(async () => {
@@ -1304,14 +1319,14 @@ function queueSceneTask(runId, branch, work, access, allowGeneration, refresh, r
         result = await generated.response.json();
       }
       if (result.status === 'complete' && result.url) {
-        work.sceneUrl = result.url; work.sceneMessage = ''; work.sceneRetryable = false;
+        work.sceneUrl = result.url; work.sceneMessage = ''; work.sceneRetryable = false; work.sceneMissing = false;
         if (work.sceneOnlyPrefetch && !work.childrenRunning) work.sceneOnlyComplete = true;
       } else if (result.status === 'missing') {
-        work.sceneMessage = serviceMode === 'replay-only' ? 'Run locally with your own Meta API key for fresh scene generation' : 'No saved scene is available for this event.'; work.sceneRetryable = false;
+        work.sceneMessage = serviceMode === 'replay-only' ? 'Run locally with your own Meta API key for fresh scene generation' : 'No saved scene is available for this event.'; work.sceneRetryable = false; work.sceneMissing = true;
         if (work.sceneOnlyPrefetch) work.sceneOnlyComplete = true;
       } else {
         work.sceneMessage = result.status === 'in-progress' ? 'Scene generation is in progress' : 'Scene generation did not complete; retry to check';
-        work.sceneRetryable = true; work.sceneInProgress = result.status === 'in-progress';
+        work.sceneRetryable = true; work.sceneMissing = false; work.sceneInProgress = result.status === 'in-progress';
         if (work.sceneOnlyPrefetch) work.sceneOnlyComplete = true;
         if (result.status === 'in-progress' && (work.pollCount || 0) < 30) {
           work.pollCount = (work.pollCount || 0) + 1;
@@ -1345,7 +1360,7 @@ function prefetchEventScenes(branches, runId, manifest) {
     const work = eventWork.get(key) || { runId, branchId:branch.id, title:branch.title, children:[] };
     eventWork.set(key, work);
     const confirmedScene = localEventThumbnail(runId, branch.id, manifest);
-    if (confirmedScene) { work.sceneUrl = confirmedScene; work.sceneMessage = ''; work.sceneOnlyComplete = true; work.sceneOnlyPrefetch = true; continue; }
+    if (confirmedScene) { work.sceneUrl = confirmedScene; work.sceneMessage = ''; work.sceneRetryable = false; work.sceneMissing = false; work.sceneInProgress = false; work.sceneOnlyComplete = true; work.sceneOnlyPrefetch = true; continue; }
     if (work.sceneUrl || work.sceneTaskPromise || (work.sceneQueued && !work.sceneCheckOnly) || (work.sceneRunning && !work.sceneCheckOnly)) continue;
     work.sceneOnlyPrefetch = true;
     const refresh = () => { if (isSelected(runId, branch.id)) renderEventWork(); else renderBranches(); };
@@ -1392,10 +1407,10 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
   if (sceneOnly && !work.childRunId) work.childrenMessage = '';
   else if (!work.childRunId) work.childrenMessage = 'Queued to find consequences';
   const access = $('access').value;
-  if (branch.id === ownerHeroId && runId === currentRunId && hasImage && !work.sceneUrl) { work.sceneUrl = asset('hero.png'); work.sceneMessage = ''; work.sceneLoading = false; }
+  if (branch.id === ownerHeroId && runId === currentRunId && hasImage && !work.sceneUrl) { work.sceneUrl = asset('hero.png'); work.sceneMessage = ''; work.sceneRetryable = false; work.sceneMissing = false; work.sceneInProgress = false; work.sceneLoading = false; }
   if (!work.sceneUrl) {
     const savedPreview = localEventThumbnail(runId, branch.id, ownerManifest);
-    if (savedPreview) { work.sceneUrl = savedPreview; work.sceneMessage = ''; work.sceneLoading = false; }
+    if (savedPreview) { work.sceneUrl = savedPreview; work.sceneMessage = ''; work.sceneRetryable = false; work.sceneMissing = false; work.sceneInProgress = false; work.sceneLoading = false; }
   }
   let savedChild = ownerChildren.find(item => item.branchId === branch.id);
   const ownerPath = ownerManifest?.continuation?.path || (runId === currentRunId ? continuation.path : []);
@@ -1574,7 +1589,9 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
 $('event-retry').addEventListener('click', () => {
   const branch = branchState.branches.find(item => item.id === selectedBranchId), work = eventWork.get(eventKey(currentRunId, selectedBranchId));
   if (!branch || !work) return;
-  if (work.sceneRetryable && (!!work.childRunId || !!work.children?.length || !work.childrenRetryable && !work.budgetFailureRetryable)) {
+  if ((work.sceneRetryable || work.sceneMissing && serviceMode === 'live-enabled' && hasLiveAccess())
+      && (!!work.childRunId || !!work.children?.length || !work.childrenRetryable && !work.budgetFailureRetryable)) {
+    if (work.sceneQueued || work.sceneRunning) return;
     const runId = currentRunId;
     const refresh = () => { if (isSelected(runId, branch.id)) renderEventWork(); else renderBranches(); };
     queueSceneTask(runId, branch, work, $('access').value, serviceMode === 'live-enabled' && hasLiveAccess(), refresh, true, false);

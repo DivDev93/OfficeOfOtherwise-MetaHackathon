@@ -6,6 +6,7 @@ import { clusterOpacityAtPresentation, orbitClusteredIdsForPresentation, planWor
 import { containsFanRegion, createFanHitRegion, fanMemberOffsets } from './screenLayout.js';
 import { createLargeClusterPicker, needsPagedClusterPicker, visibleKeyboardNeighborEntries } from './largeClusterPicker.js';
 import { createAtlasP2Renderer } from './p2Renderer.js';
+import { bindAtlasScreenLabelButton, isAtlasScreenLabelAction } from './screenLabelActions.js';
 import { planAtlasReveal, renderableAtlasRevealPlan } from './revealPlanner.js';
 import { interpolateAttachedAtlasEdgeRoute } from './routeMorph.js';
 import { dragModeForZoom, panDeltaForDrag, surfaceDragAngles, surfaceDetailFromPinch, surfaceDetailFromWheel, zoomFromPinch, zoomFromWheel } from './interaction.js';
@@ -212,18 +213,33 @@ function imageForWorld(world, selected = false, resolver = defaultWorldImageUrl)
 }
 
 function createWorldLabel(world) {
-  const element = document.createElement('span');
+  const element = document.createElement('button');
   element.className = 'atlas-screen-label atlas-world-label';
+  element.type = 'button';
   element.textContent = worldLabelText(world);
-  element.setAttribute('role', 'note');
   element.setAttribute('aria-label', worldLabelText(world));
   element.title = worldLabelText(world);
   Object.assign(element.style, {
     position: 'absolute', display: 'none', transform: 'translate(-50%, -50%)',
-    pointerEvents: 'none', whiteSpace: 'nowrap', maxWidth: 'min(320px, 70vw, 100%)', boxSizing: 'border-box',
+    appearance: 'none', border: '0', padding: '0', background: 'transparent', textAlign: 'center', cursor: 'pointer',
+    pointerEvents: 'auto', whiteSpace: 'nowrap', maxWidth: 'min(320px, 70vw, 100%)', boxSizing: 'border-box',
     overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'Inter, system-ui, sans-serif',
     fontSize: '12.5px', fontWeight: '500', lineHeight: '16px', letterSpacing: '0.01em',
     color: '#ece4d4', textShadow: '0 1px 4px #07121a, 0 0 8px #07121a',
+  });
+  return element;
+}
+
+function createStaticScreenLabel(text) {
+  const element = document.createElement('span');
+  element.className = 'atlas-screen-label';
+  element.textContent = text;
+  element.setAttribute('role', 'note');
+  Object.assign(element.style, {
+    position:'absolute', display:'none', transform:'translate(-50%, -50%)', pointerEvents:'none',
+    whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', boxSizing:'border-box',
+    fontFamily:'Inter, system-ui, sans-serif', fontWeight:'500', lineHeight:'16px', letterSpacing:'0.01em',
+    color:'#ece4d4', textShadow:'0 1px 4px #07121a, 0 0 8px #07121a',
   });
   return element;
 }
@@ -301,6 +317,7 @@ export function createAtlasScene(container, {
   const orbitLabelLanes = new Map();
   const orbitLaneContents = new Map();
   const orbitChildLabelButtons = new Map();
+  const boundScreenLabelButtons = new WeakSet();
   let orbitFallbackSection = null;
   let orbitFallbackContent = null;
   let orbitFallbackPlacementWarned = false;
@@ -1426,7 +1443,7 @@ export function createAtlasScene(container, {
         const point = projectPoint(sprite.getWorldPosition(new THREE.Vector3()));
         const fullText = questions.find(question => String(question.id) === String(chip.questionId))?.question || chip.label;
         const text = shortQuestionTitle(fullText);
-        if (point.visible) candidates.push({ id: `chip:${chip.questionId}`, text, fullText, ...point, width: Math.min(mobileLabels ? 220 : 240, safeBounds.right - safeBounds.left, Math.max(100, text.length * 7.5 + 8)), height: 20, priority: 80, kind: 'chip' });
+        if (point.visible) candidates.push({ id: `chip:${chip.questionId}`, questionId:String(chip.questionId), text, fullText, ...point, width: Math.min(mobileLabels ? 220 : 240, safeBounds.right - safeBounds.left, Math.max(100, text.length * 7.5 + 8)), height: 20, priority: 80, kind: 'chip' });
       }
       for (const tick of atlasTimeline?.visibleTicks || []) {
         if (tick.year === 2026) continue;
@@ -1457,11 +1474,11 @@ export function createAtlasScene(container, {
       const point = projectPoint(orbitQuestionParent.getWorldPosition(new THREE.Vector3()));
       const question = orbitQuestionParentQuestion;
       const text = question?.question || question?.title || question?.prompt || 'Saved question';
-      if (point.visible) candidates.push({ id: `question:${question?.id}`, text, ...point, width: Math.min(mobileLabels ? 220 : 240, safeBounds.right - safeBounds.left, Math.max(80, String(text).length * 6.4)), height: 20, priority: 95, kind: 'world' });
+      if (point.visible) candidates.push({ id: `question:${question?.id}`, questionId:String(question?.id || ''), text, ...point, width: Math.min(mobileLabels ? 220 : 240, safeBounds.right - safeBounds.left, Math.max(80, String(text).length * 6.4)), height: 20, priority: 95, kind: 'question' });
     }
     if (p2Renderer.presentEarth.visible) {
       const point = projectPoint(p2Renderer.presentEarth.getWorldPosition(new THREE.Vector3()));
-      if (point.visible) candidates.push({ id: 'present-earth', text: 'Present-day Earth · 2026', ...point, width: Math.min(200, safeBounds.right - safeBounds.left), height: 18, priority: 95, kind: 'world' });
+      if (point.visible) candidates.push({ id: 'present-earth', text: 'Present-day Earth · 2026', ...point, width: Math.min(200, safeBounds.right - safeBounds.left), height: 18, priority: 95, kind: 'present' });
     }
     const orbitChildEntries = !revealPlan && state.orbit > 0.3 && state.atlas < 0.6
       ? entries.filter(entry => entry.orbitVisible && String(entry.parentId) === String(currentId))
@@ -1498,22 +1515,40 @@ export function createAtlasScene(container, {
       const worldRecord = placement.kind === 'world' ? registry.get(placement.id) : null;
       let element = worldRecord?.label || auxiliaryLabels.get(placement.id);
       if (!element) {
-        element = createWorldLabel({ title: placement.text });
+        element = isAtlasScreenLabelAction(placement.kind)
+          ? createWorldLabel({ title: placement.text })
+          : createStaticScreenLabel(placement.text);
         element.className = `atlas-screen-label atlas-${placement.kind || 'auxiliary'}-label`;
         auxiliaryLabels.set(placement.id, element);
         labelOverlay.append(element);
       }
+      const actionable = isAtlasScreenLabelAction(placement.kind);
+      if (actionable && !boundScreenLabelButtons.has(element)) {
+        bindAtlasScreenLabelButton(element, {
+          onPreview:(source, event) => previewScreenLabel(element, source, event),
+          onActivate:event => activateScreenLabel(element, event),
+        });
+        boundScreenLabelButtons.add(element);
+      }
       element.textContent = placement.text;
-      element.setAttribute('aria-label', placement.fullText || placement.text);
+      element.setAttribute('aria-label', actionable ? `Open ${placement.fullText || placement.text}` : placement.fullText || placement.text);
       element.title = placement.fullText || placement.text;
+      element.dataset.labelKind = placement.kind || '';
+      element.dataset.labelId = String(placement.id || '');
+      element.dataset.questionId = String(placement.questionId || '');
+      element.dataset.labelX = String(placement.x);
+      element.dataset.labelY = String(placement.y);
+      element.tabIndex = actionable ? 0 : -1;
       element.style.left = `${placement.x - labelBounds.left}px`;
       element.style.top = `${placement.y - labelBounds.top}px`;
       element.style.width = `${placement.width}px`;
       element.style.textAlign = 'center';
       element.style.display = 'block';
+      element.style.pointerEvents = actionable ? 'auto' : 'none';
+      if (actionable) element.style.cursor = 'pointer';
       element.style.opacity = revealPlan?.positions.has(placement.id) ? String(revealAlpha(placement.id)) : '1';
       element.style.color = '#ece4d4';
-      element.style.fontSize = placement.kind === 'axis' ? '12px' : '12.5px';
+      element.style.fontSize = placement.kind === 'axis' || placement.kind === 'tick' ? '12px' : '12.5px';
       activeLabelIds.add(placement.id);
     }
     for (const entry of entries) {
@@ -2427,6 +2462,77 @@ export function createAtlasScene(container, {
   }
   function questionAnchor(question, source, clientX = null, clientY = null, projectedX = null, projectedY = null) {
     return { source, questionId: String(question.id), clientX: clientX ?? projectedX, clientY: clientY ?? projectedY, projectedX, projectedY };
+  }
+  function clearScreenLabelPreview(element) {
+    const { labelKind: kind, labelId: id, questionId } = element.dataset;
+    if (kind === 'world' && hoveredId === id) setFocusedWorld(null, null);
+    else if ((kind === 'question' || kind === 'chip') && hoveredQuestionId === questionId) {
+      onQuestionPreview(null, null);
+      hoveredQuestionId = null;
+      renderer.domElement.dataset.focusedQuestionId = ''; container.dataset.focusedQuestionId = '';
+      applyZoom(zoom, false);
+    } else if (kind === 'present' && hoveredReference) {
+      onPreview(null, null);
+      hoveredReference = false; hoveredId = null;
+      renderer.domElement.dataset.focusedWorldId = ''; renderer.domElement.dataset.previewWorldId = '';
+      container.dataset.focusedWorldId = ''; container.dataset.previewWorldId = '';
+      applyZoom(zoom, false);
+    }
+  }
+  function previewScreenLabel(element, source, event) {
+    if (!source) { clearScreenLabelPreview(element); return; }
+    const { labelKind: kind, labelId: id, questionId } = element.dataset;
+    const anchorSource = source === 'keyboard' ? 'keyboard' : 'pointer';
+    const pointerX = source === 'pointer' && Number.isFinite(event?.clientX) ? event.clientX : null;
+    const pointerY = source === 'pointer' && Number.isFinite(event?.clientY) ? event.clientY : null;
+    if (kind === 'world') {
+      const world = worlds.find(item => stableWorldId(item) === id);
+      if (!world) return;
+      if (hoveredQuestionId) { onQuestionPreview(null, null); hoveredQuestionId = null; }
+      renderer.domElement.dataset.focusedQuestionId = ''; container.dataset.focusedQuestionId = '';
+      if (hoveredReference) { onPreview(null, null); hoveredReference = false; }
+      setFocusedWorld(world, projectedAnchor(id, anchorSource, pointerX, pointerY));
+      return;
+    }
+    if (kind === 'question' || kind === 'chip') {
+      const question = questionForChip({ questionId });
+      if (hoveredId || hoveredReference) { setFocusedWorld(null, null); hoveredReference = false; }
+      const changed = hoveredQuestionId !== String(question.id);
+      hoveredQuestionId = String(question.id); hoveredReference = false; hoveredId = null;
+      renderer.domElement.dataset.focusedQuestionId = hoveredQuestionId; container.dataset.focusedQuestionId = hoveredQuestionId;
+      onQuestionPreview(question, questionAnchor(question, anchorSource, pointerX, pointerY,
+        Number(element.dataset.labelX), Number(element.dataset.labelY)));
+      if (changed) applyZoom(zoom, false);
+      return;
+    }
+    if (kind === 'present') {
+      if (hoveredQuestionId) { onQuestionPreview(null, null); hoveredQuestionId = null; }
+      renderer.domElement.dataset.focusedQuestionId = ''; container.dataset.focusedQuestionId = '';
+      if (hoveredId && hoveredId !== 'present-day-earth') setFocusedWorld(null, null);
+      hoveredReference = true; hoveredId = 'present-day-earth';
+      renderer.domElement.dataset.focusedWorldId = 'present-day-earth'; renderer.domElement.dataset.previewWorldId = 'present-day-earth';
+      container.dataset.focusedWorldId = 'present-day-earth'; container.dataset.previewWorldId = 'present-day-earth';
+      onPreview(virtualPresentEarth(), { source:anchorSource, worldId:'present-day-earth', clientX:pointerX, clientY:pointerY });
+      applyZoom(zoom, false);
+    }
+  }
+  function activateScreenLabel(element, event) {
+    const { labelKind: kind, labelId: id, questionId } = element.dataset;
+    const keyboard = event.detail === 0;
+    const source = keyboard ? 'keyboard' : 'atlas-screen-label';
+    const pointerX = keyboard ? null : event.clientX;
+    const pointerY = keyboard ? null : event.clientY;
+    if (kind === 'world') {
+      const world = worlds.find(item => stableWorldId(item) === id);
+      if (world) explicitEnter(world, projectedAnchor(id, source, pointerX, pointerY));
+    } else if (kind === 'question' || kind === 'chip') {
+      const question = questionForChip({ questionId });
+      const chip = atlasTimeline?.chips?.find(item => String(item.questionId) === String(question.id)) || { questionId:String(question.id) };
+      expandQuestionChip(chip, questionAnchor(question, source, pointerX, pointerY,
+        Number(element.dataset.labelX), Number(element.dataset.labelY)));
+    } else if (kind === 'present') {
+      onEnter(virtualPresentEarth(), { source, worldId:'present-day-earth', clientX:pointerX, clientY:pointerY });
+    }
   }
   function expandQuestionChip(chip, anchor) {
     if (!chip?.questionId) return false;

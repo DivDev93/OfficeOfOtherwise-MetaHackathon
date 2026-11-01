@@ -88,6 +88,25 @@ test('Atlas P2 labels the finite non-temporal lane only when undated records exi
     'the overlay candidate remains necessary because legacy P2 text sprites are intentionally hidden');
 });
 
+test('visible screen-space event and question titles support pointer and keyboard activation', () => {
+  assert.match(scene, /bindAtlasScreenLabelButton\(element,[\s\S]*onPreview:\(source, event\) => previewScreenLabel\(element, source, event\)[\s\S]*onActivate:event => activateScreenLabel\(element, event\)/,
+    'the same actionable labels preview and activate from pointer or keyboard');
+  assert.match(scene, /element\.tabIndex = actionable \? 0 : -1;[\s\S]*element\.style\.pointerEvents = actionable \? 'auto' : 'none'/,
+    'actionable labels are keyboard reachable and receive pointer hits while axis and year captions remain pass-through labels');
+  assert.match(scene, /id: `chip:\$\{chip\.questionId\}`, questionId:String\(chip\.questionId\)[\s\S]*kind: 'chip'/,
+    'folded question labels retain the correct question identity');
+  assert.match(scene, /id: `question:\$\{question\?\.id\}`, questionId:String\(question\?\.id \|\| ''\)[\s\S]*kind: 'question'/,
+    'Orbit question titles are identified separately from event titles');
+  assert.match(scene, /const world = worlds\.find\(item => stableWorldId\(item\) === id\);[\s\S]*explicitEnter\(world, projectedAnchor\(id, source/,
+    'event label activation enters its matching world');
+  assert.match(scene, /kind === 'question' \|\| kind === 'chip'[\s\S]*const chip = atlasTimeline\?\.chips\?\.find[\s\S]*expandQuestionChip\(chip,/,
+    'question label activation unfolds and enters the matching question');
+  assert.match(scene, /function createStaticScreenLabel[\s\S]*setAttribute\('role', 'note'\)/,
+    'non-actionable axis and year captions remain static notes');
+  assert.match(style, /\.atlas-screen-label:focus-visible\{outline:2px solid var\(--cyan\)/,
+    'keyboard focus is visible on actionable titles');
+});
+
 test('Atlas route bounds and edge presentation remain complete', () => {
   assert.match(scene, /includeRouteShapeBounds\(transformAtlasEdgeShape\(path\.from, path\.to, path\.routeShape\)/,
     'camera bounds include exact current routed corners');
