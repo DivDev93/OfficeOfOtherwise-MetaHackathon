@@ -194,6 +194,13 @@ export function fitCameraDistance(bounds, aspect, fovDegrees = 38, margin = 1.12
   return Math.max(1, margin * Math.max(halfHeight / Math.tan(halfFov), halfWidth / (Math.tan(halfFov) * safeAspect)));
 }
 
+/** Fit a camera already aimed at the centre of the supplied bounds. */
+export function fitCenteredCameraDistance(bounds, aspect, fovDegrees = 38, margin = 1.12) {
+  const halfWidth = Math.max(0, (Number(bounds?.right) - Number(bounds?.left)) / 2) || 0;
+  const halfHeight = Math.max(0, (Number(bounds?.top) - Number(bounds?.bottom)) / 2) || 0;
+  return fitCameraDistance({ left: -halfWidth, right: halfWidth, bottom: -halfHeight, top: halfHeight }, aspect, fovDegrees, margin);
+}
+
 /** Keep texture canvases within the requested GPU-safe maximum edge without upscaling. */
 export function cappedTextureSize(width, height, maxEdge = 2048) {
   const w = Number(width), h = Number(height), cap = Number(maxEdge);

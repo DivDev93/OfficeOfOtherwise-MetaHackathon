@@ -6,14 +6,14 @@ import { clusterOpacityAtPresentation, orbitClusteredIdsForPresentation, planWor
 import { containsFanRegion, createFanHitRegion, fanMemberOffsets } from './screenLayout.js';
 import { createAtlasP2Renderer } from './p2Renderer.js';
 import { dragModeForZoom, panDeltaForDrag, zoomFromPinch, zoomFromWheel } from './interaction.js';
-import { createWorldLabelCandidates, placeScreenLabels, projectedSphereDiameterPixels, worldLabelText } from './labels.js';
+import { createWorldLabelCandidates, placeScreenLabels, projectedSphereDiameterPixels, shortQuestionTitle, worldLabelText } from './labels.js';
 import {
   GHOST_TRAIL_DEFAULT, arrivalParentWorldId, cutTravelOpacity, interpolateTravelPoint, preservesTravelSource, smoothTravelProgress, travelZoomAt,
   lineageTravelPath, sampleLineagePath, travelDuration,
 } from './p3Travel.js';
 import {
   ATLAS_REAL_SPHERE_LIMIT, AXIS_ANIMATION_MS, AXIS_MODES, PRESENT_DAY_REFERENCE,
-  axisTransitionProgress, buildAtlasTimeline, interpolateAtlasPoint, planQuestionRootConnections,
+  axisTransitionProgress, buildAtlasTimeline, interpolateAtlasPoint, planQuestionRootConnections, sampleAtlasEdgePath,
 } from './p2Atlas.js';
 import {
   ATLAS_LEVEL_MAX, ORBIT_UNFOLDED_LEVEL, SURFACE_LABEL_LEVEL,
@@ -22,7 +22,7 @@ import {
   altitudeForZoom, atlasPresentationState, atlasZoomState, clampAtlasLevel, createWorldRegistry,
   layoutAtlasWorlds, layoutOrbitNeighborhood, measuredFps, surfaceFacingOrientation,
   worldRadiusForScreenPixels, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds, slerpUnitVector,
-  cappedTextureSize, allowEarthBodySelection, fitCameraDistance,
+  cappedTextureSize, allowEarthBodySelection, fitCenteredCameraDistance,
   appendContinuousFrame, stableWorldId, localQuaternionForWorldFacing, isSurfaceNormalVisible,
 } from '../atlasLayout.js';
 
@@ -279,7 +279,7 @@ export function createAtlasScene(container, {
   earthMesh.userData.worldId = null;
   atlasGroup.add(earthMesh);
   const currentRing = new THREE.Mesh(
-    new THREE.TorusGeometry(1, 0.055, 10, 64),
+    new THREE.TorusGeometry(1, 0.018, 10, 64),
     new THREE.MeshBasicMaterial({ color: '#d5a85c', transparent: true, opacity: 0, depthWrite: false }),
   );
   currentRing.name = 'Current world gold ring'; currentRing.visible = false; atlasGroup.add(currentRing);
@@ -334,6 +334,8 @@ export function createAtlasScene(container, {
   const threadMaterial = new THREE.LineDashedMaterial({ color: '#57c9e7', dashSize: 0.075, gapSize: 0.055, transparent: true, opacity: 0.8 });
   const threads = new THREE.LineSegments(threadGeometry, threadMaterial);
   threads.frustumCulled = false; atlasGroup.add(threads);
+  const hoverThreads = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#a4e8f5', transparent: true, opacity: 0.95, depthWrite: false }));
+  hoverThreads.name = 'Hovered exploration path'; hoverThreads.frustumCulled = false; atlasGroup.add(hoverThreads);
   const lineageThreads = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#d5a85c', transparent: true, opacity: 0.9, depthWrite: false }));
   lineageThreads.name = 'Gold current lineage edges'; lineageThreads.frustumCulled = false; atlasGroup.add(lineageThreads);
   const goldEdgeMeshes = new THREE.InstancedMesh(
@@ -451,7 +453,7 @@ export function createAtlasScene(container, {
     return result;
   }
   function refreshAtlasTimeline() {
-    atlasTimeline = buildAtlasTimeline(graphSnapshot(), currentId, axisMode, { expandedQuestionIds: [...expandedQuestionIds] });
+    atlasTimeline = buildAtlasTimeline(graphSnapshot(), currentId, axisMode, { expandedQuestionIds: [...expandedQuestionIds], frameAspect: camera.aspect });
     const byId = new Map(atlasTimeline.worlds.map(item => [item.id, item]));
     const realSphereIds = new Set(atlasTimeline.realSphereIds);
     const foldedIds = new Set(atlasTimeline.foldedIds);
@@ -575,7 +577,10 @@ export function createAtlasScene(container, {
   }
 
   function fittedAtlasDistance() {
-    return fitCameraDistance(atlasFrameBounds(), camera.aspect, camera.fov, 1.08);
+    const frame = atlasFrameBounds();
+    // The camera already looks at the bounds centre; fitting absolute
+    // coordinates would add the centre offset twice and shrink the tree.
+    return fitCenteredCameraDistance(frame, camera.aspect, camera.fov, 1.08);
   }
 
   function worldScenarioTexture(world) {
@@ -840,6 +845,7 @@ export function createAtlasScene(container, {
     const cameraFocus = travelState && !travelState.cut ? earthMesh.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3().lerp(atlasCenter, state.atlas);
     cameraFocus.x += panOffset.x; cameraFocus.y += panOffset.y;
     liveCameraDistance = state.cameraDistance + (fittedAtlasDistance() - state.cameraDistance) * state.atlas;
+    container.dataset.atlasCameraDistance = String(liveCameraDistance);
     // Desktop canvas insets already follow the panels. On narrow screens the
     // bottom sheet overlaps the full-width canvas, so frame the remaining area.
     const canvasBounds = renderer.domElement.getBoundingClientRect();
@@ -847,11 +853,19 @@ export function createAtlasScene(container, {
     const sheetBounds = sheet?.getBoundingClientRect();
     const bottomOverlap = state.lift > 0 && canvasBounds.width <= 700 && sheetBounds && sheetBounds.width > canvasBounds.width * 0.7
       ? Math.max(0, canvasBounds.bottom - Math.max(canvasBounds.top, sheetBounds.top)) : 0;
-    if (canvasBounds.width > 0 && canvasBounds.height > 0 && bottomOverlap > 0 && bottomOverlap < canvasBounds.height * 0.65) {
-      const availableHeight = canvasBounds.height - bottomOverlap;
+    const toolbarBounds = document.getElementById('atlas-toolbar')?.getBoundingClientRect();
+    const otherQuestions = document.getElementById('atlas-other-questions');
+    const otherBounds = otherQuestions && !otherQuestions.hidden ? otherQuestions.getBoundingClientRect() : null;
+    const topOverlap = state.lift > 0 && canvasBounds.width <= 700
+      ? Math.max(0, (otherBounds?.bottom || toolbarBounds?.bottom || canvasBounds.top) - canvasBounds.top + 8) : 0;
+    if (canvasBounds.width > 0 && canvasBounds.height > 0 && bottomOverlap + topOverlap < canvasBounds.height * 0.8 && bottomOverlap + topOverlap > 0) {
+      const availableHeight = canvasBounds.height - bottomOverlap - topOverlap;
       liveCameraDistance *= canvasBounds.height / availableHeight;
-      camera.setViewOffset(canvasBounds.width, canvasBounds.height, 0, bottomOverlap / 2, canvasBounds.width, canvasBounds.height);
+      camera.setViewOffset(canvasBounds.width, canvasBounds.height, 0, (topOverlap - bottomOverlap) / 2, canvasBounds.width, canvasBounds.height);
     } else camera.clearViewOffset();
+    // Deep trees and phone safe-area fitting can exceed the Surface far plane.
+    const requiredFar = Math.max(120, liveCameraDistance * 3 + 20);
+    if (Math.abs(camera.far - requiredFar) > 1) { camera.far = requiredFar; camera.updateProjectionMatrix(); }
     camera.position.set(cameraFocus.x, cameraFocus.y, cameraFocus.z + liveCameraDistance);
     camera.lookAt(cameraFocus);
     key.position.copy(camera.position);
@@ -980,7 +994,9 @@ export function createAtlasScene(container, {
         );
         outline.material.opacity = visibleOutline * 0.92;
         const distance = outline.position.distanceTo(camera.position);
-        const size = 2 * worldRadiusForScreenPixels(distance, camera.fov, Math.max(1, renderer.domElement.clientHeight), 30);
+        // Keep distant Atlas nodes visually distinct without changing their 44px hit targets.
+        const diameter = 30 - 16 * state.atlas;
+        const size = 2 * worldRadiusForScreenPixels(distance, camera.fov, Math.max(1, renderer.domElement.clientHeight), diameter);
         outline.scale.set(size, size, 1);
       }
     }
@@ -1033,10 +1049,14 @@ export function createAtlasScene(container, {
           const normal = surfacePoint(entry).transformDirection(atlasGroup.matrixWorld);
           if (!isSurfaceNormalVisible(normal, towardCameraForLabels, horizonThreshold)) return { visible: false };
         }
-        return projectPoint(worldPosition(entry, state, timestamp, markerRadius).applyMatrix4(atlasGroup.matrixWorld));
+        const point = projectPoint(worldPosition(entry, state, timestamp, markerRadius).applyMatrix4(atlasGroup.matrixWorld));
+        if (entry.lineage && entry.id !== currentId) point.visible = true;
+        return point;
       },
       measure: text => ({ width: Math.min(mobileLabels ? 220 : 320, labelBounds.width * (mobileLabels ? 0.64 : 0.7), safeBounds.right - safeBounds.left, Math.max(52, text.length * 7.5 + 8)), height: 18 }),
       yearFirst: mobileLabels,
+      bounds: safeBounds,
+      include: entry => state.orbit > 0.3 && state.atlas < 0.6 && entry.orbitVisible && String(entry.parentId) === String(currentId),
     });
     const candidates = [...worldCandidates];
     const visibleWorldIds = new Set([...instanceIds, ...lodIds, ...(currentId ? [currentId] : [])]);
@@ -1090,16 +1110,20 @@ export function createAtlasScene(container, {
       for (const { chip, sprite } of p2Renderer.getQuestionChipTargets()) {
         if (!chip || !sprite.visible) continue;
         const point = projectPoint(sprite.getWorldPosition(new THREE.Vector3()));
-        if (point.visible) candidates.push({ id: `chip:${chip.questionId}`, text: chip.label, ...point, width: Math.min(mobileLabels ? 220 : 240, safeBounds.right - safeBounds.left, Math.max(100, String(chip.label || '').length * 7.5 + 8)), height: 20, priority: 80, kind: 'chip' });
+        const fullText = questions.find(question => String(question.id) === String(chip.questionId))?.question || chip.label;
+        const text = shortQuestionTitle(fullText);
+        if (point.visible) candidates.push({ id: `chip:${chip.questionId}`, text, fullText, ...point, width: Math.min(mobileLabels ? 220 : 240, safeBounds.right - safeBounds.left, Math.max(100, text.length * 7.5 + 8)), height: 20, priority: 80, kind: 'chip' });
       }
       for (const tick of atlasTimeline?.visibleTicks || []) {
+        if (tick.year === 2026) continue;
         const point = projectPoint(p2Renderer.group.localToWorld(new THREE.Vector3(tick.x, -0.5, 0)));
         if (point.visible) candidates.push({ id: `tick:${tick.year}`, text: tick.label, ...point, width: Math.max(46, String(tick.label).length * 7.5 + 8), height: 18, priority: 30, kind: 'tick' });
       }
       const verticalTitle = axisMode === 'history-distance' ? 'HISTORY DEPTH' : axisMode === 'branch-order' ? 'BRANCH ORDER' : 'THEME';
       const axisGutter = mobileLabels ? 18 : Math.min(138, Math.max(88, labelBounds.height * 0.15));
       candidates.push({ id: 'axis:vertical', text: verticalTitle, x: safeBounds.left + 78, y: safeBounds.top + axisGutter + 10, width: 116, height: 18, priority: 110, kind: 'axis' });
-      candidates.push({ id: 'axis:time', text: 'YEAR', x: safeBounds.right - 26, y: safeBounds.bottom - 12, width: 46, height: 18, priority: 110, kind: 'axis' });
+      const timeAxisPoint = projectPoint(p2Renderer.group.localToWorld(new THREE.Vector3(atlasTimeline?.trunk?.right || 0, (atlasTimeline?.trunk?.y || 0) - 0.5, 0)));
+      candidates.push({ id: 'axis:time', text: 'YEAR', x: timeAxisPoint.x, y: timeAxisPoint.y, width: 46, height: 18, priority: 110, kind: 'axis' });
     }
     if (state.orbit > 0.04 && orbitQuestionParent.visible
       && String(orbitQuestionParent.userData.questionId) === String(hoveredQuestionId)) {
@@ -1108,7 +1132,7 @@ export function createAtlasScene(container, {
       const text = question?.question || question?.title || question?.prompt || 'Saved question';
       if (point.visible) candidates.push({ id: `question:${question?.id}`, text, ...point, width: Math.min(mobileLabels ? 220 : 240, safeBounds.right - safeBounds.left, Math.max(80, String(text).length * 6.4)), height: 20, priority: 95, kind: 'world' });
     }
-    if (hoveredReference && p2Renderer.presentEarth.visible) {
+    if (p2Renderer.presentEarth.visible) {
       const point = projectPoint(p2Renderer.presentEarth.getWorldPosition(new THREE.Vector3()));
       if (point.visible) candidates.push({ id: 'present-earth', text: 'Present-day Earth · 2026', ...point, width: Math.min(152, safeBounds.right - safeBounds.left), height: 18, priority: 95, kind: 'world' });
     }
@@ -1136,8 +1160,8 @@ export function createAtlasScene(container, {
         labelOverlay.append(element);
       }
       element.textContent = placement.text;
-      element.setAttribute('aria-label', placement.text);
-      element.title = placement.text;
+      element.setAttribute('aria-label', placement.fullText || placement.text);
+      element.title = placement.fullText || placement.text;
       element.style.left = `${placement.x - labelBounds.left}px`;
       element.style.top = `${placement.y - labelBounds.top}px`;
       element.style.width = `${placement.width}px`;
@@ -1155,11 +1179,12 @@ export function createAtlasScene(container, {
       if (!candidateLabelIds.has(id)) { element.remove(); auxiliaryLabels.delete(id); }
       else if (!activeLabelIds.has(id)) element.style.display = 'none';
     }
-    const edgePositions = { lineage: [], proposed: [], question: [] };
-    const edgeOpacity = { lineage: 0, proposed: 0, question: 0 };
+    const edgePositions = { lineage: [], proposed: [], question: [], hover: [] };
+    const edgeOpacity = { lineage: 0, proposed: 0, question: 0, hover: 0 };
     const allClusteredIds = new Set(orbitClusteredIdsForPresentation(clusterPlan, { atlas: state.atlas, zoom, orbitNeighborhoodIds }));
     const visibleAtlasIds = new Set(entries.filter(entry => !folded.has(entry.id) && !allClusteredIds.has(entry.id)).map(entry => entry.id));
     const lineageIds = new Set(atlasTimeline?.lineageIds || []);
+    const hoverPathIds = new Set(hoveredId ? [String(hoveredId), ...ancestorIds(hoveredId)] : []);
     const entryById = new Map(entries.map(entry => [entry.id, entry]));
     const questionById = new Map(questions.map(question => [String(question.id), question]));
     const currentParentId = current?.parentId ?? null;
@@ -1179,6 +1204,7 @@ export function createAtlasScene(container, {
       const isQuestionAttachment = String(childQuestion?.attachmentMode || childQuestion?.mode || '') === 'current-world'
         && String(childQuestion.parentWorldId ?? '') === parent.id;
       const kind = lineageIds.has(parent.id) && lineageIds.has(child.id) ? 'lineage'
+        : state.atlas > 0.05 && hoverPathIds.has(parent.id) && hoverPathIds.has(child.id) ? 'hover'
         : (isQuestionAttachment || child.world.proposed === false || child.world.questionId !== parent.world.questionId || /question|chronos|time.?token/i.test(`${child.world.kind || ''} ${child.world.type || ''} ${child.world.tokenType || ''}`)) ? 'question'
           : 'proposed';
       edgeOpacity[kind] = Math.max(edgeOpacity[kind], alpha);
@@ -1190,6 +1216,7 @@ export function createAtlasScene(container, {
       const arrivalEdge = child.id === currentId && parent.id === arrivalFromId;
       const arcPoints = [];
       const segments = 10;
+      const atlasCurve = sampleAtlasEdgePath(from, to, segments);
       for (let step = 0; step <= segments; step++) {
         const t = step / segments;
         const direction = slerpUnitVector(surfaceFrom, surfaceTo, t);
@@ -1198,6 +1225,7 @@ export function createAtlasScene(container, {
           : new THREE.Vector3(direction.x, direction.y, direction.z).multiplyScalar(surfaceRadius).add(earthMesh.position);
         const straight = from.clone().lerp(to, t);
         arc.lerp(straight, state.lift);
+        arc.lerp(new THREE.Vector3(atlasCurve[step].x, atlasCurve[step].y, atlasCurve[step].z), state.atlas);
         arcPoints.push(arc);
       }
       const values = edgePositions[kind];
@@ -1240,6 +1268,7 @@ export function createAtlasScene(container, {
       edgeOpacity[connection.color] = Math.max(edgeOpacity[connection.color], state.atlas);
     }
     writePositionBuffer(threads, new Float32Array(edgePositions.proposed));
+    writePositionBuffer(hoverThreads, new Float32Array(edgePositions.hover));
     writePositionBuffer(lineageThreads, new Float32Array(edgePositions.lineage));
     writePositionBuffer(questionThreads, new Float32Array(edgePositions.question));
     camera.updateMatrixWorld(true);
@@ -1267,9 +1296,10 @@ export function createAtlasScene(container, {
     goldEdgeMeshes.material.opacity = edgeOpacity.lineage;
     lineageThreads.visible = false;
     threads.computeLineDistances(); questionThreads.computeLineDistances();
-    threads.material.opacity = 0.82 * edgeOpacity.proposed;
+    threads.material.opacity = (0.82 - 0.5 * state.atlas) * edgeOpacity.proposed;
+    hoverThreads.material.opacity = 0.95 * edgeOpacity.hover;
     lineageThreads.material.opacity = 0.9 * edgeOpacity.lineage;
-    questionThreads.material.opacity = 0.84 * edgeOpacity.question;
+    questionThreads.material.opacity = (0.84 - 0.5 * state.atlas) * edgeOpacity.question;
     lodPoints.material.opacity = 0.92;
     lodPointMaterial.size = 4.2 + 8.8 * state.atlas;
     instancedPins.material.transparent = true;
@@ -1617,7 +1647,7 @@ export function createAtlasScene(container, {
         const [first, second] = [...activePointers.values()];
         const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
         // Pinching apart moves toward the surface; pinching together moves out toward the atlas.
-        setZoom(zoomFromPinch(pinchGesture.zoom, pinchGesture.distance, distance));
+        setZoom(zoomFromPinch(pinchGesture.zoom * 100, pinchGesture.distance, distance) / 100);
         event.preventDefault?.();
         return;
       }
@@ -1625,7 +1655,7 @@ export function createAtlasScene(container, {
     if (drag && drag.pointerId === event.pointerId) {
       const dx = event.clientX - drag.lastX, dy = event.clientY - drag.lastY;
       drag.lastX = event.clientX; drag.lastY = event.clientY;
-      if (dragModeForZoom(zoom) === 'rotate') {
+      if (dragModeForZoom(zoom * 100) === 'rotate') {
         rotation += dx * 0.006;
         applySurfaceOrientation(1 - atlasPresentationState(zoom, motionReduced).state.lift);
       } else {
@@ -1718,7 +1748,7 @@ export function createAtlasScene(container, {
   });
   listen(renderer.domElement, 'wheel', event => {
     event.preventDefault();
-    setZoom(zoomFromWheel(zoom, event.deltaY, { deltaMode: event.deltaMode, viewportHeight: renderer.domElement.clientHeight }));
+    setZoom(zoomFromWheel(zoom * 100, event.deltaY, { deltaMode: event.deltaMode, viewportHeight: renderer.domElement.clientHeight }) / 100);
   }, { passive: false });
   listen(renderer.domElement, 'keydown', event => {
     if (event.key === '+' || event.key === '=') { event.preventDefault(); setZoom(zoom - 0.035); }
@@ -1762,6 +1792,7 @@ export function createAtlasScene(container, {
     const width = container.clientWidth, height = container.clientHeight;
     renderer.setSize(width, height, false);
     camera.aspect = width / height; camera.updateProjectionMatrix();
+    if (atlasTimeline) refreshAtlasTimeline();
     applyZoom(zoom, false);
   };
   const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(resize) : null;

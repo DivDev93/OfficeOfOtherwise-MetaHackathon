@@ -115,7 +115,8 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     presentMaterial.opacity = alpha; presentMaterial.transparent = true;
     presentMaterial.needsUpdate = true;
     presentLabel.position.set(layout.presentEarth.x, layout.presentEarth.y + 0.58, 0);
-    presentLabel.material.opacity = alpha;
+    // The crisp screen-space overlay owns this label; suppress the old sprite.
+    presentLabel.material.opacity = 0;
     const scaleText = 'YEAR';
     if (scaleLabel.userData.labelText !== scaleText) replaceLabel(scaleLabel, scaleText, PARCHMENT, { x: 0.65, y: 0.2 });
     scaleLabel.position.set((layout.trunk.left + layout.trunk.right) / 2, layout.trunk.y - 0.88, 0);

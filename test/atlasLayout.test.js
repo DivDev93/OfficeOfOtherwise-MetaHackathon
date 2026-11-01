@@ -6,7 +6,7 @@ import {
   atlasZoomState, createWorldRegistry, layoutAtlasWorlds, measuredFps,
   nearestDirectionalNeighbor, selectSurfaceLabels, surfaceFacingRotation, surfaceFacingOrientation, transformSurfaceNormal,
   slerpUnitVector, selectSurfaceWorldLabelIds, worldRadiusForScreenPixels, cappedTextureSize,
-  fitCameraDistance, layoutOrbitNeighborhood, zoomForAltitude,
+  fitCameraDistance, fitCenteredCameraDistance, layoutOrbitNeighborhood, zoomForAltitude,
   appendContinuousFrame, atlasPresentationState,
   clampScreenRectCenter, isSurfaceNormalVisible,
   localQuaternionForWorldFacing,
@@ -268,6 +268,13 @@ test('atlas camera fit covers historical and future bounds at narrow host aspect
   assert.ok(halfWidth >= Math.max(Math.abs(bounds.left), Math.abs(bounds.right)) * 1.08);
   assert.ok(halfHeight >= Math.max(Math.abs(bounds.bottom), Math.abs(bounds.top)) * 1.08);
   assert.ok(fitCameraDistance(bounds, 1.5, fov, 1.08) < distance, 'wide canvases need less atlas camera distance');
+});
+
+test('fitting centred bounds does not double-count their offset from the origin', () => {
+  const frame = { left: 10, right: 30, bottom: 40, top: 50 };
+  const shifted = { left: -10, right: 10, bottom: -5, top: 5 };
+  assert.equal(fitCenteredCameraDistance(frame, 1.6), fitCenteredCameraDistance(shifted, 1.6));
+  assert.ok(fitCenteredCameraDistance(frame, 1.6) < fitCameraDistance(frame, 1.6));
 });
 
 test('FPS uses observed timestamp spacing and reports zero without an elapsed interval', () => {
