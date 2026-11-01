@@ -113,6 +113,7 @@ export function layoutOrbitChildLabelLanes(candidates = [], bounds = {}, reserve
   minLaneWidth = 96,
   maxLaneWidth = 320,
   maxLaneHeight = 240,
+  laneBorder = 2,
 } = {}) {
   const left = Number(bounds?.left) || 0;
   const top = Number(bounds?.top) || 0;
@@ -122,9 +123,11 @@ export function layoutOrbitChildLabelLanes(candidates = [], bounds = {}, reserve
   const row = Math.max(12, Number(rowHeight) || 20);
   const gap = Math.max(0, Number(rowGap) || 0);
   const step = row + gap;
+  const border = Math.max(0, Number(laneBorder) || 0);
+  const minimumViewportHeight = row + border;
   const minimumWidth = Math.max(1, Number(minLaneWidth) || 96);
   const maximumWidth = Math.max(minimumWidth, Number(maxLaneWidth) || 320);
-  const maximumHeight = Math.max(row, Number(maxLaneHeight) || 240);
+  const maximumHeight = Math.max(minimumViewportHeight, Number(maxLaneHeight) || 240);
   const items = (Array.isArray(candidates) ? candidates : []).map((candidate, index) => ({
     ...candidate,
     id: candidate?.id == null ? `orbit-child-${index}` : String(candidate.id),
@@ -144,7 +147,7 @@ export function layoutOrbitChildLabelLanes(candidates = [], bounds = {}, reserve
   });
   if (!items.length) return { lanes: [], labels: [], scrollable: false, blocked: false, overflowIds: [] };
   if (![left, top, right, bottom].every(Number.isFinite) || width <= 0 || height <= 0) return blocked('invalid-bounds');
-  if (width < minimumWidth || height < row) return blocked('viewport-too-small');
+  if (width < minimumWidth || height < minimumViewportHeight) return blocked('viewport-too-small');
 
   const colGap = Math.max(0, Number(columnGap) || 0);
   const columnCount = width >= minimumWidth * 2 + colGap ? 2 : 1;
@@ -177,17 +180,17 @@ export function layoutOrbitChildLabelLanes(candidates = [], bounds = {}, reserve
     const free = [];
     let cursor = top;
     for (const interval of merged) {
-      if (interval.top - cursor >= row) free.push({ top: cursor, bottom: interval.top });
+      if (interval.top - cursor >= minimumViewportHeight) free.push({ top: cursor, bottom: interval.top });
       cursor = Math.max(cursor, interval.bottom);
     }
-    if (bottom - cursor >= row) free.push({ top: cursor, bottom });
+    if (bottom - cursor >= minimumViewportHeight) free.push({ top: cursor, bottom });
     // Keep the UI to one grouped rail per edge. Additional free gaps are not
     // promoted into more overlays; overflow stays in this rail's scroll area.
     const segment = [...free].sort((a, b) => (b.bottom - b.top) - (a.bottom - a.top) || a.top - b.top)[0];
     if (segment) {
       const segmentHeight = segment.bottom - segment.top;
       const viewportHeight = Math.min(segmentHeight, maximumHeight);
-      const capacity = Math.max(1, Math.floor((viewportHeight + gap) / step));
+      const capacity = Math.max(1, Math.floor((viewportHeight - border + gap) / step));
       laneCandidates.push({
         id: `orbit-label-lane-${columnIndex}`,
         x, y: segment.top, width: laneWidth, height: viewportHeight,
@@ -226,9 +229,9 @@ export function layoutOrbitChildLabelLanes(candidates = [], bounds = {}, reserve
   const lanes = laneCandidates.map(lane => {
     const contentHeight = lane.labelIds.length ? lane.labelIds.length * step - gap : 0;
     const viewportHeight = lane.labelIds.length <= lane.capacity
-      ? Math.min(lane.height, Math.max(row, contentHeight))
+      ? Math.min(lane.height, Math.max(minimumViewportHeight, contentHeight + border))
       : lane.height;
-    return { ...lane, height:viewportHeight, contentHeight, scrollable: contentHeight > viewportHeight,
+    return { ...lane, height:viewportHeight, contentHeight, scrollable: contentHeight > viewportHeight - border,
       visibleCount: Math.min(lane.labelIds.length, lane.capacity) };
   });
   const labels = [];

@@ -39,6 +39,29 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const DIM_UNENTERED = new THREE.Color('#4d6870');
 const LIT_EARTH = new THREE.Color('#e6e0ce');
 
+export function revealFocusedOrbitChildInLane(lane, button) {
+  if (!lane?.getBoundingClientRect || !button?.getBoundingClientRect) return false;
+  const laneRect = lane.getBoundingClientRect();
+  const buttonRect = button.getBoundingClientRect();
+  if (!(laneRect.bottom > laneRect.top) || !(buttonRect.bottom > buttonRect.top)) return false;
+  const clientTop = Number(lane.clientTop);
+  const clientHeight = Number(lane.clientHeight);
+  const scrollportTop = laneRect.top + (Number.isFinite(clientTop) ? clientTop : 0);
+  const scrollportBottom = Number.isFinite(clientHeight) && clientHeight > 0
+    ? scrollportTop + clientHeight : laneRect.bottom;
+  let scrollDelta = 0;
+  if (buttonRect.top < scrollportTop) scrollDelta = buttonRect.top - scrollportTop;
+  else if (buttonRect.bottom > scrollportBottom) scrollDelta = buttonRect.bottom - scrollportBottom;
+  if (!scrollDelta) return false;
+  lane.scrollTop += scrollDelta;
+  return true;
+}
+
+export function restoreFocusedOrbitChildInLane(lane, button, activeElement) {
+  if (activeElement !== button) button.focus({ preventScroll:true });
+  return revealFocusedOrbitChildInLane(lane, button);
+}
+
 function routeVertexFractions(points) {
   if (!Array.isArray(points) || points.length < 2) return [0, 1];
   const cumulative = [0];
@@ -1432,6 +1455,7 @@ export function createAtlasScene(container, {
     const activeOrbitLaneIds = new Set();
     const activeOrbitChildIds = new Set();
     const focusedOrbitChildId = [...orbitChildLabelButtons].find(([, button]) => button === document.activeElement)?.[0] || null;
+    const orbitLaneScrollTops = new Map([...orbitLabelLanes].map(([id, lane]) => [id, lane.scrollTop]));
     const blockedOrbitLayout = orbitLaneLayout.blocked && orbitLaneLayout.labels.length > 0;
     let orbitFallbackMountMode = 'none';
     const explorationTree = labelDocument.querySelector?.('#exploration-tree');
@@ -1586,8 +1610,9 @@ export function createAtlasScene(container, {
       element.style.height = `${lane.height}px`;
       element.style.clipPath = 'none';
       element.style.overflowY = lane.scrollable ? 'auto' : 'hidden';
-      element.setAttribute('aria-label', `${orbitLaneCurrentTitle} direct children. ${lane.labelIds.length} labels in this lane${lane.scrollable ? ', scroll to see all labels' : ''}.`);
       content.style.height = `${lane.contentHeight}px`;
+      element.scrollTop = orbitLaneScrollTops.get(lane.id) || 0;
+      element.setAttribute('aria-label', `${orbitLaneCurrentTitle} direct children. ${lane.labelIds.length} labels in this lane${lane.scrollable ? ', scroll to see all labels' : ''}.`);
       element.dataset.contentHeight = String(lane.contentHeight);
       element.dataset.labelCount = String(lane.labelIds.length);
       element.dataset.scrollable = String(Boolean(lane.scrollable));
@@ -1597,7 +1622,7 @@ export function createAtlasScene(container, {
       const lane = orbitLabelLanes.get(placement.laneId);
       const content = placement.local ? labelOverlay
         : placement.blocked ? orbitFallbackContent : orbitLaneContents.get(placement.laneId);
-      const world = worlds.find(item => stableWorldId(item) === placement.id);
+      const world = placement.world;
       if ((!placement.blocked && !placement.local && !lane) || !content || !world) continue;
       let button = orbitChildLabelButtons.get(placement.id);
       if (!button) {
@@ -1745,7 +1770,12 @@ export function createAtlasScene(container, {
       if (focusedButton && activeOrbitChildIds.has(focusedOrbitChildId)) {
         if (orbitFallbackMountMode === 'tree-reopen') {
           labelDocument.querySelector?.('#atlas-show-tree')?.focus?.({ preventScroll:true });
-        } else if (document.activeElement !== focusedButton) focusedButton.focus({ preventScroll:true });
+        } else {
+          const focusedLane = focusedButton.parentElement?.parentElement;
+          if (focusedLane?.classList?.contains('atlas-orbit-child-label-lane')) {
+            restoreFocusedOrbitChildInLane(focusedLane, focusedButton, document.activeElement);
+          } else if (document.activeElement !== focusedButton) focusedButton.focus({ preventScroll:true });
+        }
       } else renderer.domElement.focus({ preventScroll:true });
     }
     const edgePositions = { lineage: [], proposed: [], question: [], hover: [] };

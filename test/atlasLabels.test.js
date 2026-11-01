@@ -111,7 +111,7 @@ test('crowded direct-child labels use compact collision-free edge slots', () => 
 });
 
 test('Orbit child label lanes retain every child and scroll overflow around reserved controls', () => {
-  const bounds = { left: 0, top: 0, right: 375, bottom: 180 };
+  const bounds = { left: 0, top: 0, right: 375, bottom: 190 };
   const toolbar = { x: 187.5, y: 90, width: 355, height: 90 };
   const children = Array.from({ length: 8 }, (_, index) => ({
     id: `child-${index}`, text: `200${index} · Canopy Child ${index}`,
@@ -136,8 +136,26 @@ test('Orbit child label lanes retain every child and scroll overflow around rese
   }
   for (const label of result.labels.filter(item => item.visible)) {
     const lane = result.lanes.find(item => item.id === label.laneId);
-    assert.ok(label.top + label.height <= lane.height);
+    assert.ok(label.top + label.height <= lane.height - 2, 'visible rows fit inside the lane client area after its 1px borders');
   }
+});
+
+test('Orbit lane includes its borders around one 44px row and blocks when the outer box is too short', () => {
+  const child = [{ id:'border-fit', text:'Canopy Child', fullText:'Canopy Child' }];
+  const fits = layoutOrbitChildLabelLanes(child, { left:0, top:0, right:200, bottom:46 }, [], {
+    rowHeight:44, laneBorder:2,
+  });
+  assert.equal(fits.blocked, false);
+  assert.equal(fits.lanes[0].height, 46, 'the outer border-box adds 2px around the usable 44px row');
+  assert.equal(fits.lanes[0].contentHeight, 44);
+  assert.equal(fits.lanes[0].visibleCount, 1);
+
+  const tooShort = layoutOrbitChildLabelLanes(child, { left:0, top:0, right:200, bottom:45 }, [], {
+    rowHeight:44, laneBorder:2,
+  });
+  assert.equal(tooShort.blocked, true, 'a 45px region cannot contain a 44px row plus both lane borders');
+  assert.equal(tooShort.lanes[0].reason, 'viewport-too-small');
+  assert.deepEqual(tooShort.overflowIds, ['border-fit'], 'the identity remains available to the existing fallback');
 });
 
 test('normal Orbit density displays every child in two grouped lanes without covering its nodes', () => {
@@ -152,8 +170,9 @@ test('normal Orbit density displays every child in two grouped lanes without cov
   assert.equal(result.labels.length, children.length);
   assert.ok(result.labels.every(label => label.visible));
   assert.equal(result.scrollable, false);
-  assert.ok(result.lanes.every(lane => lane.height === lane.contentHeight && lane.height < bounds.bottom - bounds.top),
-    'non-overflow rails shrink to the rows they contain');
+  assert.ok(result.lanes.every(lane => lane.height === lane.contentHeight + 2 && lane.height < bounds.bottom - bounds.top),
+    'non-overflow rails shrink to their rows plus the 1px borders');
+  assert.ok(result.lanes.every(lane => lane.height - 2 >= 44), 'each 44px row remains fully inside the lane client height');
   assert.ok(result.lanes.every(lane => lane.width < 320), 'short identities use compact rail widths');
   for (const lane of result.lanes) {
     for (const blocker of [...controls, ...nodes]) {

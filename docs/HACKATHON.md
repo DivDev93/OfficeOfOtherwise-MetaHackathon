@@ -185,3 +185,5 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: resolve overlapping cluster targets by proximity and suppress clusters hidden behind Earth while retaining pending-cloud hover. | |
 | 2026-11-01 | Verify saved Green Sahara textures through the production terrain raster path using synthetic elevation data. | |
 | 2026-11-01 | Atlas round 3: keep Orbit child labels available through a control-clearing drawer or visible host when no collision-free canvas lane fits. | |
+| 2026-11-01 | Atlas round 3: add a bounded simplified-model Orbit-to-Atlas crossing measurement; its projected counts omit production camera fitting and viewport-specific presentation. | |
+| 2026-11-01 | Atlas round 3: preserve focused Orbit child labels through lane resize/reparent, reveal them by scrolling only their lane, and avoid per-label world rescans. | |
