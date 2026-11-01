@@ -4,6 +4,7 @@ import { createWorldTextureFactory } from './worldTextures.js';
 import { projectGeographyLocation } from '../terrainRaster.js';
 import { clusterOpacityAtPresentation, orbitClusteredIdsForPresentation, planWorldClusters } from './clusters.js';
 import { containsFanRegion, createFanHitRegion, fanMemberOffsets } from './screenLayout.js';
+import { createLargeClusterPicker, needsPagedClusterPicker, visibleKeyboardNeighborEntries } from './largeClusterPicker.js';
 import { createAtlasP2Renderer } from './p2Renderer.js';
 import { interpolateAttachedAtlasEdgeRoute } from './routeMorph.js';
 import { dragModeForZoom, panDeltaForDrag, zoomFromPinch, zoomFromWheel } from './interaction.js';
@@ -438,6 +439,8 @@ export function createAtlasScene(container, {
   let travelOpacity = 1, axisFadeOpacity = 1, reducedMotionOpacity = 1;
   let surfaceLabelsLevel = clampAtlasLevel(surfaceLabelLevel), orbitUnfoldLevel = clampAtlasLevel(orbitLevel, ORBIT_UNFOLDED_LEVEL);
   let hoveredId = null, hoveredQuestionId = null, hoveredReference = false, hoveredClusterId = null, disposed = false, lastMetricAt = 0, lastLevel = '', raf = 0;
+  let largeClusterPicker = null;
+  const visibleKeyboardWorldIds = new Set();
   const expandedQuestionIds = new Set();
   let fanOffsets = new Map(), fanRegion = null;
   let orbitQuestionParentPosition = null, orbitQuestionParentQuestion = null;
@@ -870,6 +873,7 @@ export function createAtlasScene(container, {
         sprite.userData.cluster = cluster; atlasGroup.add(sprite); clusterSprites.set(key, sprite);
       } else sprite.userData.cluster = cluster;
     }
+    largeClusterPicker?.setClusters(desiredClusters, worlds);
 
     const childEntries = entries.filter(entry => entry.child && entry.id !== currentId);
     const linePositions = new Float32Array(childEntries.length * 6);
@@ -1009,6 +1013,8 @@ export function createAtlasScene(container, {
       if (state.orbit > 0.15 && zoom < 0.84) return entry.orbitVisible;
       return true;
     });
+    visibleKeyboardWorldIds.clear();
+    for (const entry of visibleEntries) visibleKeyboardWorldIds.add(entry.id);
     const sphereLimit = Math.max(0, MAX_SPHERE_INSTANCES - 1); // Reserve one of 24 world spheres for the single current Earth mesh.
     const instanceEntries = visibleEntries.filter(entry => entry.id !== currentId
       && !isGenerationPlaceholderWorld(entry.world)
@@ -1186,6 +1192,17 @@ export function createAtlasScene(container, {
         visible: projected.z >= -1 && projected.z <= 1 && projected.x >= -1.2 && projected.x <= 1.2 && projected.y >= -1.2 && projected.y <= 1.2,
       };
     };
+    const containerBounds = container.getBoundingClientRect();
+    for (const sprite of clusterSprites.values()) {
+      const cluster = sprite.userData.cluster;
+      if (!needsPagedClusterPicker(cluster)) continue;
+      const point = projectPoint(sprite.getWorldPosition(new THREE.Vector3()));
+      largeClusterPicker?.setPosition(cluster.id, {
+        x: point.x - containerBounds.left,
+        y: point.y - containerBounds.top,
+        visible: sprite.material.opacity > 0.04 && point.visible,
+      });
+    }
     const labelEarthCenter = earthMesh.getWorldPosition(new THREE.Vector3());
     const towardCameraForLabels = camera.getWorldPosition(new THREE.Vector3()).sub(labelEarthCenter);
     const horizonThreshold = surfaceEarthRadius(state) / Math.max(surfaceEarthRadius(state), towardCameraForLabels.length()) + 0.005;
@@ -1655,6 +1672,14 @@ export function createAtlasScene(container, {
     onEnter(world, anchor);
     return true;
   }
+  largeClusterPicker = createLargeClusterPicker({
+    container,
+    document: container.ownerDocument || document,
+    focusFallback: renderer.domElement,
+    onSelect: (world, { source, clientX, clientY }) => {
+      explicitEnter(world, projectedAnchor(stableWorldId(world), source, clientX, clientY));
+    },
+  });
   function setAxisMode(mode) {
     if (!AXIS_MODES.includes(mode)) return false;
     if (mode === axisMode && !axisTransition) return true;
@@ -1762,10 +1787,7 @@ export function createAtlasScene(container, {
     const originId = hoveredId || currentId;
     const origin = entries.find(entry => entry.id === originId);
     if (!origin) return null;
-    const neighborEntries = entries.filter(entry => entry.id !== origin.id && (
-      entry.parentId === origin.id || origin.parentId === entry.id ||
-      (origin.parentId != null && entry.parentId === origin.parentId)
-    ));
+    const neighborEntries = visibleKeyboardNeighborEntries(entries, origin, visibleKeyboardWorldIds);
     if (!neighborEntries.length) return null;
     const originAnchor = projectedAnchor(origin.id);
     const points = neighborEntries.map(entry => {
@@ -1860,7 +1882,14 @@ export function createAtlasScene(container, {
     return true;
   }
 
+  function hitPagedClusterTarget(event) {
+    const containerBounds = container.getBoundingClientRect();
+    return largeClusterPicker?.hitTest(event.clientX - containerBounds.left, event.clientY - containerBounds.top) || null;
+  }
+
   function hitCluster(event) {
+    const overlayHit = hitPagedClusterTarget(event);
+    if (overlayHit) return overlayHit;
     const bounds = eventPoint(event);
     pointer.set(bounds.x, bounds.y);
     raycaster.setFromCamera(pointer, camera);
@@ -1877,6 +1906,10 @@ export function createAtlasScene(container, {
     return { x: bounds.left + (ndc.x + 1) * 0.5 * bounds.width, y: bounds.top + (1 - ndc.y) * 0.5 * bounds.height };
   }
   function openClusterFan(cluster) {
+    if (needsPagedClusterPicker(cluster)) {
+      largeClusterPicker?.open(cluster.id, { focus: true });
+      return;
+    }
     hoveredClusterId = cluster.id;
     const offsets = cluster.selectable ? fanMemberOffsets(cluster.memberIds, { spacing: 48, maxRadius: 120 }) : [];
     fanOffsets = new Map(offsets.map(offset => [offset.id, offset]));
@@ -1934,16 +1967,20 @@ export function createAtlasScene(container, {
       if (event.pointerType === 'touch') event.preventDefault?.();
       return;
     }
-    const reference = hitPresentEarth(event);
-    const chipHit = reference ? null : hitQuestionChip(event);
-    const world = reference || chipHit ? null : hitWorld(event);
-    const cluster = world || reference || chipHit ? null : hitCluster(event), id = world ? stableWorldId(world) : null;
+    const pagedCluster = hitPagedClusterTarget(event);
+    const reference = pagedCluster ? null : hitPresentEarth(event);
+    const chipHit = reference || pagedCluster ? null : hitQuestionChip(event);
+    const cluster = pagedCluster || (reference || chipHit ? null : hitCluster(event));
+    const world = reference || chipHit || cluster ? null : hitWorld(event), id = world ? stableWorldId(world) : null;
     if (cluster?.id) {
-      if (cluster.id !== hoveredClusterId) {
+      if (needsPagedClusterPicker(cluster)) largeClusterPicker?.preview(cluster.id);
+      else largeClusterPicker?.preview(null);
+      if (!needsPagedClusterPicker(cluster) && cluster.id !== hoveredClusterId) {
         openClusterFan(cluster);
       }
-    } else if (hoveredClusterId && !containsFanRegion({ x: event.clientX, y: event.clientY }, fanRegion)) {
-      closeClusterFan();
+    } else {
+      largeClusterPicker?.preview(null);
+      if (hoveredClusterId && !containsFanRegion({ x: event.clientX, y: event.clientY }, fanRegion)) closeClusterFan();
     }
     if (chipHit) {
       const question = questionForChip(chipHit.chip), questionId = String(question.id);
@@ -1980,6 +2017,11 @@ export function createAtlasScene(container, {
     const moved = Math.hypot(event.clientX - drag.x, event.clientY - drag.y);
     drag = null;
     if (moved < 5) {
+      const pagedCluster = hitPagedClusterTarget(event);
+      if (pagedCluster) {
+        largeClusterPicker?.open(pagedCluster.id, { focus: true });
+        return;
+      }
       const chipHit = hitQuestionChip(event);
       if (chipHit) {
         expandQuestionChip(chipHit.chip, questionAnchor(questionForChip(chipHit.chip), 'pointer', event.clientX, event.clientY, chipHit.x, chipHit.y));
@@ -1991,6 +2033,10 @@ export function createAtlasScene(container, {
       }
       const cluster = hitCluster(event);
       if (cluster?.selectable) {
+        if (needsPagedClusterPicker(cluster)) {
+          largeClusterPicker?.open(cluster.id, { focus: true });
+          return;
+        }
         if (cluster.id !== hoveredClusterId) openClusterFan(cluster);
         setZoom(cluster.level === 'surface' ? Math.max(zoom, 0.3) : Math.max(zoom, 0.68));
         return;
@@ -2005,6 +2051,7 @@ export function createAtlasScene(container, {
   });
   listen(renderer.domElement, 'pointerleave', () => {
     closeClusterFan();
+    largeClusterPicker?.preview(null);
     if (hoveredId) setFocusedWorld(null, null);
     if (hoveredQuestionId) onQuestionPreview(null, null);
     hoveredQuestionId = null; hoveredReference = false;
@@ -2162,6 +2209,7 @@ export function createAtlasScene(container, {
       if (disposed) return;
       disposed = true; cancelAnimationFrame(raf); clearTimeout(resizeLayoutTimer); observer?.disconnect();
       for (const remove of domListeners) remove();
+      largeClusterPicker?.destroy();
       worldTextureFactory.dispose();
       registry.clear();
       scene.traverse(object => {

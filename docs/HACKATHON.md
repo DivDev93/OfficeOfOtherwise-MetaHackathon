@@ -181,3 +181,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: keep previewed event targets clickable while preserving slow pointer transfer and scrolling, including resize and keyboard-dismissal handling. | |
 | 2026-11-01 | Atlas round 3: capture the phone Orbit hover preview after pointer-transfer and scroll checks. | |
 | 2026-11-01 | Atlas round 3: refresh the hover capture after final resize and slow-transfer verification. | |
+| 2026-11-01 | Atlas round 3: prevent large Surface and Orbit clusters from overflowing the fan; preserve keyboard, pointer, and paged selection. | |

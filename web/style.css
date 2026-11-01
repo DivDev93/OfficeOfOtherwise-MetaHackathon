@@ -576,6 +576,33 @@ body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{dis
   .atlas-other-questions-toggle[hidden]{display:none!important}
 }
 
+/* Large unentered Orbit clouds use an accessible, paged picker on activation. */
+.atlas-large-cluster-trigger-layer{position:absolute;inset:0;z-index:4;overflow:hidden;pointer-events:none}
+.atlas-large-cluster-trigger{position:absolute;width:58px;height:58px;min-width:44px;min-height:44px;padding:0;border:0;border-radius:50%;background:transparent;color:transparent;opacity:.001;pointer-events:none;cursor:pointer}
+.atlas-large-cluster-trigger:focus-visible{outline:3px solid var(--cyan);outline-offset:2px;opacity:.2}
+.atlas-large-cluster-trigger[hidden]{display:none!important}
+.atlas-large-cluster-tooltip{position:absolute;z-index:1;max-width:min(240px,calc(100% - 16px));padding:8px 10px;border:1px solid rgba(112,202,226,.55);border-radius:8px;background:rgba(7,18,25,.96);box-shadow:0 8px 22px #0008;color:var(--parchment);font:600 11px/1.3 var(--sans);pointer-events:none}
+.atlas-large-cluster-tooltip[hidden]{display:none!important}
+.atlas-large-cluster-backdrop{position:fixed;z-index:1200;inset:0;background:rgba(2,8,12,.58)}
+.atlas-large-cluster-backdrop[hidden],.atlas-large-cluster-picker[hidden]{display:none!important}
+.atlas-large-cluster-picker{position:fixed;z-index:1201;left:50%;top:50%;display:flex;flex-direction:column;width:min(440px,calc(100vw - 24px));max-height:min(680px,calc(100dvh - 24px));min-height:0;transform:translate(-50%,-50%);overflow:hidden;border:1px solid rgba(112,202,226,.55);border-radius:14px;background:rgba(9,20,27,.98);box-shadow:0 18px 56px #000b;color:var(--parchment)}
+.atlas-large-cluster-header{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:10px;min-height:58px;padding:7px 10px 7px 14px;border-bottom:1px solid var(--line)}
+.atlas-large-cluster-header h2{margin:0;font:500 20px/1.15 var(--serif)}
+.atlas-large-cluster-picker button{min-width:44px;min-height:44px;border:1px solid rgba(236,228,212,.2);border-radius:8px;background:rgba(8,6,7,.82);color:var(--parchment);font:600 14px/1 var(--sans);cursor:pointer}
+.atlas-large-cluster-picker button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.atlas-large-cluster-close{flex:0 0 44px;width:44px;padding:0;font-size:24px!important}
+.atlas-large-cluster-list{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 10px;overscroll-behavior:contain}
+.atlas-large-cluster-list>[role=listitem]{margin:2px 0}
+.atlas-large-cluster-member{display:block;width:100%;height:44px;min-height:44px;overflow:hidden;padding:0 10px;text-align:left;text-overflow:ellipsis;white-space:nowrap}
+.atlas-large-cluster-footer{display:flex;flex:0 0 58px;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;border-top:1px solid var(--line)}
+.atlas-large-cluster-footer button{flex:0 0 44px;width:44px;padding:0;font-size:24px}
+.atlas-large-cluster-footer button:disabled{opacity:.42;cursor:default}
+.atlas-large-cluster-footer span{color:var(--neutral-200);font:11px/1.2 var(--sans);text-align:center;font-variant-numeric:tabular-nums}
+@media(max-width:700px){
+  .atlas-large-cluster-picker{left:12px;right:12px;top:max(218px,calc(env(safe-area-inset-top) + 218px));bottom:max(12px,env(safe-area-inset-bottom));width:auto;max-height:none;transform:none}
+}
+@media(prefers-reduced-motion:reduce){.atlas-large-cluster-backdrop,.atlas-large-cluster-picker{transition:none!important;animation:none!important}}
+
 /* Keep Atlas panel geometry reversible while compact and full views trade places. */
 .has-story .hero-panel{transition:width .24s ease,top .24s ease,right .24s ease,bottom .24s ease,left .24s ease,height .24s ease,opacity .18s ease}
 @media(max-width:700px){

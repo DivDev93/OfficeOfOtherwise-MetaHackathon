@@ -14,4 +14,6 @@ At 375px, the Other questions control was checked against saved data: opening it
 
 `hover-preview-375.jpg` shows a phone Orbit preview. A local pointer check confirmed the original node point remains on the canvas, a slow pointer transfer reaches the preview, and scrolling it leaves globe zoom unchanged.
 
+`large-cluster-375.jpg` shows a disposable in-memory fixture with 27 folded Orbit possibilities. The local scene check covered keyboard opening and Escape, paging and selection, pointer hover and click, and a drag starting on the cluster. The fixture made no model calls or saved-data writes; this fallback handles large clusters and does not resolve the remaining crowded-label or intermediate-crossing limits.
+
 In the recorded local replay at 1440×900, successive 120-pixel wheel inputs reached 10, 19, 29, 38, 48, 57 (Orbit), 67, 76, 86, 95 and 100 (Atlas). The reverse pass reached 90, 81, 71, 62, 57 (Orbit), 47, 38, 28, 19, 9 and 0 (Surface). Both passes left the Orbit stop on the next input.
