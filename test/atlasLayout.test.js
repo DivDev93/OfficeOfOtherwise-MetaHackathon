@@ -331,7 +331,9 @@ test('scene foundation uses one renderer, scene, camera and no timed camera twee
   assert.equal((scene.match(/new THREE\.WebGLRenderer\(/g) || []).length, 1);
   assert.equal((scene.match(/new THREE\.Scene\(/g) || []).length, 1);
   assert.equal((scene.match(/new THREE\.PerspectiveCamera\(/g) || []).length, 1);
-  assert.doesNotMatch(scene, /setTimeout\s*\(|setInterval\s*\(|cameraTween|transitionDuration/i);
+  assert.doesNotMatch(scene, /setInterval\s*\(|cameraTween|transitionDuration/i);
+  assert.match(scene, /resizeLayoutTimer\s*=\s*setTimeout\(/, 'the only timeout debounces layout recomputation, not camera motion');
+  assert.equal((scene.match(/setTimeout\s*\(/g) || []).length, 1);
   assert.match(scene, /onPreview\(world \|\| null, anchor \|\| null\)/);
 });
 

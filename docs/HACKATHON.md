@@ -146,3 +146,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-10-31 | Atlas round 3: captured desktop and phone views plus a wheel-driven Surface–Atlas–Surface recording; verified saved-tree routing, phone toggle, and reduced-motion panel behavior using local replay fixtures. | |
 | 2026-10-31 | Atlas round 3 follow-up: restore phone zoom button hit testing and make its first zoom-out use the controller; limit routing work and preserve warnings for unresolved generated-tree crossings. | |
 | 2026-10-31 | Atlas round 3 follow-up: constrain route detours, debounce camera refits, and record stress-tested routing limits; sampled generated trees may still have crossings. | |
+| 2026-10-31 | Atlas round 3 validation: distinguish the resize-layout debounce from timed camera tweens in the scene guard. | |
