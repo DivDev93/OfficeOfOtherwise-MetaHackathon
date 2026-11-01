@@ -1,20 +1,38 @@
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const ZOOM_MAX = 100;
+const WHEEL_ZOOM_PER_PIXEL = 0.08;
+const WHEEL_STEP_LIMIT = 16;
+const RESTING_LEVELS = [0, 57, 100];
 
-/** Wheel and trackpad deltas move outward toward the Atlas as deltaY grows. */
+function gentlyAttractToRestingLevel(current, value, delta) {
+  // Fine trackpad deltas must accumulate freely, including when starting exactly on a stop.
+  if (Math.abs(delta) < 0.25) return value;
+  const restingLevel = RESTING_LEVELS.find(level => Math.abs(value - level) <= 3);
+  if (restingLevel === undefined) return value;
+  const beforeDistance = Math.abs(current - restingLevel);
+  const afterDistance = Math.abs(value - restingLevel);
+  if (afterDistance >= beforeDistance) return value;
+  const distance = restingLevel - value;
+  return Math.abs(distance) <= 0.25 ? restingLevel : value + distance * 0.18;
+}
+
+/** Wheel and trackpad deltas move outward toward the Atlas as deltaY grows. Zoom is 0–100. */
 export function zoomFromWheel(zoom, deltaY, { deltaMode = 0, viewportHeight = 1 } = {}) {
   const unit = deltaMode === 1 ? 16 : deltaMode === 2 ? Math.max(1, viewportHeight) : 1;
-  return clamp((Number(zoom) || 0) + clamp((Number(deltaY) || 0) * unit * 0.0008, -0.16, 0.16), 0, 1);
+  const current = clamp(Number(zoom) || 0, 0, ZOOM_MAX);
+  const delta = clamp((Number(deltaY) || 0) * unit * WHEEL_ZOOM_PER_PIXEL, -WHEEL_STEP_LIMIT, WHEEL_STEP_LIMIT);
+  return gentlyAttractToRestingLevel(current, clamp(current + delta, 0, ZOOM_MAX), delta);
 }
 
 /** A wider two-finger gap zooms toward the surface; a narrower gap moves outward. */
 export function zoomFromPinch(startZoom, startDistance, currentDistance) {
   const start = Math.max(1, Number(startDistance) || 1);
   const current = Math.max(1, Number(currentDistance) || 1);
-  return clamp((Number(startZoom) || 0) - Math.log2(current / start) * 0.28, 0, 1);
+  return clamp((Number(startZoom) || 0) - Math.log2(current / start) * 28, 0, ZOOM_MAX);
 }
 
 export function dragModeForZoom(zoom) {
-  return Number(zoom) < 0.22 ? 'rotate' : 'pan';
+  return Number(zoom) < 22 ? 'rotate' : 'pan';
 }
 
 /** Translate a screen drag into camera-plane world units. */

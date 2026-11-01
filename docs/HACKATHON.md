@@ -137,3 +137,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-10-31 | Atlas polish evidence: recorded both saved stories at all four zoom levels in desktop and mobile viewports, measured local frame cadence, and captured a wheel-driven Surface-to-Atlas-to-Surface walkthrough. Local replay fixture only; no model calls, hosting, or submission. | |
 | 2026-10-31 | Atlas round 3: preserve panel widths while transitioning, sequence the compact controls and sheet, and disable animation under reduced motion. | |
 | 2026-10-31 | Atlas round 3: give visible worlds stable tree rows and smooth parent-child curves while preserving the focused time scale. | |
+| 2026-10-31 | Atlas round 3: normalize wheel range and add gentle resting-level attraction without trapping small trackpad movements. | |
