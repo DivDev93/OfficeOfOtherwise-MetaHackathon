@@ -559,7 +559,7 @@ export function routeAtlasEdgePaths(edges = [], {
   for (const path of routed) {
     const sharpPath = sharpPaths.get(`${path.parentId}\u0000${path.childId}`);
     if (!sharpPath) continue;
-    for (const radius of [1.4, 1.1, 0.85, 0.68, 0.56, 0.44, 0.34, 0.28]) {
+    for (const radius of [2.4, 2.0, 1.7, 1.4, 1.1, 0.85, 0.68, 0.56, 0.44, 0.34, 0.28]) {
       const shape = routeShape(roundRouteCorners(sharpPath, radius, 8), path.from, path.to);
       const points = transformAtlasEdgeShape(path.from, path.to, shape);
       if (routeGeometryConflicts(points, path, routed, visibleNodes, nodeClearance)) continue;

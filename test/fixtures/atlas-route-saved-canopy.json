@@ -1,0 +1,192 @@
+{
+  "questions": [
+    {
+      "id": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "rootRunId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "question": "What if the world sea levels were lower like they were before/during the last ice age",
+      "divergenceYear": 1650
+    }
+  ],
+  "worlds": [
+    {
+      "id": "2b073e5a-c714-415e-99ac-eff7fac73f22:b1",
+      "parentId": "e2bb15e7-b3a9-43f9-b787-a0b64ae5cf61:b2",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1883
+    },
+    {
+      "id": "2b073e5a-c714-415e-99ac-eff7fac73f22:b2",
+      "parentId": "e2bb15e7-b3a9-43f9-b787-a0b64ae5cf61:b2",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1911
+    },
+    {
+      "id": "2b073e5a-c714-415e-99ac-eff7fac73f22:b3",
+      "parentId": "e2bb15e7-b3a9-43f9-b787-a0b64ae5cf61:b2",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1938
+    },
+    {
+      "id": "5b0d90fc-919b-4275-9097-bf3d91ee77f4:b1",
+      "parentId": "d9d50289-46ed-48a0-ad48-50414c0d2e2a:b4",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1989
+    },
+    {
+      "id": "5b0d90fc-919b-4275-9097-bf3d91ee77f4:b2",
+      "parentId": "d9d50289-46ed-48a0-ad48-50414c0d2e2a:b4",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 2001
+    },
+    {
+      "id": "5b0d90fc-919b-4275-9097-bf3d91ee77f4:b3",
+      "parentId": "d9d50289-46ed-48a0-ad48-50414c0d2e2a:b4",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 2014
+    },
+    {
+      "id": "6afc9140-a473-4dc6-9ec9-2e09e5bcd8a7:b1",
+      "parentId": "e2bb15e7-b3a9-43f9-b787-a0b64ae5cf61:b1",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1824
+    },
+    {
+      "id": "6afc9140-a473-4dc6-9ec9-2e09e5bcd8a7:b3",
+      "parentId": "e2bb15e7-b3a9-43f9-b787-a0b64ae5cf61:b1",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1903
+    },
+    {
+      "id": "6afc9140-a473-4dc6-9ec9-2e09e5bcd8a7:b4",
+      "parentId": "e2bb15e7-b3a9-43f9-b787-a0b64ae5cf61:b1",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1968
+    },
+    {
+      "id": "9d349aee-73f7-44dc-96b7-480a8e12a2e6:b1",
+      "parentId": "d9d50289-46ed-48a0-ad48-50414c0d2e2a:b1",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1868
+    },
+    {
+      "id": "9d349aee-73f7-44dc-96b7-480a8e12a2e6:b2",
+      "parentId": "d9d50289-46ed-48a0-ad48-50414c0d2e2a:b1",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1893
+    },
+    {
+      "id": "9d349aee-73f7-44dc-96b7-480a8e12a2e6:b3",
+      "parentId": "d9d50289-46ed-48a0-ad48-50414c0d2e2a:b1",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1911
+    },
+    {
+      "id": "a29a3f4a-7422-49db-951a-10fb3cde5d55:b1",
+      "parentId": "e2bb15e7-b3a9-43f9-b787-a0b64ae5cf61:b3",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1923
+    },
+    {
+      "id": "a29a3f4a-7422-49db-951a-10fb3cde5d55:b2",
+      "parentId": "e2bb15e7-b3a9-43f9-b787-a0b64ae5cf61:b3",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1947
+    },
+    {
+      "id": "a29a3f4a-7422-49db-951a-10fb3cde5d55:b4",
+      "parentId": "e2bb15e7-b3a9-43f9-b787-a0b64ae5cf61:b3",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1988
+    },
+    {
+      "id": "acc2e7da-096e-47f8-80bd-9137e8df789f:b1",
+      "parentId": "d9d50289-46ed-48a0-ad48-50414c0d2e2a:b2",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1931
+    },
+    {
+      "id": "acc2e7da-096e-47f8-80bd-9137e8df789f:b2",
+      "parentId": "d9d50289-46ed-48a0-ad48-50414c0d2e2a:b2",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1954
+    },
+    {
+      "id": "acc2e7da-096e-47f8-80bd-9137e8df789f:b3",
+      "parentId": "d9d50289-46ed-48a0-ad48-50414c0d2e2a:b2",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1978
+    },
+    {
+      "id": "d67a4b82-10b4-4126-bbaa-b632390b4a4a:b1",
+      "parentId": null,
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1650
+    },
+    {
+      "id": "d67a4b82-10b4-4126-bbaa-b632390b4a4a:b2",
+      "parentId": null,
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1800
+    },
+    {
+      "id": "d67a4b82-10b4-4126-bbaa-b632390b4a4a:b3",
+      "parentId": null,
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1850
+    },
+    {
+      "id": "d7e3584c-65e8-4c6f-9f11-36690ca4d262:b1",
+      "parentId": "acc2e7da-096e-47f8-80bd-9137e8df789f:b3",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1994
+    },
+    {
+      "id": "d7e3584c-65e8-4c6f-9f11-36690ca4d262:b2",
+      "parentId": "acc2e7da-096e-47f8-80bd-9137e8df789f:b3",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 2003
+    },
+    {
+      "id": "d7e3584c-65e8-4c6f-9f11-36690ca4d262:b5",
+      "parentId": "acc2e7da-096e-47f8-80bd-9137e8df789f:b3",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 2034
+    },
+    {
+      "id": "d9d50289-46ed-48a0-ad48-50414c0d2e2a:b1",
+      "parentId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a:b2",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1847
+    },
+    {
+      "id": "d9d50289-46ed-48a0-ad48-50414c0d2e2a:b2",
+      "parentId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a:b2",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1902
+    },
+    {
+      "id": "d9d50289-46ed-48a0-ad48-50414c0d2e2a:b4",
+      "parentId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a:b2",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1976
+    },
+    {
+      "id": "e2bb15e7-b3a9-43f9-b787-a0b64ae5cf61:b1",
+      "parentId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a:b1",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1735
+    },
+    {
+      "id": "e2bb15e7-b3a9-43f9-b787-a0b64ae5cf61:b2",
+      "parentId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a:b1",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1848
+    },
+    {
+      "id": "e2bb15e7-b3a9-43f9-b787-a0b64ae5cf61:b3",
+      "parentId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a:b1",
+      "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+      "year": 1896
+    }
+  ]
+}

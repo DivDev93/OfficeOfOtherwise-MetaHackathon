@@ -539,6 +539,21 @@ test('nested gutters preserve the equal-year and backward-time 20-world fixture'
   assert.ok(layout.routeBounds.right > Math.max(...layout.worlds.map(world => world.x)));
 });
 
+test('saved Sundaland routes use broader curves only where the exact path stays clear', () => {
+  const graph = JSON.parse(readFileSync(new URL('./fixtures/atlas-route-saved-canopy.json', import.meta.url), 'utf8'));
+  const layout = buildAtlasTimeline(graph, 'acc2e7da-096e-47f8-80bd-9137e8df789f:b3');
+  const gutters = layout.parentChildPaths.filter(path => path.routeType === 'nested-prefix-gutter');
+
+  assert.equal(layout.worlds.length, 30);
+  assert.equal(layout.parentChildPaths.length, 27);
+  assert.equal(gutters.length, 16);
+  assertPlanarAtlasRoutes(layout);
+  assert.ok(gutters.every(path => path.routeCornerRadius >= 2),
+    'all saved-story gutter routes select a substantially rounded path when it clears every node and edge');
+  assert.equal(layout.parentChildPaths.filter(path => path.routeType === 'validated-direct-cubic').length, 10);
+  assert.equal(layout.parentChildPaths.filter(path => path.routeType === 'validated-gutter-sweep').length, 1);
+});
+
 test('42-world nested-gutter routing removes crossings without runaway detours', () => {
   const worlds = [{ id: 'world-0', parentId: null, questionId: 'q', year: 700 }];
   for (let index = 1; index < 42; index++) {
