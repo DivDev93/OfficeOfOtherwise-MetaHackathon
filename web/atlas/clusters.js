@@ -56,6 +56,37 @@ function cluster(kind, parent, members, label, selectable = true) {
   };
 }
 
+/** Visibility policy for surface overflows, Orbit clouds, and Atlas pending work. */
+export function clusterOpacityAtPresentation(clusterValue, level, state = {}, currentWorldId = null) {
+  if (level === 'surface') return Number(state.surface) || 0;
+  const isCurrentParent = String(clusterValue?.parentId ?? '') === String(currentWorldId ?? '');
+  if (clusterValue?.kind === 'generation-pending') {
+    return Math.max(isCurrentParent ? (Number(state.orbit) || 0) * 0.85 : 0, (Number(state.atlas) || 0) * 0.85);
+  }
+  if (clusterValue?.kind === 'orbit-overflow') {
+    const atlasFade = Math.max(0, 1 - (Number(state.atlas) || 0) / 0.18);
+    return isCurrentParent ? (Number(state.orbit) || 0) * atlasFade : 0;
+  }
+  return 0;
+}
+
+/** Keep pending members folded, but release Orbit overflow worlds into Atlas LOD. */
+export function orbitClusteredIdsForPresentation(plan, { atlas = 0, zoom = 0, orbitNeighborhoodIds = [] } = {}) {
+  const orbit = plan?.orbit || {};
+  const clustered = new Set((Array.isArray(orbit.clusteredIds) ? orbit.clusteredIds : []).map(String));
+  const pending = new Set((Array.isArray(orbit.clusters) ? orbit.clusters : [])
+    .filter(item => item.kind === 'generation-pending').flatMap(item => item.memberIds || []).map(String));
+  const overflow = new Set((Array.isArray(orbit.clusters) ? orbit.clusters : [])
+    .filter(item => item.kind === 'orbit-overflow').flatMap(item => item.memberIds || []).map(String));
+  const neighborhood = new Set((orbitNeighborhoodIds && typeof orbitNeighborhoodIds[Symbol.iterator] === 'function'
+    ? [...orbitNeighborhoodIds] : []).map(String));
+  return [...clustered].filter(id => {
+    if (pending.has(id)) return true;
+    if (overflow.has(id) && Number(atlas) > 0.02) return false;
+    return Number(zoom) >= 0.84 || neighborhood.has(id);
+  });
+}
+
 /** Pure surface-pin and Orbit-cloud plan. Cluster members retain their canonical IDs. */
 export function planWorldClusters(worlds = [], currentWorldId, {
   surfaceLabelLevel = DEFAULT_SURFACE_LABEL_LIMIT,
@@ -100,7 +131,8 @@ export function planWorldClusters(worlds = [], currentWorldId, {
 
     const overflow = unentered.slice(orbitLimit);
     if (overflow.length) {
-      const cloud = cluster('orbit-overflow', orbitParent, overflow, `${overflow.length} possibilities`);
+      const possibilityLabel = `${overflow.length} ${overflow.length === 1 ? 'possibility' : 'possibilities'}`;
+      const cloud = cluster('orbit-overflow', orbitParent, overflow, possibilityLabel);
       if (cloud.id === hoveredClusterId) {
         fannedOrbitClusterId = cloud.id;
         for (const id of cloud.memberIds) orbitVisible.add(id);

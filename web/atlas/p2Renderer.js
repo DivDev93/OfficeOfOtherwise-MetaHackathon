@@ -2,15 +2,20 @@ import * as THREE from 'three';
 
 const PARCHMENT = '#eadfca';
 const TRUNK = '#91acb5';
-const TICK = '#6d8993';
+const TICK = '#eadfca';
 
-function labelTexture(text, color = '#d7e5e8', background = 'rgba(5,16,23,0.9)') {
+function labelTexture(text, color = '#eadfca') {
   const canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 100;
   const context = canvas.getContext('2d');
-  context.fillStyle = background; context.beginPath(); context.roundRect(2, 2, 636, 96, 18); context.fill();
-  context.strokeStyle = `${color}66`; context.lineWidth = 2; context.stroke();
+  context.clearRect(0, 0, canvas.width, canvas.height);
   context.fillStyle = color; context.font = '600 52px Inter, system-ui, sans-serif';
   context.fillText(String(text).slice(0, 62), 20, 62, 598);
+  const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function blankLabelTexture() {
+  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 2;
   const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }
@@ -41,15 +46,17 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
   const branches = lineObject(PARCHMENT, 0.82); group.add(branches);
   const questionAttachments = lineObject(PARCHMENT, 0.86); questionAttachments.name = 'Inactive current-world question chip attachments'; group.add(questionAttachments);
   const ticks = lineObject(TICK, 0.64); group.add(ticks);
+  const focusBreaks = lineObject('#d5a85c', 0.92); focusBreaks.name = 'Focus and context time-scale breaks'; group.add(focusBreaks);
+  const chipStems = lineObject(PARCHMENT, 0.78); chipStems.name = 'Folded question stems to trunk divergence'; group.add(chipStems);
   const presentMaterial = earthMaterial?.clone?.() || new THREE.MeshStandardMaterial({ color: '#dce9eb', roughness: 0.94 });
   const presentEarth = new THREE.Mesh(earthGeometry || new THREE.SphereGeometry(1, 48, 32), presentMaterial);
   presentEarth.name = 'Present-day Earth 2026'; presentEarth.userData.referenceYear = 2026;
   group.add(presentEarth);
   const presentLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture('PRESENT-DAY EARTH · 2026', '#d7e5e8'), transparent: true, depthWrite: false, opacity: 0 }));
   presentLabel.scale.set(1.7, 0.27, 1); group.add(presentLabel);
-  const scaleLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture('LOG DISTANCE BACK FROM PRESENT (2026)', '#b7d9e3'), transparent: true, depthWrite: false, opacity: 0 }));
+  const scaleLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture('YEAR'), transparent: true, depthWrite: false, opacity: 0 }));
   scaleLabel.scale.set(2.7, 0.32, 1); group.add(scaleLabel);
-  const axisLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture('DISTANCE FROM HISTORY ↑', '#b7d9e3'), transparent: true, depthWrite: false, opacity: 0 }));
+  const axisLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture('HISTORY DEPTH'), transparent: true, depthWrite: false, opacity: 0 }));
   axisLabel.scale.set(1.75, 0.28, 1); group.add(axisLabel);
   setLabelPixels(presentLabel, 190, 30, 90);
   setLabelPixels(scaleLabel, 280, 28, 35);
@@ -100,6 +107,8 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     trunk.material.opacity = 0.7 * alpha;
     branches.material.opacity = 0.82 * alpha;
     ticks.material.opacity = 0.64 * alpha;
+    focusBreaks.material.opacity = 0.92 * alpha;
+    chipStems.material.opacity = 0.78 * alpha;
     presentEarth.visible = alpha > 0;
     presentEarth.position.set(layout.presentEarth.x, layout.presentEarth.y, -0.15);
     presentEarth.scale.setScalar(0.36 * alpha);
@@ -107,14 +116,26 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     presentMaterial.needsUpdate = true;
     presentLabel.position.set(layout.presentEarth.x, layout.presentEarth.y + 0.58, 0);
     presentLabel.material.opacity = alpha;
-    scaleLabel.position.set((layout.trunk.left + layout.trunk.right) / 2, 3.52, 0);
+    const scaleText = 'YEAR';
+    if (scaleLabel.userData.labelText !== scaleText) replaceLabel(scaleLabel, scaleText, PARCHMENT, { x: 0.65, y: 0.2 });
+    scaleLabel.position.set((layout.trunk.left + layout.trunk.right) / 2, layout.trunk.y - 0.88, 0);
     scaleLabel.material.opacity = alpha;
-    const axisText = `${nextMode === 'history-distance' ? 'DISTANCE FROM HISTORY ↑' : nextMode === 'branch-order' ? 'BRANCH ORDER ↑' : 'THEME ↑'}`;
-    if (axisLabel.userData.labelText !== axisText) replaceLabel(axisLabel, axisText, '#b7d9e3', { x: 1.75, y: 0.28 });
-    axisLabel.position.set(layout.trunk.left + 0.9, 3.95, 0);
+    const axisText = `${nextMode === 'history-distance' ? 'HISTORY DEPTH' : nextMode === 'branch-order' ? 'BRANCH ORDER' : 'THEME'}`;
+    if (axisLabel.userData.labelText !== axisText) replaceLabel(axisLabel, axisText, PARCHMENT, { x: 1.2, y: 0.2 });
+    axisLabel.position.set(layout.trunk.left - 0.75, 1.5, 0);
     axisLabel.material.opacity = alpha;
 
     setLinePositions(trunk, [layout.trunk.left, layout.trunk.y, -0.1, layout.trunk.right, layout.trunk.y, -0.1]);
+    const focus = layout.focusContext;
+    const breakValues = [];
+    for (const x of [focus?.olderContext ? focus.left : null, focus?.newerContext ? focus.right : null]) {
+      if (x == null) continue;
+      breakValues.push(
+        x - 0.18, layout.trunk.y - 0.12, 0.02, x - 0.06, layout.trunk.y + 0.12, 0.02,
+        x + 0.06, layout.trunk.y - 0.12, 0.02, x + 0.18, layout.trunk.y + 0.12, 0.02,
+      );
+    }
+    setLinePositions(focusBreaks, breakValues);
     const branchValues = [];
     const foldedQuestionIds = new Set(layout.chips.map(chip => String(chip.questionId)));
     const oldById = new Map((fromBranches || []).map(branch => [branch.questionId, branch]));
@@ -155,11 +176,14 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     const tickValues = [];
     for (const tick of layout.visibleTicks) tickValues.push(tick.x, layout.trunk.y - 0.04, -0.04, tick.x, layout.trunk.y - 0.19, -0.04);
     setLinePositions(ticks, tickValues);
+    const stemValues = [];
+    for (const chip of layout.chips) stemValues.push(chip.x, layout.trunk.y, 0.04, chip.x, chip.y + 0.22, 0.04);
+    setLinePositions(chipStems, stemValues);
     ensureSprites(tickSprites, layout.visibleTicks.length, 'Time tick');
     layout.visibleTicks.forEach((tick, index) => {
       const sprite = tickSprites[index];
-      if (sprite.userData.labelText !== tick.label) replaceLabel(sprite, tick.label, '#c2d5db', { x: Math.max(0.62, Math.min(1.1, tick.label.length * 0.025)), y: 0.18 });
-      setLabelPixels(sprite, Math.min(74, Math.max(46, tick.label.length * 7)), 22, 25);
+      if (sprite.userData.labelText !== tick.label) replaceLabel(sprite, tick.label, PARCHMENT, { x: Math.max(0.72, tick.label.length * 0.026), y: 0.2 });
+      setLabelPixels(sprite, Math.max(58, tick.label.length * 7.4), 16, 30);
       sprite.position.set(tick.x, -0.5, 0);
       sprite.material.opacity = alpha;
     });
@@ -167,9 +191,15 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     ensureSprites(chipSprites, layout.chips.length, 'Folded question chip');
     layout.chips.forEach((chip, index) => {
       const sprite = chipSprites[index];
-      if (sprite.userData.labelText !== chip.label) replaceLabel(sprite, chip.label, PARCHMENT, { x: Math.min(2.2, Math.max(0.82, chip.label.length * 0.035)), y: 0.3 });
-      setLabelPixels(sprite, Math.min(210, Math.max(140, chip.label.length * 7.2)), 30, 70);
-      sprite.position.set(chip.x, chip.y, 0.08);
+      if (!sprite.userData.overlayTarget) {
+        sprite.material.map?.dispose();
+        sprite.material.map = blankLabelTexture();
+        sprite.material.color.set('#ffffff'); sprite.material.needsUpdate = true;
+        sprite.userData.overlayTarget = true;
+      }
+      sprite.userData.labelText = chip.label;
+      setLabelPixels(sprite, Math.min(220, Math.max(92, chip.label.length * 6.4)), 20, 80);
+      sprite.position.set(chip.x, chip.y + 0.36, 0.08);
       sprite.material.opacity = alpha;
     });
   }

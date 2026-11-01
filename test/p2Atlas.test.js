@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   ATLAS_REAL_SPHERE_LIMIT, AXIS_ANIMATION_MS, AXIS_MODES, ATLAS_TIME_SCALE_LABEL, FUTURE_EXTENSION_WIDTH, PRESENT_DAY_REFERENCE,
   atlasLOD, axisTransitionProgress, buildAtlasTimeline, formatHistoricalYear,
-  interpolateAtlasPoint, layoutLogTimeTicks, logDistanceX, planQuestionRootConnections, worldDistanceMap,
+  focusContextTimeX, interpolateAtlasPoint, layoutLogTimeTicks, logDistanceX, planQuestionRootConnections, worldDistanceMap,
 } from '../web/atlas/p2Atlas.js';
 
 function sampleGraph() {
@@ -78,11 +78,40 @@ test('three axis modes produce distinct coordinates and question divergence atta
   const inactive = layouts[0].questionBranches.find(branch => branch.questionId === 'q-b');
   assert.equal(inactive.divergenceYear, -5000);
   assert.match(inactive.label, /Sahara remained green/i);
-  assert.equal(inactive.x, logDistanceX(-5000, { earliestYear: -5000 }));
+  assert.equal(inactive.x, focusContextTimeX(-5000, { earliestYear: -5000, latestYear: 2026, focusStartYear: 1800, focusEndYear: 2020 }));
+  assert.equal(layouts[0].timeScaleMode, 'focus-context');
+  assert.equal(layouts[0].focusContext.questionId, 'q-a');
+  assert.equal(layouts[0].focusContext.startYear, 1800);
+  assert.equal(layouts[0].focusContext.endYear, 2020);
+  assert.ok(Math.abs(layouts[0].focusContext.left - -2.752) < 1e-9);
+  assert.ok(Math.abs(layouts[0].focusContext.right - 2.708) < 1e-9);
   assert.equal(layouts[0].questionBranches.find(branch => branch.questionId === 'q-a').active, true);
   assert.equal(layouts[0].presentEarth.year, 2026);
   const branch = layouts[1];
   assert.ok(branch.positions.get('sibling').y < branch.positions.get('child-a').y, 'b1 precedes b2 in proposed branch order');
+});
+
+test('root alternatives are two steps apart through their shared question', () => {
+  const roots = [
+    { id: 'a', questionId: 'q', parentId: null },
+    { id: 'b', questionId: 'q', parentId: null },
+    { id: 'other', questionId: 'other', parentId: null },
+  ];
+  const distance = worldDistanceMap(roots, 'a');
+  assert.equal(distance.get('b'), 2);
+  assert.equal(distance.has('other'), false);
+  assert.ok(atlasLOD(roots, 'a', 'q').realSphereIds.includes('b'));
+});
+
+test('a future descendant does not collapse the active historical span back to logarithmic time', () => {
+  const worlds = [1650, 1800, 1978, 2034].map((year, index) => ({ id: `w${year}`, questionId: 'q', parentId: index ? `w${[1650, 1800, 1978][index - 1]}` : null, year }));
+  const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: 1650 }] }, 'w1978');
+  assert.equal(layout.timeScaleMode, 'focus-context');
+  assert.equal(layout.focusContext.endYear, 2026);
+  assert.ok(layout.positions.get('w2034').x > layout.trunk.right);
+  const p = years => years.map(year => layout.positions.get(`w${year}`).x);
+  const [a, b, c] = p([1650, 1800, 1978]);
+  assert.ok(Math.abs((b - a) / 150 - (c - b) / 178) < 1e-9);
 });
 
 test('equal semantic distances receive deterministic small vertical sub-lanes without changing time order', () => {
@@ -109,7 +138,8 @@ test('large tied groups wrap into four bounded rows instead of expanding the cam
   const points = worlds.map(world => layout.positions.get(world.id));
   assert.equal(new Set(points.map(point => point.y)).size, 4);
   assert.ok(Math.max(...points.map(point => point.y)) - Math.min(...points.map(point => point.y)) <= 1.44);
-  assert.deepEqual(points.map(point => point.x), worlds.map(world => logDistanceX(world.year, { earliestYear: 1900 })));
+  const expected = worlds.map(world => focusContextTimeX(world.year, { earliestYear: 1900, latestYear: 2026, focusStartYear: 1900, focusEndYear: 1929 }));
+  points.forEach((point, index) => assert.ok(Math.abs(point.x - expected[index]) < 1e-9));
 });
 
 test('current-world question metadata attaches a parchment question branch to its declared parent', () => {
@@ -158,6 +188,51 @@ test('inactive questions fold into chips while the current question and gold lin
   assert.equal(layout.chips.length, 1);
   assert.equal(layout.chips[0].count, 2);
   assert.match(layout.chips[0].label, /Sahara.*2/);
+  assert.equal(layout.chips[0].x, layout.questionBranches.find(branch => branch.questionId === 'q-b').x, 'folded question chip sits at its divergence year on the trunk');
+  assert.equal(layout.chips[0].trunkY, layout.trunk.y);
+  assert.equal(layout.chips[0].y, 0);
+});
+
+test('focus-context scale gives the active question a wider linear segment and keeps chronology monotone', () => {
+  const graph = {
+    worlds: [
+      { id: 'old', parentId: null, questionId: 'old-q', year: 1000 },
+      { id: 'root', parentId: null, questionId: 'active-q', year: 1650 },
+      { id: 'late', parentId: 'root', questionId: 'active-q', year: 1978 },
+      { id: 'recent', parentId: null, questionId: 'recent-q', year: 2020 },
+    ],
+    questions: [
+      { id: 'old-q', divergenceYear: 1000 },
+      { id: 'active-q', divergenceYear: 1650 },
+      { id: 'recent-q', divergenceYear: 2020 },
+    ],
+  };
+  const layout = buildAtlasTimeline(graph, 'root');
+  const x = year => layout.positions.get(({ 1000: 'old', 1650: 'root', 1978: 'late', 2020: 'recent' })[year]).x;
+  assert.ok(x(1000) < x(1650) && x(1650) < x(1978) && x(1978) < x(2020));
+  const focusWidth = x(1978) - x(1650);
+  assert.ok(focusWidth > x(1650) - x(1000) && focusWidth > x(2020) - x(1978));
+  assert.ok(layout.focusContext.left < layout.focusContext.right);
+});
+
+test('switching active questions produces distinct focus layouts that interpolate existing worlds', () => {
+  const graph = sampleGraph();
+  const before = buildAtlasTimeline(graph, 'child-a');
+  const after = buildAtlasTimeline(graph, 'q-b-child');
+  assert.equal(before.focusContext.questionId, 'q-a');
+  assert.equal(after.focusContext.questionId, 'q-b');
+  assert.deepEqual([before.focusContext.startYear, before.focusContext.endYear], [1800, 2020]);
+  assert.deepEqual([after.focusContext.startYear, after.focusContext.endYear], [-5000, -3000]);
+
+  const id = 'sibling';
+  const from = before.positions.get(id), to = after.positions.get(id);
+  assert.notEqual(from.x, to.x, 'the same saved world is remapped around the newly active question');
+  const halfway = interpolateAtlasPoint(from, to, axisTransitionProgress(350));
+  assert.ok(halfway.x > Math.min(from.x, to.x) && halfway.x < Math.max(from.x, to.x));
+  for (const axis of ['x', 'y', 'z']) {
+    assert.ok(Math.abs(interpolateAtlasPoint(from, to, axisTransitionProgress(0))[axis] - from[axis]) < 1e-12);
+    assert.ok(Math.abs(interpolateAtlasPoint(from, to, axisTransitionProgress(AXIS_ANIMATION_MS))[axis] - to[axis]) < 1e-12);
+  }
 });
 
 test('activating an inactive question chip expands its worlds without changing the current world', () => {

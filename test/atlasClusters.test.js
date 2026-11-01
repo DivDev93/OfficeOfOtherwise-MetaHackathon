@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planWorldClusters } from '../web/atlas/clusters.js';
+import { clusterOpacityAtPresentation, orbitClusteredIdsForPresentation, planWorldClusters } from '../web/atlas/clusters.js';
 
 function graph() {
   const parent = { id: 'run::parent', questionId: 'question-1', lat: 0, lon: 0 };
@@ -53,6 +53,26 @@ test('Orbit slider folds only unentered children and pending placeholders share 
   const open = planWorldClusters(worlds, parent.id, { orbitLevel: 7 });
   assert.equal(open.orbit.clusters.some(item => item.kind === 'orbit-overflow'), false);
   assert.deepEqual(planWorldClusters(worlds, parent.id, { surfaceLabelLevel: 0 }).surface.visibleIds, []);
+});
+
+test('single Orbit overflow uses singular wording and fades away as Atlas releases its saved members', () => {
+  const { parent, children, worlds } = graph();
+  const single = planWorldClusters([parent, ...children.slice(0, 3)], parent.id).orbit.clusters.find(item => item.kind === 'orbit-overflow');
+  assert.equal(single.count, 1);
+  assert.equal(single.label, '1 possibility');
+
+  const plan = planWorldClusters(worlds, parent.id);
+  const overflow = plan.orbit.clusters.find(item => item.kind === 'orbit-overflow');
+  const pending = plan.orbit.clusters.find(item => item.kind === 'generation-pending');
+  assert.equal(clusterOpacityAtPresentation(overflow, 'orbit', { orbit: 1, atlas: 0 }, parent.id), 1);
+  assert.equal(clusterOpacityAtPresentation(overflow, 'orbit', { orbit: 0, atlas: 1 }, parent.id), 0);
+  assert.equal(clusterOpacityAtPresentation(pending, 'orbit', { orbit: 0, atlas: 1 }, parent.id), 0.85, 'Atlas keeps the generation cloud');
+
+  const atlasClustered = new Set(orbitClusteredIdsForPresentation(plan, { atlas: 1, zoom: 1, orbitNeighborhoodIds: [parent.id] }));
+  for (const id of overflow.memberIds) assert.equal(atlasClustered.has(id), false, 'saved overflow members are unclustered for Atlas LOD');
+  for (const id of pending.memberIds) assert.equal(atlasClustered.has(id), true, 'pending members remain represented by their cloud');
+  const orbitClustered = new Set(orbitClusteredIdsForPresentation(plan, { atlas: 0, zoom: 0.9, orbitNeighborhoodIds: [parent.id] }));
+  for (const id of overflow.memberIds) assert.equal(orbitClustered.has(id), true, 'the Orbit overflow remains clustered before Atlas');
 });
 
 test('hovering an Orbit cloud reveals stable child IDs without changing their actionability', () => {

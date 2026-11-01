@@ -71,7 +71,7 @@ function displayYearFromAstronomical(year) {
 }
 
 /** Tick labels use a minimum projected gap, so the scale never paints overlapping text. */
-export function layoutLogTimeTicks({ earliestYear, presentYear = PRESENT_YEAR, left = -4.6, right = 3.8, minGap = 0.78 } = {}) {
+export function layoutLogTimeTicks({ earliestYear, presentYear = PRESENT_YEAR, left = -4.6, right = 3.8, minGap = 0.78, yearToX = null } = {}) {
   const present = astronomicalYear(presentYear);
   const earliest = astronomicalYear(earliestYear);
   if (present == null || earliest == null || present < earliest) return [];
@@ -80,7 +80,9 @@ export function layoutLogTimeTicks({ earliestYear, presentYear = PRESENT_YEAR, l
     .filter(age => age <= maxAge || age === 0);
   const candidates = ages.map(age => {
     const year = present - age;
-    const x = logDistanceX(historicalYear(year), { presentYear, earliestYear, left, right });
+    const x = typeof yearToX === 'function'
+      ? yearToX(historicalYear(year))
+      : logDistanceX(historicalYear(year), { presentYear, earliestYear, left, right });
     return { age, year: historicalYear(year), x, label: age === 0 ? `PRESENT · ${presentYear}` : displayYearFromAstronomical(year) };
   }).sort((a, b) => a.x - b.x);
   const selected = [];
@@ -89,6 +91,34 @@ export function layoutLogTimeTicks({ earliestYear, presentYear = PRESENT_YEAR, l
   }
   if (selected.length > 1 && selected.at(-1).age === 0 && right - selected.at(-2).x < minGap) selected.splice(-2, 1);
   return selected;
+}
+
+/** Give the active question a readable linear span while compressing surrounding years. */
+export function focusContextTimeX(year, {
+  presentYear = PRESENT_YEAR, earliestYear = presentYear - 1, latestYear = presentYear,
+  focusStartYear, focusEndYear, left = -4.6, right = 3.8,
+} = {}) {
+  const value = astronomicalYear(year), earliest = astronomicalYear(earliestYear);
+  const domainEnd = astronomicalYear(presentYear) ?? PRESENT_YEAR;
+  let start = astronomicalYear(focusStartYear), end = astronomicalYear(focusEndYear);
+  if ([value, earliest, start, end].some(item => item == null) || !(right > left)) return null;
+  if (end < start) [start, end] = [end, start];
+  const domainStart = Math.min(earliest, start);
+  const hasOlder = start > domainStart, hasNewer = end < domainEnd;
+  const width = right - left;
+  let olderWidth = hasOlder ? width * 0.22 : 0;
+  let newerWidth = hasNewer ? width * 0.13 : 0;
+  const focusWidth = width - olderWidth - newerWidth;
+  if (value < start && hasOlder) {
+    const span = start - domainStart, distance = Math.min(span, start - value);
+    return left + olderWidth * (1 - Math.log1p(distance) / Math.log1p(Math.max(1, span)));
+  }
+  if (value <= end || !hasNewer) {
+    const span = Math.max(1, end - start);
+    return left + olderWidth + Math.max(0, Math.min(1, (value - start) / span)) * focusWidth;
+  }
+  const span = domainEnd - end, distance = Math.min(span, value - end);
+  return left + olderWidth + focusWidth + newerWidth * Math.log1p(distance) / Math.log1p(Math.max(1, span));
 }
 
 function ancestry(worlds, currentId) {
@@ -121,6 +151,12 @@ function depthById(worlds) {
 /** Undirected parent/child distance, used to choose atlas sphere versus point LOD. */
 export function worldDistanceMap(worlds = [], currentId) {
   const byId = new Map((Array.isArray(worlds) ? worlds : []).map(world => [idOf(world), world]).filter(([id]) => id));
+  const rootsByQuestion = new Map();
+  for (const world of byId.values()) if (world.parentId == null && world.questionId != null) {
+    const questionId = String(world.questionId);
+    if (!rootsByQuestion.has(questionId)) rootsByQuestion.set(questionId, []);
+    rootsByQuestion.get(questionId).push(idOf(world));
+  }
   const distance = new Map();
   const start = String(currentId ?? '');
   if (!byId.has(start)) return distance;
@@ -130,8 +166,18 @@ export function worldDistanceMap(worlds = [], currentId) {
     const neighbors = [];
     if (world?.parentId != null) neighbors.push(String(world.parentId));
     for (const child of byId.values()) if (child.parentId != null && String(child.parentId) === id) neighbors.push(idOf(child));
-    for (const neighbor of neighbors) if (byId.has(neighbor) && !distance.has(neighbor)) {
+    for (const neighbor of neighbors) if (byId.has(neighbor) && (!distance.has(neighbor) || nextDistance < distance.get(neighbor))) {
       distance.set(neighbor, nextDistance); queue.push(neighbor);
+    }
+    // Root possibilities share their question as a virtual parent: siblings
+    // are two steps apart even though that parent is not a persisted world.
+    if (world?.parentId == null && world?.questionId != null) {
+      for (const sibling of rootsByQuestion.get(String(world.questionId)) || []) {
+        const siblingDistance = nextDistance + 1;
+        if (!distance.has(sibling) || siblingDistance < distance.get(sibling)) {
+          distance.set(sibling, siblingDistance); queue.push(sibling);
+        }
+      }
     }
   }
   return distance;
@@ -166,7 +212,8 @@ export function atlasLOD(worlds = [], currentId, currentQuestionId, {
     const question = questionById.get(questionId);
     const divergenceYear = safeYear(question?.divergenceYear) ?? Math.min(...members.map(world => safeYear(world.year)).filter(year => year != null));
     const label = String(question?.label || question?.title || question?.question || questionId).replace(/^what if\s+/i, '').trim();
-    chips.push({ questionId, count: foldable.length, divergenceYear: Number.isFinite(divergenceYear) ? divergenceYear : null, label: `${label} · ${foldable.length}` });
+    const possibilityCount = `${foldable.length} ${foldable.length === 1 ? 'possibility' : 'possibilities'}`;
+    chips.push({ questionId, count: foldable.length, divergenceYear: Number.isFinite(divergenceYear) ? divergenceYear : null, label: `${label} · ${possibilityCount}` });
   }
   const lineageIds = items.filter(world => lineage.has(idOf(world))).map(idOf);
   const nearIds = items.filter(world => !foldedIds.has(idOf(world)) && (distances.get(idOf(world)) ?? Number.POSITIVE_INFINITY) <= sphereStepLimit)
@@ -230,7 +277,20 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
   const pastYears = years.filter(year => year <= presentYear);
   const earliestYear = pastYears.length ? Math.min(...pastYears) : presentYear - 1;
   const latestYear = years.length ? Math.max(presentYear, ...years) : presentYear;
-  const yearToX = year => logDistanceX(year, { presentYear, earliestYear, latestYear, left, right });
+  const activeQuestion = questions.find(question => String(question.id) === currentQuestionId);
+  const activeYears = worlds.filter(world => String(world.questionId ?? '') === currentQuestionId)
+    .map(world => safeYear(world.year)).filter(year => year != null);
+  const explicitFocusStart = safeYear(activeQuestion?.divergenceYear);
+  const focusStartYear = explicitFocusStart ?? (activeYears.length ? Math.min(...activeYears) : null);
+  // Future descendants use the existing bounded extension, but must not
+  // disable the linear focus on the active question's historical span.
+  const latestActiveYear = activeYears.length ? Math.max(...activeYears) : focusStartYear;
+  const focusEndYear = latestActiveYear == null ? null : Math.min(presentYear, latestActiveYear);
+  const useFocusContext = focusStartYear != null && focusEndYear != null && focusEndYear > focusStartYear;
+  const timeOptions = { presentYear, earliestYear, latestYear, left, right, focusStartYear, focusEndYear };
+  const yearToX = year => astronomicalYear(year) > astronomicalYear(presentYear)
+    ? logDistanceX(year, { presentYear, earliestYear, latestYear, left, right })
+    : useFocusContext ? focusContextTimeX(year, timeOptions) : logDistanceX(year, { presentYear, earliestYear, latestYear, left, right });
   const futureExtension = latestYear > presentYear ? {
     fromX: right,
     toX: right + FUTURE_EXTENSION_WIDTH,
@@ -274,7 +334,7 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
   const laidOutWorlds = preliminaryWorlds;
   for (const item of laidOutWorlds) positions.set(item.id, item);
 
-  const tickLayout = layoutLogTimeTicks({ earliestYear, presentYear, left, right });
+  const tickLayout = layoutLogTimeTicks({ earliestYear, presentYear, left, right, yearToX });
   const tickLabels = [];
   for (const tick of tickLayout) {
     const candidate = { ...tick, y: -0.35 };
@@ -325,13 +385,15 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
     worldLabels.set(entry.id, visible);
   }
 
-  const chipLabels = [...labelPositions];
+  const chipPlacements = [];
   const chips = lod.chips.map((chip, index) => {
     const x = chip.divergenceYear == null ? left + index * 0.9 : yearToX(chip.divergenceYear);
-    let y = -1.05 - index * 0.36;
-    while (occupied({ x, y }, chipLabels, 2.2, 0.38)) y -= 0.4;
-    chipLabels.push({ x, y });
-    return { ...chip, x, y, color: 'parchment' };
+    let stack = 0;
+    const width = Math.min(2.2, Math.max(0.82, chip.label.length * 0.035));
+    while (chipPlacements.some(other => Math.abs(other.x - x) < (other.width + width) / 2 + 0.12 && other.stack === stack)) stack++;
+    const placement = { ...chip, x, y: stack * 0.38, trunkY: 0, stack, width };
+    chipPlacements.push(placement);
+    return { ...placement, color: 'parchment' };
   });
   const presentEarth = { x: right, y: 0, year: presentYear, label: 'PRESENT-DAY EARTH · 2026' };
   return {
@@ -339,7 +401,15 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
     presentYear,
     earliestYear,
     latestYear,
-    timeScaleLabel: `Log distance back from present (${presentYear})`,
+    timeScaleLabel: useFocusContext
+      ? `Linear focus ${focusStartYear}–${focusEndYear}; compressed context`
+      : `Log distance back from present (${presentYear})`,
+    timeScaleMode: useFocusContext ? 'focus-context' : 'log',
+    focusContext: useFocusContext ? { questionId: currentQuestionId, startYear: focusStartYear, endYear: focusEndYear,
+      olderContext: focusStartYear > earliestYear, newerContext: focusEndYear < presentYear,
+      left: left + (focusStartYear > earliestYear ? (right - left) * 0.22 : 0),
+      right: left + (focusStartYear > earliestYear ? (right - left) * 0.22 : 0)
+        + (right - left) * (1 - (focusStartYear > earliestYear ? 0.22 : 0) - (focusEndYear < presentYear ? 0.13 : 0)) } : null,
     trunk: { left, right, y: 0 },
     futureExtension,
     presentEarth,
