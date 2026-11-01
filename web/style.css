@@ -543,10 +543,15 @@ body:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-world-card[hidden]{displ
 }
 @media(prefers-reduced-motion:reduce){
   body:has(#atlas-scene[data-atlas-level="lift"]) .exploration-rail>:not(.atlas-compact-controls),
-  body:has(#atlas-scene[data-atlas-level="lift"]) .atlas-compact-controls,
   body:has(#atlas-scene[data-atlas-level="lift"]) .hero-panel,
-  body:has(#atlas-scene[data-atlas-level="lift"]) .atlas-world-details,
-  body:has(#atlas-scene[data-atlas-level="lift"]) .atlas-world-card{transition:none!important;animation:none!important;transform:none!important}
+  body:has(#atlas-scene[data-atlas-level="lift"]) .atlas-world-details{opacity:1!important;visibility:visible!important;pointer-events:auto!important;transition:none!important;animation:none!important;transform:none!important}
+  body:has(#atlas-scene[data-atlas-level="lift"]) .geography-panel{opacity:1!important;visibility:visible!important;pointer-events:auto!important;transition:none!important;animation:none!important}
+  body:has(#atlas-scene[data-atlas-level="lift"]) .atlas-compact-controls,
+  body:has(#atlas-scene[data-atlas-level="lift"]) .atlas-world-card{opacity:0!important;visibility:hidden!important;pointer-events:none!important;transition:none!important;animation:none!important;transform:none!important}
+}
+@media(prefers-reduced-motion:reduce) and (min-width:701px){
+  body:has(#atlas-scene[data-atlas-level="lift"]) .map-panel>#atlas-scene{inset:0 410px 0 calc(min(320px,max(270px,calc(34vw - 12px))) + 18px)}
+  body:has(#atlas-scene[data-atlas-level="lift"]) .atlas-toolbar{left:calc(min(320px,max(270px,calc(34vw - 12px))) + 18px);right:410px}
 }
 body.atlas-panels-open:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-compact-controls,
 body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-compact-controls{opacity:1;visibility:visible;pointer-events:auto}

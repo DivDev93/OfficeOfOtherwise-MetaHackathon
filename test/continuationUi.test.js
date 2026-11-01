@@ -80,6 +80,9 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
   const nodes = new Map(), get = id => { if (!nodes.has(id)) { const node = element(); if (id === 'root-generation-status') { node.hidden = true; node.setAttribute('role','status'); node.setAttribute('aria-live','polite'); } nodes.set(id, node); } return nodes.get(id); };
   const documentListeners = new Map(), document = { getElementById:get, createElement:element, createTextNode:text => ({ textContent:text }), querySelector:get, querySelectorAll:() => [], body:element(), addEventListener(type, callback) { documentListeners.set(type, callback); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; documentListeners.get('keydown')?.(event); return event; } };
   const windowListeners = new Map(), window = { innerWidth:390, innerHeight:844, addEventListener(type, callback) { const callbacks = windowListeners.get(type) || []; callbacks.push(callback); windowListeners.set(type, callbacks); }, dispatch(type) { for (const callback of windowListeners.get(type) || []) callback(); } };
+  let reducedMotionMatches = false;
+  const reducedMotionListeners = [];
+  const reducedMotionQuery = { get matches() { return reducedMotionMatches; }, addEventListener(type, callback) { if (type === 'change') reducedMotionListeners.push(callback); } };
   const posts = [], gets = [], heads = [], atlasWorldHistory = [], atlasEntryHistory = [], storage = new Map(), location = { hash: initialHash, pathname: '/', search: '' };
   const fetch = async (url, options = {}) => {
     if (options.method === 'HEAD') { heads.push(url); if (onHead) return onHead(url); const parts = url.split('/'); return new Response('', { status: fixtures[parts[2]]?.assets?.includes(parts[3]) ? 200 : 404 }); }
@@ -116,13 +119,13 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     },
     createVoiceInput: () => ({ cancel() {}, setEnabled() {} }),
     document,
-    matchMedia: () => ({ matches: false, addEventListener() {} }), window,
+    matchMedia: query => query === '(prefers-reduced-motion: reduce)' ? reducedMotionQuery : ({ matches: false, addEventListener() {} }), window,
     location, history: { pushState(a, b, target) { location.hash = target.includes('#') ? target.slice(target.indexOf('#')) : ''; } },
     localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) }, Option: function(text, value) { return { text, value }; },
   });
   const source = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/import\('\.\/visuals\.js'\)\.then\(async \(\{createModelViewer\}\) => \{[\s\S]*?\}\)\.catch\(\(\) => \{ modelApi = null; setView\(activeView\); \}\);/, '');
   vm.runInContext(`${source}\n globalThis.ui = {loadRun,selectBranch,activateBranch,selectStarMapNode,expandBranch,runPrompt,setView,setSurfaceMode,setAtlasLevel:applyAtlasGeographyLevel,toggleAtlasGeographyPanel,refreshHistory,toggleArchiveHistory,setCurrentRunContextForTest:id=>{currentRunId=id;currentManifest=knownRunManifests.get(id)||currentManifest;continuation=currentManifest?.continuation||continuation;renderExplorationTree();},setAtlasAttachmentIntent:value=>{atlasController.attachment=value;},setGlobe:api=>{Object.assign(atlasController.scene,api);renderGeography();},setModelApi:api=>{modelApi=api;},syncOtherQuestionsForTest:(level,mapNodes)=>{window.matchMedia=()=>({matches:true});atlasController.scene.level=level;syncAtlasOtherQuestionToggle(mapNodes);},previewGlobe:(branch,anchor)=>showAtlasPreview(branch,anchor),eventWorkFor:(runId,branchId)=>{const work=eventWork.get(eventKey(runId,branchId));return work?{...work}:null;},state:()=>({currentRunId,atlasCurrentWorldRunId,continuation,streamBusy,selectedContext,hasImage,activeView,continuationViewSelection,surfaceGeography,surfaceMode,hasStory:document.body.classList.contains('has-story'),invitationOpen:document.body.classList.contains('invitation-open'),starMapNodes:atlasNodes,atlasAttachmentIntent,serverExpansionUsed,expansionLimit,enteredNodesCount:enteredNodes.size,pendingExpansionCount:pendingExpansionNodes.size,selectedBranchId,selectedWork:{...eventWork.get(eventKey(currentRunId,selectedBranchId))},activePreview:savedPreview.activePreview,previewHidden:savedPreview.element.hidden})};`, context);
-  return { ui: context.ui, get, posts, gets, heads, atlasWorldHistory, atlasEntryHistory, storage, location, starMap: context.starMap, document, window, navigate(hash, ...events) { location.hash = hash; for (const event of events) window.dispatch(event); } };
+  return { ui: context.ui, get, posts, gets, heads, atlasWorldHistory, atlasEntryHistory, storage, location, starMap: context.starMap, document, window, setReducedMotion(matches) { reducedMotionMatches = Boolean(matches); for (const listener of reducedMotionListeners) listener({ matches:reducedMotionMatches }); }, navigate(hash, ...events) { location.hash = hash; for (const event of events) window.dispatch(event); } };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const complete = fixture => new Response(`event: complete\ndata: ${JSON.stringify({ runId: fixture.id, branch: fixture.branch, continuation: fixture.continuation })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
@@ -541,6 +544,32 @@ test('Earth comparison panel automatically tucks away beyond Lift and returns at
   app.ui.toggleAtlasGeographyPanel(); assert.equal(app.get('geography-panel').hidden, true);
   app.ui.setAtlasLevel('surface'); assert.equal(app.get('geography-panel').hidden, true, 'the explicit hide choice persists across level changes');
   app.ui.toggleAtlasGeographyPanel(); assert.equal(app.get('geography-panel').hidden, false);
+});
+
+test('reduced-motion Lift keeps the original panel set accessible until the instant Orbit handoff', async () => {
+  const fixture = run('reduced-lift-panels', choice); fixture.assets = ['hero.png'];
+  const app = harness({ 'reduced-lift-panels':fixture }); await tick();
+  await app.ui.loadRun('reduced-lift-panels', { animate:false, autoConsequences:false });
+  app.setReducedMotion(true);
+  app.ui.setAtlasLevel('lift');
+  app.get('atlas-scene').dataset.atlasLevel = 'lift';
+  assert.equal(app.get('geography-panel').inert, false, 'the visible comparison panel remains keyboard available throughout Lift');
+  assert.equal(app.get('geography-panel').getAttribute('aria-hidden'), 'false');
+  assert.equal(app.get('exploration-tree').inert, false, 'the visible story tree remains keyboard available throughout Lift');
+  assert.equal(app.get('atlas-world-details').inert, false, 'the visible story sheet remains keyboard available throughout Lift');
+  assert.equal(app.get('atlas-compact-controls').inert, true, 'the hidden compact controls stay out of keyboard navigation');
+  assert.equal(app.get('atlas-world-card').inert, true, 'the hidden compact card stays out of keyboard navigation');
+  app.ui.setAtlasLevel('orbit');
+  app.get('atlas-scene').dataset.atlasLevel = 'orbit';
+  assert.equal(app.get('geography-panel').hidden, true);
+  assert.equal(app.get('geography-panel').inert, true, 'the hidden old panel leaves keyboard navigation at Orbit');
+  assert.equal(app.get('atlas-compact-controls').inert, false, 'the incoming compact controls become keyboard available at Orbit');
+  assert.equal(app.get('atlas-world-card').inert, false, 'the incoming card becomes keyboard available at Orbit');
+  app.ui.setAtlasLevel('lift');
+  app.get('atlas-scene').dataset.atlasLevel = 'lift';
+  app.setReducedMotion(false);
+  assert.equal(app.get('geography-panel').inert, true, 'changing the preference mid-Lift resynchronizes accessibility state');
+  assert.equal(app.get('exploration-tree').inert, true);
 });
 
 test('compact Atlas card follows the selected world and its quick controls update expanded state', async () => {

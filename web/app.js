@@ -19,6 +19,7 @@ let atlasActiveQuestionId = '', atlasOtherQuestionsOpen = false, atlasVisibleGra
 let expansionLimit = 20, serverExpansionUsed = 0, activeExpansion = null, preserveGraphUntilReady = false;
 let atlasGeographyOverride = null;
 let atlasDetailsFocusTimer = null;
+reducedMotion.addEventListener?.('change', () => applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'));
 const enteredNodes = new Set();
 const pendingExpansionNodes = new Set();
 function enterNode(runId, branchId) {
@@ -663,7 +664,7 @@ function applyAtlasGeographyLevel(level = 'surface') {
   syncAtlasCompactButtons(level);
   const automatic = level === 'surface' || level === 'lift' || level === 'unknown';
   const visible = atlasGeographyOverride === null ? automatic : atlasGeographyOverride;
-  const panelUnavailable = !visible || level === 'lift';
+  const panelUnavailable = !visible || (level === 'lift' && !reducedMotion.matches);
   restoreAtlasFocusBeforeHiding(panel, panelUnavailable);
   panel.hidden = !visible;
   panel.inert = panelUnavailable;
@@ -686,20 +687,21 @@ function syncAtlasCompactButtons(level = '') {
   const panelsOpen = document.body.classList.contains('atlas-panels-open');
   const detailsOpen = document.body.classList.contains('atlas-details-open');
   const invitationOpen = document.body.classList.contains('invitation-open');
-  const treeUnavailable = currentLevel === 'lift' || (compact && !panelsOpen);
+  const reducedMotionLift = currentLevel === 'lift' && reducedMotion.matches;
+  const treeUnavailable = (currentLevel === 'lift' && !reducedMotionLift) || (compact && !panelsOpen);
   if (treePanel) {
     restoreAtlasFocusBeforeHiding(treePanel, treeUnavailable);
     treePanel.inert = treeUnavailable;
     treePanel.setAttribute('aria-hidden', String(treeUnavailable));
   }
-  const invitationUnavailable = currentLevel === 'lift' || (compact && !invitationOpen);
+  const invitationUnavailable = (currentLevel === 'lift' && !reducedMotionLift) || (compact && !invitationOpen);
   if (invitationPanel) {
     restoreAtlasFocusBeforeHiding(invitationPanel, invitationUnavailable);
     invitationPanel.inert = invitationUnavailable;
     invitationPanel.setAttribute('aria-hidden', String(invitationUnavailable));
   }
   if (detailSheet) {
-    const detailSheetHidden = (compact && !detailsOpen) || currentLevel === 'lift';
+    const detailSheetHidden = (compact && !detailsOpen) || (currentLevel === 'lift' && !reducedMotionLift);
     restoreAtlasFocusBeforeHiding(detailSheet, detailSheetHidden);
     detailSheet.inert = detailSheetHidden;
     detailSheet.setAttribute('aria-hidden', String(detailSheetHidden));

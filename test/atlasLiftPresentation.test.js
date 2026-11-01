@@ -9,7 +9,7 @@ function liftOpacity(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const rules = [...css.matchAll(new RegExp(`${escaped}\\{([^}]*)\\}`, 'g'))];
   const declarations = rules.map(([, block]) => block.match(/opacity:([^;]+)/)?.[1]).filter(Boolean);
-  assert.equal(declarations.length, 1, `${selector} has one shared Lift opacity declaration`);
+  assert.ok(declarations.length >= 1, `${selector} has a Lift opacity declaration`);
   return declarations[0];
 }
 
@@ -92,5 +92,38 @@ test('phone Lift fixes the compact card height and disables its transitions for 
   assert.match(css, /\.has-story:not\(\.invitation-open\) \.geography-panel\{top:calc\(118px \+ 33dvh \+ 8px\);right:9px;bottom:auto;left:9px;width:auto;max-height:16dvh;overflow:auto\}/, 'geography stays below the story tree');
   assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.atlas-world-details\{top:auto;right:9px;bottom:10px;left:9px;width:auto;max-height:calc\(100dvh - 118px - 33dvh - 16dvh - 36px\)/, 'the hero sheet stays below geography in the original bottom band');
   assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.atlas-world-card\{top:0;right:0;left:0\}/, 'phone card fills the fixed hero panel without changing its layout');
-  assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{\s*body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.exploration-rail>:not\(\.atlas-compact-controls\),[\s\S]*?\.atlas-world-card\{transition:none!important;animation:none!important;transform:none!important\}/);
+  assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{[\s\S]*?body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.exploration-rail>:not\(\.atlas-compact-controls\),[\s\S]*?\.geography-panel\{opacity:1!important;visibility:visible!important;pointer-events:auto!important;transition:none!important;animation:none!important\}/);
+  assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.atlas-compact-controls,[\s\S]*?\.atlas-world-card\{opacity:0!important;visibility:hidden!important;pointer-events:none!important;transition:none!important;animation:none!important;transform:none!important\}/);
+});
+
+test('reduced-motion Lift holds the original panels until an instant Orbit handoff', () => {
+  assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.exploration-rail>:not\(\.atlas-compact-controls\),[\s\S]*?\.geography-panel\{opacity:1!important;visibility:visible!important;pointer-events:auto!important;transition:none!important/,
+    'the existing tree, details, and geography remain fully visible and interactive throughout reduced-motion Lift');
+  assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.atlas-compact-controls,[\s\S]*?\.atlas-world-card\{opacity:0!important;visibility:hidden!important;pointer-events:none!important;transition:none!important/,
+    'the incoming compact controls and card stay entirely hidden until Orbit');
+});
+
+test('reduced-motion Lift preserves the geography panel centering transform at each breakpoint', () => {
+  const baseRule = css.match(/\.geography-panel\{([^}]*)\}/)?.[1] || '';
+  const phoneRule = css.match(/@media\(max-width:700px\)\{\.geography-panel\{([^}]*)\}/)?.[1] || '';
+  const liftRule = css.match(/body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.geography-panel\{([^}]*)\}/)?.[1] || '';
+  const reducedLiftRule = css.match(/body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.geography-panel\{([^}]*)\}/g)?.at(-1)?.match(/\{([^}]*)\}/)?.[1] || '';
+  assert.match(baseRule, /transform:translateX\(-50%\)/, 'desktop geography is centered on its left anchor');
+  assert.match(phoneRule, /transform:none/, 'mobile geography uses its edge-aligned position');
+  assert.doesNotMatch(liftRule, /transform:/, 'the ordinary Lift rule leaves responsive geography positioning intact');
+  assert.doesNotMatch(reducedLiftRule, /transform:/, 'the reduced-motion Lift override leaves the winning breakpoint transform intact');
+});
+
+test('reduced-motion desktop Lift reserves the full rail width for the canvas and toolbar', () => {
+  const desktopRule = css.match(/@media\(prefers-reduced-motion:reduce\) and \(min-width:701px\)\{([^}]*(?:\}[^}]*)*)\}/)?.[1] || '';
+  const railEdge = 'calc(min(320px,max(270px,calc(34vw - 12px))) + 18px)';
+  assert.match(css, new RegExp(`@media\\(prefers-reduced-motion:reduce\\) and \\(min-width:701px\\)\\{[\\s\\S]*?body:has\\(#atlas-scene\\[data-atlas-level="lift"\\]\\) \\.map-panel>#atlas-scene\\{inset:0 410px 0 ${railEdge.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`),
+    'desktop canvas left edge follows the full reduced-motion Lift rail');
+  assert.match(desktopRule, /\.atlas-toolbar\{left:calc\(min\(320px,max\(270px,calc\(34vw - 12px\)\)\) \+ 18px\);right:410px\}/,
+    'desktop toolbar aligns with the full-width rail and canvas');
+  const railWidth = viewportWidth => Math.min(320, Math.max(270, viewportWidth * 0.34 - 12));
+  assert.equal(railWidth(1440) + 18, 338, '1440px desktop canvas begins beyond its 320px rail');
+  assert.equal(railWidth(900) + 18, 312, 'compact desktop widths reserve their actual minimum-constrained rail');
+  assert.match(css, /@media\(max-width:700px\)[\s\S]*body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.map-panel>#atlas-scene\{inset:0\}[\s\S]*body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.atlas-toolbar\{left:8px;right:8px\}/,
+    'phones retain their existing full-width canvas and toolbar positions');
 });
