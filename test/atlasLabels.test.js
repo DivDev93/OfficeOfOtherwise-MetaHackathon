@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorldLabelCandidates, edgeMarker, placeScreenLabels, projectedSphereDiameterPixels, shouldShowWorldLabel, worldLabelText } from '../web/atlas/labels.js';
+import { createOrbitChildLabelLeader, createWorldLabelCandidates, edgeMarker, layoutOrbitChildLabelLanes, layoutOrbitChildLabels, placeOrbitFallbackPanel, placeScreenLabels, projectedSphereDiameterPixels, resolveOrbitFallbackMount, shouldShowWorldLabel, visibleViewportObstacleRects, viewportObstacleRectsFromCenters, worldLabelText } from '../web/atlas/labels.js';
 
 test('offscreen lineage has a directional marker and visible children can be labelled', () => {
   const bounds = { left: 0, right: 300, top: 0, bottom: 200 };
@@ -108,6 +108,218 @@ test('crowded direct-child labels use compact collision-free edge slots', () => 
       Math.abs(other.x - placed[i].x) < (other.width + placed[i].width) / 2 + 3
       && Math.abs(other.y - placed[i].y) < (other.height + placed[i].height) / 2 + 3));
   }
+});
+
+test('Orbit child label lanes retain every child and scroll overflow around reserved controls', () => {
+  const bounds = { left: 0, top: 0, right: 375, bottom: 180 };
+  const toolbar = { x: 187.5, y: 90, width: 355, height: 90 };
+  const children = Array.from({ length: 8 }, (_, index) => ({
+    id: `child-${index}`, text: `200${index} · Canopy Child ${index}`,
+    fullText: `Canopy Child ${index} full title`,
+  }));
+  const result = layoutOrbitChildLabelLanes(children, bounds, [toolbar]);
+
+  assert.deepEqual(new Set(result.labels.map(label => label.id)), new Set(children.map(child => child.id)));
+  assert.equal(result.labels.length, children.length);
+  assert.equal(result.blocked, false);
+  assert.ok(result.scrollable, 'labels beyond safe rows stay in scrollable lane content');
+  assert.equal(result.overflowIds.length, children.length - result.lanes.reduce((sum, lane) => sum + lane.visibleCount, 0));
+  assert.ok(result.lanes.length <= 2, 'children share at most two grouped edge rails');
+  assert.ok(result.labels.every(label => label.fullText.endsWith('full title')));
+  assert.ok(result.lanes.some(lane => lane.scrollable));
+  for (const lane of result.lanes) {
+    assert.ok(lane.x >= bounds.left && lane.x + lane.width <= bounds.right);
+    assert.ok(lane.y >= bounds.top && lane.y + lane.height <= bounds.bottom);
+    assert.ok(lane.y + lane.height <= toolbar.y - toolbar.height / 2 - 6
+      || lane.y >= toolbar.y + toolbar.height / 2 + 6,
+    'lane viewport clears reserved control bounds and its safety gap');
+  }
+  for (const label of result.labels.filter(item => item.visible)) {
+    const lane = result.lanes.find(item => item.id === label.laneId);
+    assert.ok(label.top + label.height <= lane.height);
+  }
+});
+
+test('normal Orbit density displays every child in two grouped lanes without covering its nodes', () => {
+  const bounds = { left: 4, top: 4, right: 1436, bottom: 896 };
+  const children = Array.from({ length: 6 }, (_, index) => ({ id:`normal-${index}`, text:`Child ${index}`, fullText:`Child ${index} complete identity` }));
+  const controls = [{ x:720, y:72, width:560, height:88 }];
+  const nodes = [{ x:80, y:350, width:52, height:52 }, { x:1360, y:610, width:52, height:52 }];
+  const result = layoutOrbitChildLabelLanes(children, bounds, [...controls, ...nodes]);
+
+  assert.equal(result.blocked, false);
+  assert.equal(result.lanes.length, 2, 'labels stay grouped into one rail on each side');
+  assert.equal(result.labels.length, children.length);
+  assert.ok(result.labels.every(label => label.visible));
+  assert.equal(result.scrollable, false);
+  assert.ok(result.lanes.every(lane => lane.height === lane.contentHeight && lane.height < bounds.bottom - bounds.top),
+    'non-overflow rails shrink to the rows they contain');
+  assert.ok(result.lanes.every(lane => lane.width < 320), 'short identities use compact rail widths');
+  for (const lane of result.lanes) {
+    for (const blocker of [...controls, ...nodes]) {
+      assert.ok(lane.x + lane.width <= blocker.x - blocker.width / 2 - 6
+        || lane.x >= blocker.x + blocker.width / 2 + 6
+        || lane.y + lane.height <= blocker.y - blocker.height / 2 - 6
+        || lane.y >= blocker.y + blocker.height / 2 + 6,
+      'each lane clears its controls and projected nodes');
+    }
+  }
+});
+
+test('Orbit labels stay near their own projected nodes when space allows and lane only the crowded remainder', () => {
+  const bounds = { left:0, top:0, right:1200, bottom:760 };
+  const children = [
+    { id:'west', text:'West canopy · 1978', fullText:'West canopy', x:250, y:250, width:220, height:44 },
+    { id:'east', text:'East canopy · 1992', fullText:'East canopy', x:940, y:520, width:220, height:44 },
+    { id:'crowded-a', text:'Crowded A · 2001', fullText:'Crowded A', x:600, y:380, width:220, height:44 },
+    { id:'crowded-b', text:'Crowded B · 2002', fullText:'Crowded B', x:600, y:380, width:220, height:44 },
+    { id:'crowded-c', text:'Crowded C · 2003', fullText:'Crowded C', x:600, y:380, width:220, height:44 },
+    { id:'crowded-d', text:'Crowded D · 2004', fullText:'Crowded D', x:600, y:380, width:220, height:44 },
+    { id:'crowded-e', text:'Crowded E · 2005', fullText:'Crowded E', x:600, y:380, width:220, height:44 },
+    { id:'crowded-f', text:'Crowded F · 2006', fullText:'Crowded F', x:600, y:380, width:220, height:44 },
+  ];
+  const nodes = children.map(child => ({ x:child.x, y:child.y, width:48, height:48 }));
+  const controls = [{ x:970, y:130, width:300, height:72 }];
+  const result = layoutOrbitChildLabels(children, bounds, nodes, controls, {
+    rowHeight:44, rowGap:4, minLaneWidth:96, maxLaneWidth:320,
+  });
+
+  assert.ok(result.local.some(label => label.id === 'east') && result.local.some(label => label.id === 'west'));
+  assert.ok(result.labels.length > 0, 'only the children that cannot fit near their crowded nodes fall back to edge lanes');
+  assert.deepEqual(new Set([...result.local, ...result.labels].map(label => label.id)),
+    new Set(children.map(child => child.id)), 'every direct child remains represented');
+  assert.ok(result.local.every(label => label.height >= 44));
+  assert.ok(result.local.every(label => Math.hypot(label.x - children.find(child => child.id === label.id).x,
+    label.y - children.find(child => child.id === label.id).y) < 180),
+  'labels that fit stay near their own projected nodes');
+  for (const label of result.local) {
+    for (const blocker of [...nodes, ...controls]) {
+      assert.ok(Math.abs(label.x - blocker.x) >= (label.width + blocker.width) / 2 + 3
+        || Math.abs(label.y - blocker.y) >= (label.height + blocker.height) / 2 + 3,
+      'near-node label clears every node hit area and control');
+    }
+  }
+});
+
+test('Orbit child label lanes hand every identity to the visible fallback when the viewport cannot fit a lane', () => {
+  const children = [{ id: 'a', text: 'A', fullText:'A complete title' }, { id: 'b', text: 'B', fullText:'B complete title' }];
+  const result = layoutOrbitChildLabelLanes(children,
+    { left: 0, top: 0, right: 80, bottom: 30 }, []);
+
+  assert.equal(result.blocked, true);
+  assert.equal(result.lanes[0].blocked, true);
+  assert.equal(result.lanes[0].reason, 'viewport-too-small');
+  assert.deepEqual(result.overflowIds, ['a', 'b']);
+  assert.deepEqual(result.labels.map(label => label.id), ['a', 'b']);
+  assert.deepEqual(result.labels.map(label => label.fullText), ['A complete title', 'B complete title']);
+  assert.ok(result.labels.every(label => !label.visible && label.laneId === 'orbit-label-overflow'));
+});
+
+test('Orbit fallback drawer finds visible viewport space around controls and fits a heading plus a 44px row', () => {
+  const bounds = { left:0, top:0, right:390, bottom:844 };
+  const controls = [
+    { left:8, top:8, right:180, bottom:72 },
+    { left:8, top:110, right:382, bottom:190 },
+    { left:10, top:760, right:380, bottom:834 },
+  ];
+  const panel = placeOrbitFallbackPanel(bounds, controls);
+  assert.ok(panel, 'compact viewport has a control-free region for the fallback');
+  assert.ok(panel.left >= bounds.left && panel.top >= bounds.top);
+  assert.ok(panel.right <= bounds.right && panel.bottom <= bounds.bottom);
+  assert.ok(panel.height >= 88, 'the viewport slot leaves room for the heading, padding, and one 44px child label');
+  assert.ok(controls.every(control => panel.right <= control.left - 10 || panel.left >= control.right + 10
+    || panel.bottom <= control.top - 10 || panel.top >= control.bottom + 10), 'drawer clears every reserved control');
+  assert.equal(placeOrbitFallbackPanel({ left:0, top:0, right:80, bottom:54 }, []), null,
+    'a viewport too short to show a 44px target is reported as physically too small');
+});
+
+test('Orbit fallback converts projected node hit areas to viewport obstacles before portal placement', () => {
+  const bounds = { left:0, top:0, right:500, bottom:400 };
+  const projectedNodes = [
+    { x:75, y:200, width:150, height:300 },
+    { x:NaN, y:20, width:44, height:44 },
+  ];
+  const nodeObstacles = viewportObstacleRectsFromCenters(projectedNodes);
+
+  assert.deepEqual(nodeObstacles, [{ left:0, top:50, right:150, bottom:350 }],
+    'projectPoint coordinates are viewport centers and the helper produces viewport edges');
+  const unguarded = placeOrbitFallbackPanel(bounds, []);
+  const guarded = placeOrbitFallbackPanel(bounds, nodeObstacles);
+  assert.ok(unguarded.left < nodeObstacles[0].right,
+    'without projected-node obstacles, the first portal candidate overlaps the globe hit area');
+  assert.ok(guarded.left >= nodeObstacles[0].right + 10
+    || guarded.right <= nodeObstacles[0].left - 10
+    || guarded.top >= nodeObstacles[0].bottom + 10
+    || guarded.bottom <= nodeObstacles[0].top - 10,
+  'the chosen fallback panel clears the projected globe and its 44px interaction region');
+
+  const localLabelObstacles = viewportObstacleRectsFromCenters([
+    { x:350, y:300, width:220, height:44 },
+  ]);
+  const localLabelPanel = placeOrbitFallbackPanel({ left:0, top:0, right:700, bottom:600 }, localLabelObstacles);
+  assert.ok(localLabelPanel, 'the expanded viewport still has room for a fallback panel');
+  assert.ok(localLabelPanel.right <= localLabelObstacles[0].left - 10
+    || localLabelPanel.left >= localLabelObstacles[0].right + 10
+    || localLabelPanel.bottom <= localLabelObstacles[0].top - 10
+    || localLabelPanel.top >= localLabelObstacles[0].bottom + 10,
+  'the fallback drawer clears labels already placed near their projected nodes');
+});
+
+test('Orbit child leaders stop at label and node hit-area edges and are suppressed when they cross blockers', () => {
+  const label = { left:10, top:10, right:110, bottom:54 };
+  const target = { left:330, top:10, right:374, bottom:54 };
+  const clear = createOrbitChildLabelLeader(label, target, []);
+  assert.deepEqual(clear, { x1:110, y1:32, x2:330, y2:32 },
+    'the straight leader joins the hit-area edges without entering either target');
+  assert.equal(createOrbitChildLabelLeader(label, target, [{ left:180, top:0, right:220, bottom:80 }]), null,
+    'a leader crossing another node or control is omitted instead of rerouted across it');
+  assert.equal(createOrbitChildLabelLeader(label, target, [{ left:180, top:70, right:220, bottom:110 }])?.x1, 110,
+    'an unrelated nearby obstacle does not suppress a clear association');
+  assert.equal(createOrbitChildLabelLeader(label, { left:60, top:18, right:100, bottom:50 }, []), null,
+    'overlapping label and node hit areas do not get a misleading connector');
+  const first = createOrbitChildLabelLeader(
+    { left:10, top:10, right:50, bottom:50 }, { left:210, top:190, right:250, bottom:230 }, []);
+  assert.ok(first);
+  assert.equal(createOrbitChildLabelLeader(
+    { left:10, top:190, right:50, bottom:230 }, { left:210, top:10, right:250, bottom:50 }, [first]), null,
+  'a later association is omitted when it would cross an existing leader');
+});
+
+test('Orbit fallback prefers visible direct labels over a tree-reopen hint when a safe portal slot fits', () => {
+  assert.deepEqual(resolveOrbitFallbackMount({ treeVisible:true, hasTree:true,
+    portalRect:{ left:12, top:200, right:300, bottom:300 } }),
+  { mode:'portal', visible:true, hint:false }, 'focused Atlas keeps direct child labels visible while the tree is open');
+  assert.deepEqual(resolveOrbitFallbackMount({ treeVisible:true, hasTree:true, portalRect:null }),
+    { mode:'tree', visible:true, hint:false }, 'an already visible tree can host labels if the viewport has no safe slot');
+  assert.deepEqual(resolveOrbitFallbackMount({ hasTree:true, invitationVisible:false, portalRect:null }),
+    { mode:'tree-reopen', visible:false, hint:true }, 'focused mode gets a visible Story tree action that reveals the list');
+  assert.deepEqual(resolveOrbitFallbackMount({ hasTree:true, invitationVisible:true, portalRect:null }),
+    { mode:'invitation', visible:true, hint:false }, 'invitation-open gets its labels in the visible invitation flow');
+  assert.deepEqual(resolveOrbitFallbackMount({ hasTree:false, hasEmbeddedHost:true, portalRect:null }),
+    { mode:'embedded-flow', visible:true, hint:false }, 'an embedded scene without application panels keeps labels in its host');
+  assert.deepEqual(resolveOrbitFallbackMount({ hasTree:false, hasEmbeddedHost:false, portalRect:null }),
+    { mode:'unavailable', visible:false, hint:false }, 'report when neither viewport space nor a visible host exists');
+});
+
+test('Orbit fallback measures visible rail and invitation DOM bounds before choosing portal placement', () => {
+  const rail = { getBoundingClientRect:() => ({ left:0, top:90, right:120, bottom:844, width:120, height:754 }) };
+  const invitation = { getBoundingClientRect:() => ({ left:12, top:590, right:378, bottom:832, width:366, height:242 }) };
+  const hiddenTree = { getBoundingClientRect:() => ({ left:0, top:0, right:0, bottom:0, width:0, height:0 }) };
+  const document = {
+    querySelectorAll:() => [rail, invitation, hiddenTree],
+    defaultView:{ getComputedStyle:element => element === hiddenTree
+      ? { display:'none', visibility:'hidden', opacity:'0' }
+      : { display:'block', visibility:'visible', opacity:'1' } },
+  };
+  const obstacles = visibleViewportObstacleRects(document, '.exploration-rail, #invitation, #exploration-tree');
+  assert.deepEqual(obstacles, [
+    { left:0, top:90, right:120, bottom:844 },
+    { left:12, top:590, right:378, bottom:832 },
+  ]);
+  const panel = placeOrbitFallbackPanel({ left:0, top:0, right:390, bottom:844 }, obstacles);
+  assert.ok(panel, 'a visible drawer can be placed outside the rail and invitation');
+  assert.ok(obstacles.every(control => panel.right <= control.left - 10 || panel.left >= control.right + 10
+    || panel.bottom <= control.top - 10 || panel.top >= control.bottom + 10));
 });
 
 test('direct-child labels clear the visible phone Other questions control', () => {

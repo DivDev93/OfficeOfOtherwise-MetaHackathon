@@ -5,6 +5,7 @@ import { interpolateAttachedAtlasEdgeRoute } from '../web/atlas/routeMorph.js';
 
 const scene = readFileSync(new URL('../web/atlas/scene.js', import.meta.url), 'utf8');
 const p2Renderer = readFileSync(new URL('../web/atlas/p2Renderer.js', import.meta.url), 'utf8');
+const style = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
 
 test('Atlas renders exact routed corners and preserves them through axis changes', () => {
   assert.match(scene, /transformAtlasEdgeShape/);
@@ -80,6 +81,48 @@ test('mobile labels treat the visible Other questions control as reserved chrome
     'the current visibility of the phone control gates its reserved label rectangle');
   assert.match(scene, /element\.matches\?\.\('\.site-header \.brand, \.site-header \.header-actions, \.panel-head, #atlas-toolbar, #atlas-other-questions'\)/,
     'ancestor markers also begin below the visible Other questions control');
+});
+
+test('Orbit direct-child labels use accessible scroll lanes only in the Orbit neighborhood', () => {
+  assert.match(scene, /const orbitChildEntries = state\.orbit > 0\.3 && state\.atlas < 0\.6[\s\S]*entries\.filter\(entry => entry\.orbitVisible && String\(entry\.parentId\) === String\(currentId\)\)/,
+    'only currently visible direct children of the selected world enter the lane layout');
+  assert.match(scene, /layoutOrbitChildLabels\(orbitLabelCandidates, safeBounds, nodeRects,[\s\S]*placements\.filter\(placement => Number\.isFinite\(placement\.x\)/,
+    'visible children first use collision-free positions around their projected nodes; only remaining labels enter lanes');
+  assert.match(scene, /setAttribute\('role', 'region'\)[\s\S]*touchAction:'pan-y'[\s\S]*element\.style\.overflowY = lane\.scrollable \? 'auto' : 'hidden'/,
+    'grouped label lanes scroll without routing wheel or touch input to globe zoom');
+  assert.match(scene, /rowHeight:44,[\s\S]*button\.style\.minHeight = '44px'/,
+    'visible child buttons retain a 44px touch target');
+  assert.match(scene, /visibleViewportObstacleRects\(labelDocument,[\s\S]*\.exploration-rail, #invitation, #exploration-tree/,
+    'the floating fallback reserves the visible invitation and exploration rail as well as Atlas controls');
+  assert.match(scene, /fallbackObstacles = \[[\s\S]*viewportObstacleRectsFromCenters\(nodeRects\),[\s\S]*viewportObstacleRectsFromCenters\(orbitLaneLayout\.local\)/,
+    'the fallback drawer clears locally placed child labels as well as node hit areas');
+  assert.match(scene, /placeOrbitFallbackPanel\(fallbackBounds, fallbackObstacles\)[\s\S]*resolveOrbitFallbackMount\([\s\S]*fallbackHost = fallbackMount\.mode === 'tree' \|\| fallbackMount\.mode === 'tree-reopen' \? explorationTree[\s\S]*fallbackHost\.append\(orbitFallbackSection\)/,
+    'the fallback selects a visible host or the Story tree reveal path when no safe portal slot fits');
+  assert.match(scene, /const content = placement\.local \? labelOverlay[\s\S]*button\.style\.minHeight = '44px'[\s\S]*button\.style\.clipPath = 'none'/,
+    'near-node and fallback labels remain visible buttons with full-size touch targets');
+  assert.doesNotMatch(scene, /orbitFallback[\s\S]*?classList\.(?:add|remove)\('atlas-panels-open'\)|orbitFallback[\s\S]*?#atlas-compact-tree[\s\S]*?aria-expanded/,
+    "the fallback preserves the user's compact-panel state and its aria-expanded value");
+  assert.match(scene, /treeButton\.textContent = 'Story tree · Orbit labels'[\s\S]*Open story tree to reach Orbit child labels/,
+    'the focused-mode reveal path has a visible and accessible status on the existing Story tree control');
+  assert.match(scene, /fallbackMount\.mode === 'embedded-flow' \? container\.parentElement/,
+    'a standalone embedded scene mounts the fallback inside its visible host when no viewport slot exists');
+  assert.match(style, /\.atlas-focused \.exploration-rail[\s\S]*?display:none!important/);
+  assert.match(style, /body\.invitation-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.exploration-rail>#exploration-tree[\s\S]*?visibility:hidden/,
+    'the portal path remains available in both CSS states that hide the story tree');
+  assert.match(scene, /const focusedOrbitChildId = \[[\s\S]*if \(focusedOrbitChildId\) \{[\s\S]*renderer\.domElement\.focus\(\{ preventScroll:true \}\)/,
+    'removing a child label or its lane returns keyboard focus to the scene');
+  assert.match(scene, /button\.setAttribute\('aria-label', `Open \$\{placement\.fullText\}`\)/,
+    'each lane button exposes the full child identity to assistive technology');
+  assert.match(scene, /button\.addEventListener\('click',[\s\S]*explicitEnter\(target, projectedAnchor\(button\.dataset\.worldId, 'orbit-label'/,
+    'full child names are available to assistive technology and labels open by click or keyboard activation');
+  assert.match(scene, /button\.addEventListener\('keydown',[\s\S]*neighborForKey\(event\.key\)[\s\S]*event\.key === 'Escape'/,
+    'focused child labels retain directional keyboard navigation and Escape');
+  assert.match(scene, /pointerleave',[\s\S]*document\.activeElement !== button/,
+    'pointer exit does not cancel the preview while its child label remains keyboard-focused');
+  assert.match(scene, /const generalCandidates = candidates\.filter\(candidate => !orbitChildIds\.has\(candidate\.id\)\)/,
+    'direct children do not get duplicate opportunistic labels while their dedicated lane is active');
+  assert.match(scene, /const resize = \(\) => \{[\s\S]*camera\.aspect = width \/ height; camera\.updateProjectionMatrix\(\);\s*updateLayout\(\);\s*applyZoom\(zoom, false\);[\s\S]*new ResizeObserver\(resize\)[\s\S]*observer\?\.observe\(container\)/,
+    'every observed container resize recomputes graph layout and projected child-label placement');
 });
 
 test('transition edge opacity is stored per rendered edge while retaining gold and dashed styles', () => {

@@ -8,7 +8,7 @@ import { createLargeClusterPicker, needsPagedClusterPicker, visibleKeyboardNeigh
 import { createAtlasP2Renderer } from './p2Renderer.js';
 import { interpolateAttachedAtlasEdgeRoute } from './routeMorph.js';
 import { dragModeForZoom, panDeltaForDrag, zoomFromPinch, zoomFromWheel } from './interaction.js';
-import { createWorldLabelCandidates, edgeMarker, placeScreenLabels, projectedSphereDiameterPixels, shortQuestionTitle, worldLabelText } from './labels.js';
+import { createOrbitChildLabelLeader, createWorldLabelCandidates, edgeMarker, layoutOrbitChildLabels, placeOrbitFallbackPanel, placeScreenLabels, projectedSphereDiameterPixels, resolveOrbitFallbackMount, shortQuestionTitle, visibleViewportObstacleRects, viewportObstacleRectsFromCenters, worldLabelText } from './labels.js';
 import {
   GHOST_TRAIL_DEFAULT, arrivalParentWorldId, cutTravelOpacity, interpolateTravelPoint, preservesTravelSource, smoothTravelProgress, travelZoomAt,
   lineageTravelPath, sampleLineagePath, travelDuration,
@@ -264,7 +264,20 @@ export function createAtlasScene(container, {
     zIndex: '2', fontFamily: 'Inter, system-ui, sans-serif',
   });
   container.append(labelOverlay);
+  const orbitLeaderSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  orbitLeaderSvg.setAttribute('aria-hidden', 'true');
+  orbitLeaderSvg.setAttribute('focusable', 'false');
+  Object.assign(orbitLeaderSvg.style, { position:'absolute', inset:'0', width:'100%', height:'100%', overflow:'visible', pointerEvents:'none' });
+  labelOverlay.append(orbitLeaderSvg);
+  const orbitLeaderElements = new Map();
   const auxiliaryLabels = new Map();
+  const orbitLabelLanes = new Map();
+  const orbitLaneContents = new Map();
+  const orbitChildLabelButtons = new Map();
+  let orbitFallbackSection = null;
+  let orbitFallbackContent = null;
+  let orbitFallbackPlacementWarned = false;
+  let orbitFallbackTreeHintOriginal = null;
 
   scene.add(new THREE.HemisphereLight(0xc5e7ed, 0x102027, 1.55));
   const key = new THREE.DirectionalLight(0xfff1d2, 2.1);
@@ -1263,6 +1276,7 @@ export function createAtlasScene(container, {
     }
     const visibleWorldIds = new Set([...instanceIds, ...lodIds, ...(currentId ? [currentId] : [])]);
     const nodeRects = [];
+    const worldNodeRects = new Map();
     for (const id of visibleWorldIds) {
       const entry = entries.find(item => item.id === id);
       if (!entry) continue;
@@ -1288,7 +1302,11 @@ export function createAtlasScene(container, {
       const diameter = Math.max(44, projectedSphereDiameterPixels(
         worldPoint.distanceTo(camera.getWorldPosition(new THREE.Vector3())), camera.fov, labelBounds.height, renderedRadius,
       ));
-      if (point.visible) nodeRects.push({ x: point.x, y: point.y, width: diameter, height: diameter });
+      if (point.visible) {
+        const rect = { x:point.x, y:point.y, width:diameter, height:diameter };
+        nodeRects.push(rect);
+        worldNodeRects.set(id, rect);
+      }
     }
     for (const sprite of clusterSprites.values()) {
       if (sprite.material.opacity <= 0.04) continue;
@@ -1351,7 +1369,25 @@ export function createAtlasScene(container, {
       const point = projectPoint(p2Renderer.presentEarth.getWorldPosition(new THREE.Vector3()));
       if (point.visible) candidates.push({ id: 'present-earth', text: 'Present-day Earth · 2026', ...point, width: Math.min(200, safeBounds.right - safeBounds.left), height: 18, priority: 95, kind: 'world' });
     }
-    const placements = placeScreenLabels(candidates, safeBounds, nodeRects, reservedRects);
+    const orbitChildEntries = state.orbit > 0.3 && state.atlas < 0.6
+      ? entries.filter(entry => entry.orbitVisible && String(entry.parentId) === String(currentId))
+      : [];
+    const orbitChildIds = new Set(orbitChildEntries.map(entry => entry.id));
+    const orbitLabelCandidates = orbitChildEntries.map(entry => {
+      const fullText = worldLabelText(entry.world, { yearFirst:mobileLabels });
+      const node = worldNodeRects.get(entry.id);
+      return { id:entry.id, world:entry.world, text:fullText, fullText, priority:85, kind:'world',
+        ...(node ? { x:node.x, y:node.y, visible:true } : { visible:false }),
+        width:Math.min(mobileLabels ? 220 : 260, safeBounds.right - safeBounds.left, Math.max(124, fullText.length * 7.1)),
+        height:44 };
+    });
+    const generalCandidates = candidates.filter(candidate => !orbitChildIds.has(candidate.id));
+    const placements = placeScreenLabels(generalCandidates, safeBounds, nodeRects, reservedRects);
+    const orbitLaneLayout = layoutOrbitChildLabels(orbitLabelCandidates, safeBounds, nodeRects,
+      [...reservedRects, ...placements.filter(placement => Number.isFinite(placement.x) && Number.isFinite(placement.y))], {
+      rowHeight:44, rowGap:4, columnGap:12, controlGap:6, minLaneWidth:96, maxLaneWidth:320,
+      maxLaneHeight:mobileLabels ? 220 : 240,
+    });
     if (mobileLabels && undatedLineageTarget) {
       for (const placement of placements) {
         if (placement.id !== undatedLineageWorldId) continue;
@@ -1392,6 +1428,325 @@ export function createAtlasScene(container, {
     for (const [id, element] of auxiliaryLabels) {
       if (!candidateLabelIds.has(id)) { element.remove(); auxiliaryLabels.delete(id); }
       else if (!activeLabelIds.has(id)) element.style.display = 'none';
+    }
+    const activeOrbitLaneIds = new Set();
+    const activeOrbitChildIds = new Set();
+    const focusedOrbitChildId = [...orbitChildLabelButtons].find(([, button]) => button === document.activeElement)?.[0] || null;
+    const blockedOrbitLayout = orbitLaneLayout.blocked && orbitLaneLayout.labels.length > 0;
+    let orbitFallbackMountMode = 'none';
+    const explorationTree = labelDocument.querySelector?.('#exploration-tree');
+    const treeStyles = explorationTree ? labelDocument.defaultView?.getComputedStyle?.(explorationTree) : null;
+    const treeRect = explorationTree?.getBoundingClientRect?.();
+    const treeVisible = Boolean(explorationTree && treeRect?.width > 0 && treeRect?.height > 0
+      && treeStyles?.display !== 'none' && treeStyles?.visibility !== 'hidden' && Number(treeStyles?.opacity ?? 1) > 0.05);
+    const invitation = labelDocument.querySelector?.('#invitation');
+    const invitationStyles = invitation ? labelDocument.defaultView?.getComputedStyle?.(invitation) : null;
+    const invitationRect = invitation?.getBoundingClientRect?.();
+    const invitationVisible = Boolean(invitation && invitationRect?.width > 0 && invitationRect?.height > 0
+      && invitationStyles?.display !== 'none' && invitationStyles?.visibility !== 'hidden' && Number(invitationStyles?.opacity ?? 1) > 0.05);
+    if (blockedOrbitLayout) {
+      const fallbackBounds = {
+        left:0, top:0,
+        right:labelDocument.documentElement?.clientWidth || labelDocument.defaultView?.innerWidth || 0,
+        bottom:labelDocument.documentElement?.clientHeight || labelDocument.defaultView?.innerHeight || 0,
+      };
+      const fallbackObstacles = [
+        ...visibleViewportObstacleRects(labelDocument,
+          '.site-header .brand, .site-header .header-actions, .panel-head, #atlas-toolbar, #atlas-other-questions, #atlas-world-card, #atlas-compact-controls, #atlas-reopen-controls, .geography-panel, .hero-panel, .exploration-rail, #invitation, #exploration-tree'),
+        ...viewportObstacleRectsFromCenters(nodeRects),
+        ...viewportObstacleRectsFromCenters(orbitLaneLayout.local),
+      ];
+      // Try a control-free on-screen panel even while the Story tree is open.
+      // This keeps direct child labels visible in focused Atlas instead of
+      // requiring a separate tree-reopen action.
+      const fallbackRect = placeOrbitFallbackPanel(fallbackBounds, fallbackObstacles);
+      const fallbackMount = resolveOrbitFallbackMount({
+        treeVisible, hasTree:Boolean(explorationTree), invitationVisible,
+        hasEmbeddedHost:Boolean(container.parentElement), portalRect:fallbackRect,
+      });
+      orbitFallbackMountMode = fallbackMount.mode;
+      const fallbackHost = fallbackMount.mode === 'tree' || fallbackMount.mode === 'tree-reopen' ? explorationTree
+        : fallbackMount.mode === 'portal' ? labelDocument.body
+          : fallbackMount.mode === 'invitation' ? invitation
+            : fallbackMount.mode === 'embedded-flow' ? container.parentElement : null;
+      if (!orbitFallbackSection) {
+        orbitFallbackSection = labelDocument.createElement('section');
+        orbitFallbackSection.className = 'atlas-orbit-label-fallback';
+        orbitFallbackSection.setAttribute('role', 'region');
+        orbitFallbackSection.setAttribute('aria-label', 'Orbit child labels');
+        const heading = labelDocument.createElement('h3');
+        Object.assign(heading.style, { margin:'0 0 4px', fontSize:'13px', lineHeight:'18px' });
+        orbitFallbackSection.append(heading);
+      }
+      orbitFallbackContent = orbitFallbackSection.querySelector('.atlas-orbit-label-fallback-content');
+      if (!orbitFallbackContent) {
+        orbitFallbackContent = labelDocument.createElement('div');
+        orbitFallbackContent.className = 'atlas-orbit-label-fallback-content';
+        Object.assign(orbitFallbackContent.style, { display:'grid', gap:'4px' });
+        orbitFallbackSection.append(orbitFallbackContent);
+      }
+      const heading = orbitFallbackSection.querySelector('h3');
+      if (heading) heading.textContent = `${current?.world?.title || 'Current world'} · direct children`;
+      Object.assign(orbitFallbackSection.style, {
+        display:'block', boxSizing:'border-box', maxHeight:fallbackMount.mode === 'portal' ? `${fallbackRect?.height || 0}px` : '38dvh',
+        overflowY:'auto', overscrollBehavior:'contain', padding:'8px', margin:fallbackMount.mode === 'tree' ? '8px 0' : '0',
+        border:'1px solid rgba(179, 207, 213, 0.75)', borderRadius:'8px',
+        background:'rgba(4, 13, 20, 0.97)', color:'#f3ead9', zIndex:'1000',
+      });
+      if (fallbackMount.mode === 'portal') {
+        Object.assign(orbitFallbackSection.style, {
+          position:'fixed', left:`${fallbackRect.left}px`, top:`${fallbackRect.top}px`,
+          right:'auto', bottom:'auto', width:`${fallbackRect.width}px`, height:`${fallbackRect.height}px`,
+        });
+      } else if (fallbackMount.mode === 'tree' || fallbackMount.mode === 'invitation' || fallbackMount.mode === 'embedded-flow') {
+        Object.assign(orbitFallbackSection.style, { position:'relative', width:'100%', height:'auto', left:'auto', top:'auto', right:'auto', bottom:'auto' });
+      }
+      if (fallbackHost) {
+        if (orbitFallbackSection.parentElement !== fallbackHost) fallbackHost.append(orbitFallbackSection);
+        orbitFallbackPlacementWarned = false;
+        if (fallbackMount.hint) {
+          const treeButton = labelDocument.querySelector?.('#atlas-show-tree');
+          if (treeButton && !orbitFallbackTreeHintOriginal) {
+            orbitFallbackTreeHintOriginal = {
+              text:treeButton.textContent,
+              title:treeButton.getAttribute('title'),
+              ariaLabel:treeButton.getAttribute('aria-label'),
+            };
+          }
+          if (treeButton) {
+            treeButton.textContent = 'Story tree · Orbit labels';
+            treeButton.title = 'Open the story tree to reach the Orbit child labels';
+            treeButton.setAttribute('aria-label', 'Open story tree to reach Orbit child labels');
+          }
+        } else if (orbitFallbackTreeHintOriginal) {
+          const treeButton = labelDocument.querySelector?.('#atlas-show-tree');
+          if (treeButton) {
+            treeButton.textContent = orbitFallbackTreeHintOriginal.text;
+            if (orbitFallbackTreeHintOriginal.title == null) treeButton.removeAttribute('title');
+            else treeButton.setAttribute('title', orbitFallbackTreeHintOriginal.title);
+            if (orbitFallbackTreeHintOriginal.ariaLabel == null) treeButton.removeAttribute('aria-label');
+            else treeButton.setAttribute('aria-label', orbitFallbackTreeHintOriginal.ariaLabel);
+          }
+          orbitFallbackTreeHintOriginal = null;
+        }
+      } else {
+        orbitFallbackSection.remove();
+        orbitFallbackContent = null;
+        if (!orbitFallbackPlacementWarned) {
+          console.warn('Atlas Orbit child labels need a control-free viewport area at least 88px tall to show a heading and 44px label; no safe fallback placement is available.');
+          orbitFallbackPlacementWarned = true;
+        }
+      }
+    } else {
+      orbitFallbackSection?.remove();
+      orbitFallbackSection = null;
+      orbitFallbackContent = null;
+      if (orbitFallbackTreeHintOriginal) {
+        const treeButton = labelDocument.querySelector?.('#atlas-show-tree');
+        if (treeButton) {
+          treeButton.textContent = orbitFallbackTreeHintOriginal.text;
+          if (orbitFallbackTreeHintOriginal.title == null) treeButton.removeAttribute('title');
+          else treeButton.setAttribute('title', orbitFallbackTreeHintOriginal.title);
+          if (orbitFallbackTreeHintOriginal.ariaLabel == null) treeButton.removeAttribute('aria-label');
+          else treeButton.setAttribute('aria-label', orbitFallbackTreeHintOriginal.ariaLabel);
+        }
+        orbitFallbackTreeHintOriginal = null;
+      }
+    }
+    const orbitLaneCurrentTitle = current?.world?.title || 'current world';
+    for (const lane of orbitLaneLayout.lanes) {
+      if (lane.blocked || lane.x == null || lane.y == null || lane.width <= 0 || lane.height <= 0) continue;
+      let element = orbitLabelLanes.get(lane.id);
+      if (!element) {
+        element = document.createElement('div');
+        element.className = 'atlas-orbit-child-label-lane';
+        element.setAttribute('role', 'region');
+        element.tabIndex = 0;
+        Object.assign(element.style, {
+          position:'absolute', boxSizing:'border-box', display:'block',
+          overflowX:'hidden', overscrollBehavior:'contain',
+          pointerEvents:'auto', touchAction:'pan-y', zIndex:'4', padding:'0', gap:'4px',
+          border:'1px solid rgba(179, 207, 213, 0.36)', borderRadius:'8px',
+          background:'rgba(4, 13, 20, 0.90)', boxShadow:'0 2px 12px rgba(0, 0, 0, 0.35)',
+          scrollbarColor:'rgba(177, 204, 210, 0.62) rgba(9, 20, 27, 0.55)',
+        });
+        const content = document.createElement('div');
+        content.className = 'atlas-orbit-child-label-content';
+        Object.assign(content.style, { position:'relative', width:'100%' });
+        element.append(content);
+        labelOverlay.append(element);
+        orbitLabelLanes.set(lane.id, element);
+        orbitLaneContents.set(lane.id, content);
+      }
+      const content = orbitLaneContents.get(lane.id);
+      element.style.display = 'block';
+      element.style.left = `${lane.x - labelBounds.left}px`;
+      element.style.top = `${lane.y - labelBounds.top}px`;
+      element.style.width = `${lane.width}px`;
+      element.style.height = `${lane.height}px`;
+      element.style.clipPath = 'none';
+      element.style.overflowY = lane.scrollable ? 'auto' : 'hidden';
+      element.setAttribute('aria-label', `${orbitLaneCurrentTitle} direct children. ${lane.labelIds.length} labels in this lane${lane.scrollable ? ', scroll to see all labels' : ''}.`);
+      content.style.height = `${lane.contentHeight}px`;
+      element.dataset.contentHeight = String(lane.contentHeight);
+      element.dataset.labelCount = String(lane.labelIds.length);
+      element.dataset.scrollable = String(Boolean(lane.scrollable));
+      activeOrbitLaneIds.add(lane.id);
+    }
+    for (const placement of [...orbitLaneLayout.local, ...orbitLaneLayout.labels]) {
+      const lane = orbitLabelLanes.get(placement.laneId);
+      const content = placement.local ? labelOverlay
+        : placement.blocked ? orbitFallbackContent : orbitLaneContents.get(placement.laneId);
+      const world = worlds.find(item => stableWorldId(item) === placement.id);
+      if ((!placement.blocked && !placement.local && !lane) || !content || !world) continue;
+      let button = orbitChildLabelButtons.get(placement.id);
+      if (!button) {
+        button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'atlas-orbit-child-label';
+        button.addEventListener('focus', () => {
+          const target = worlds.find(item => stableWorldId(item) === button.dataset.worldId);
+          if (target) setFocusedWorld(target, projectedAnchor(button.dataset.worldId, 'keyboard'));
+        });
+        button.addEventListener('blur', () => {
+          if (hoveredId === button.dataset.worldId) setFocusedWorld(null, null);
+        });
+        button.addEventListener('pointerenter', event => {
+          const target = worlds.find(item => stableWorldId(item) === button.dataset.worldId);
+          if (target) setFocusedWorld(target, projectedAnchor(button.dataset.worldId, 'pointer', event.clientX, event.clientY));
+        });
+        button.addEventListener('pointerleave', () => {
+          if (hoveredId === button.dataset.worldId && document.activeElement !== button) setFocusedWorld(null, null);
+        });
+        button.addEventListener('keydown', event => {
+          if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+            event.preventDefault();
+            const next = neighborForKey(event.key);
+            if (!next) return;
+            setFocusedWorld(next.world, projectedAnchor(next.id, 'keyboard'));
+            (orbitChildLabelButtons.get(next.id) || renderer.domElement).focus({ preventScroll:true });
+          } else if (event.key === 'Escape') {
+            event.preventDefault();
+            if (zoom < 1) setZoom(Math.min(1, zoom + 0.1));
+            else if (hoveredId) setFocusedWorld(null, null);
+            renderer.domElement.focus({ preventScroll:true });
+          }
+        });
+        button.addEventListener('click', event => {
+          const target = worlds.find(item => stableWorldId(item) === button.dataset.worldId);
+          if (target) explicitEnter(target, projectedAnchor(button.dataset.worldId, 'orbit-label', event.clientX, event.clientY));
+        });
+        orbitChildLabelButtons.set(placement.id, button);
+      }
+      button.dataset.worldId = placement.id;
+      button.textContent = placement.text;
+      button.title = placement.fullText;
+      button.setAttribute('aria-label', `Open ${placement.fullText}`);
+      button.setAttribute('aria-disabled', String(world.selectable === false));
+      button.style.position = placement.blocked ? 'relative' : 'absolute';
+      button.style.left = placement.blocked ? 'auto' : placement.local
+        ? `${placement.x - labelBounds.left - placement.width / 2}px` : '0';
+      button.style.top = placement.blocked ? 'auto' : placement.local
+        ? `${placement.y - labelBounds.top - placement.height / 2}px` : `${placement.top}px`;
+      button.style.width = placement.local ? `${placement.width}px` : '100%';
+      button.style.height = `${placement.height}px`;
+      button.style.minHeight = '44px';
+      button.style.clipPath = 'none';
+      Object.assign(button.style, {
+        display:'block', boxSizing:'border-box', padding:'2px 7px', overflow:'hidden',
+        border:'1px solid rgba(143, 180, 189, 0.28)', borderRadius:'5px',
+        background:'rgba(16, 31, 40, 0.96)', color:'#f3ead9', textAlign:'left',
+        fontFamily:'Inter, system-ui, sans-serif', fontSize:'11.5px', fontWeight:'550',
+        lineHeight:'14px', whiteSpace:'normal', overflowWrap:'anywhere',
+        display:'-webkit-box', WebkitBoxOrient:'vertical', WebkitLineClamp:'2',
+        cursor:world.selectable === false ? 'default' : 'pointer', pointerEvents:'auto',
+      });
+      if (button.parentElement !== content) content.append(button);
+      activeOrbitChildIds.add(placement.id);
+    }
+    for (const [id, button] of orbitChildLabelButtons) {
+      if (activeOrbitChildIds.has(id)) continue;
+      button.remove();
+      orbitChildLabelButtons.delete(id);
+    }
+    for (const [id, element] of orbitLabelLanes) {
+      if (activeOrbitLaneIds.has(id)) continue;
+      element.remove();
+      orbitLabelLanes.delete(id);
+      orbitLaneContents.delete(id);
+    }
+    const visibleChildLabelRects = new Map();
+    for (const [id, button] of orbitChildLabelButtons) {
+      const lane = button.parentElement?.parentElement;
+      if (!activeOrbitChildIds.has(id)) continue;
+      const buttonRect = button.getBoundingClientRect();
+      if (button.parentElement === labelOverlay) {
+        if (buttonRect.width > 0 && buttonRect.height > 0) visibleChildLabelRects.set(id, {
+          left:buttonRect.left, top:buttonRect.top, right:buttonRect.right, bottom:buttonRect.bottom,
+        });
+        continue;
+      }
+      if (!lane?.classList?.contains('atlas-orbit-child-label-lane')) continue;
+      const laneRect = lane.getBoundingClientRect();
+      const clipped = { left:Math.max(buttonRect.left, laneRect.left), top:Math.max(buttonRect.top, laneRect.top),
+        right:Math.min(buttonRect.right, laneRect.right), bottom:Math.min(buttonRect.bottom, laneRect.bottom) };
+      if (clipped.right > clipped.left && clipped.bottom > clipped.top) visibleChildLabelRects.set(id, clipped);
+    }
+    const activeLeaderIds = new Set();
+    const acceptedLeaderLines = [];
+    const overlayRect = labelOverlay.getBoundingClientRect();
+    const leaderControlObstacles = [
+      ...viewportObstacleRectsFromCenters(reservedRects),
+      ...visibleViewportObstacleRects(labelDocument,
+        '.site-header .brand, .site-header .header-actions, .panel-head, #atlas-toolbar, #atlas-other-questions, #atlas-world-card, #atlas-compact-controls, #atlas-reopen-controls, .geography-panel, .hero-panel, .exploration-rail, #invitation, #exploration-tree'),
+      ...viewportObstacleRectsFromCenters(placements),
+      ...[...visibleChildLabelRects].map(([id, rect]) => ({ id, ...rect })),
+    ];
+    for (const [id, labelRect] of visibleChildLabelRects) {
+      const targetRect = worldNodeRects.get(id);
+      if (!targetRect) continue;
+      const obstacles = [
+        ...viewportObstacleRectsFromCenters(nodeRects.filter(rect => rect !== targetRect)),
+        ...leaderControlObstacles.filter(rect => rect.id !== id),
+        ...acceptedLeaderLines,
+      ];
+      const line = createOrbitChildLabelLeader(labelRect, {
+        left:targetRect.x - targetRect.width / 2, top:targetRect.y - targetRect.height / 2,
+        right:targetRect.x + targetRect.width / 2, bottom:targetRect.y + targetRect.height / 2,
+      }, obstacles);
+      if (!line) continue;
+      let element = orbitLeaderElements.get(id);
+      if (!element) {
+        element = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        element.setAttribute('aria-hidden', 'true');
+        element.setAttribute('stroke', '#a8c6cb');
+        element.setAttribute('stroke-opacity', '0.58');
+        element.setAttribute('stroke-width', '1.25');
+        element.setAttribute('stroke-dasharray', '3 4');
+        element.setAttribute('stroke-linecap', 'round');
+        element.setAttribute('vector-effect', 'non-scaling-stroke');
+        orbitLeaderSvg.append(element);
+        orbitLeaderElements.set(id, element);
+      }
+      element.setAttribute('x1', String(line.x1 - overlayRect.left));
+      element.setAttribute('y1', String(line.y1 - overlayRect.top));
+      element.setAttribute('x2', String(line.x2 - overlayRect.left));
+      element.setAttribute('y2', String(line.y2 - overlayRect.top));
+      activeLeaderIds.add(id);
+      acceptedLeaderLines.push(line);
+    }
+    for (const [id, element] of orbitLeaderElements) {
+      if (activeLeaderIds.has(id)) continue;
+      element.remove();
+      orbitLeaderElements.delete(id);
+    }
+    if (focusedOrbitChildId) {
+      const focusedButton = orbitChildLabelButtons.get(focusedOrbitChildId);
+      if (focusedButton && activeOrbitChildIds.has(focusedOrbitChildId)) {
+        if (orbitFallbackMountMode === 'tree-reopen') {
+          labelDocument.querySelector?.('#atlas-show-tree')?.focus?.({ preventScroll:true });
+        } else if (document.activeElement !== focusedButton) focusedButton.focus({ preventScroll:true });
+      } else renderer.domElement.focus({ preventScroll:true });
     }
     const edgePositions = { lineage: [], proposed: [], question: [], hover: [] };
     const edgeVertexOpacity = { lineage: [], proposed: [], question: [], hover: [] };
@@ -2210,6 +2565,7 @@ export function createAtlasScene(container, {
     const width = container.clientWidth, height = container.clientHeight;
     renderer.setSize(width, height, false);
     camera.aspect = width / height; camera.updateProjectionMatrix();
+    updateLayout();
     applyZoom(zoom, false);
     if (atlasTimeline) {
       clearTimeout(resizeLayoutTimer);
@@ -2322,7 +2678,18 @@ export function createAtlasScene(container, {
         const materials = Array.isArray(object.material) ? object.material : [object.material];
         for (const material of materials) { material?.map?.dispose?.(); material?.dispose?.(); }
       });
-      auxiliaryLabels.clear(); labelOverlay.remove();
+      auxiliaryLabels.clear(); orbitLabelLanes.clear(); orbitLaneContents.clear(); orbitChildLabelButtons.clear(); orbitLeaderElements.clear(); orbitFallbackSection?.remove();
+      if (orbitFallbackTreeHintOriginal) {
+        const treeButton = labelDocument.querySelector?.('#atlas-show-tree');
+        if (treeButton) {
+          treeButton.textContent = orbitFallbackTreeHintOriginal.text;
+          if (orbitFallbackTreeHintOriginal.title == null) treeButton.removeAttribute('title');
+          else treeButton.setAttribute('title', orbitFallbackTreeHintOriginal.title);
+          if (orbitFallbackTreeHintOriginal.ariaLabel == null) treeButton.removeAttribute('aria-label');
+          else treeButton.setAttribute('aria-label', orbitFallbackTreeHintOriginal.ariaLabel);
+        }
+      }
+      labelOverlay.remove();
       goldEdgeGeometry.dispose();
       unenteredOutlineTexture.dispose(); currentEarthTexture.dispose(); miniEarthTexture.dispose(); earthTexture.dispose(); renderer.dispose(); renderer.domElement.remove();
     },
