@@ -28,8 +28,16 @@ test('Atlas zoom sliders provide at least a 44 CSS pixel touch target', () => {
 
 test('Lift preserves separate panel bands, fades them monotonically, then reveals compact controls', () => {
   const panelRule = css.match(/body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.hero-panel\{([^}]*)\}/)?.[1];
+  const railRule = css.match(/body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.exploration-rail\{([^}]*)\}/)?.[1];
+  const railContentRule = css.match(/body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.exploration-rail>:not\(\.atlas-compact-controls\)\{([^}]*)\}/)?.[1];
   const detailsRule = css.match(/body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.atlas-world-details\{([^}]*)\}/)?.[1];
   const cardRule = css.match(/body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.atlas-world-card\{([^}]*)\}/)?.[1];
+  assert.ok(railRule, 'Lift keeps the canvas-aligned rail container');
+  assert.match(railRule, /width:min\(320px,calc\(34vw - 12px\)\);min-width:270px;overflow:visible/);
+  assert.doesNotMatch(railRule, /--atlas-rail-width/, 'the desktop rail remains full width independently from the canvas inset');
+  assert.ok(railContentRule, 'Lift gives fading rail content its independent full width');
+  assert.match(railContentRule, /width:min\(320px,max\(270px,calc\(34vw - 12px\)\)\)/);
+  assert.match(railContentRule, /transform:translateX\(calc\(-266px \* var\(--atlas-lift,0\)\)\)/, 'the full rail slides left at the same rate that the canvas inset contracts');
   assert.ok(panelRule, 'Lift defines fixed hero panel geometry');
   assert.match(panelRule, /width:238px;height:142px;min-height:142px/);
   assert.match(panelRule, /transition:none/);
@@ -37,10 +45,12 @@ test('Lift preserves separate panel bands, fades them monotonically, then reveal
   assert.match(detailsRule, /position:fixed;z-index:1;top:101px;right:22px;bottom:20px/);
   assert.match(detailsRule, /background:linear-gradient\(150deg,rgba\(24,19,19,\.98\),rgba\(9,7,9,\.98\)\)/);
   assert.match(detailsRule, /opacity:max\(0,calc\(1 - var\(--atlas-lift,0\) - var\(--atlas-lift,0\)\)\)/);
-  assert.equal((detailsRule.match(/var\(--atlas-lift,0\)/g) || []).length, 2, 'story sheet shares a simple monotonic fade');
+  assert.equal((detailsRule.match(/opacity:[^;]+/)?.[0].match(/var\(--atlas-lift,0\)/g) || []).length, 2, 'story sheet shares a simple monotonic fade');
   assert.match(detailsRule, /pointer-events:none/);
+  assert.match(detailsRule, /transform:translateX\(calc\(-12px \* var\(--atlas-lift,0\)\)\)/, 'story sheet slides with its continuous fade');
   assert.ok(cardRule, 'the selected world card fades over the same fixed panel');
   assert.match(cardRule, /opacity:clamp\(0,calc\(/);
+  assert.match(cardRule, /transform:translateX\(calc\(12px \* \(1 - var\(--atlas-lift,0\)\)\)\)/, 'compact card slides into position with its fade');
   assert.match(cardRule, /visibility:visible/, 'the zero-opacity card remains renderable for a no-snap Lift fade');
   assert.match(css, /not\(:has\(#atlas-scene\[data-atlas-level="lift"\]\)\) \.atlas-world-card\{opacity:0;visibility:hidden/, 'the higher-specificity default-hidden rule excludes Lift so its visible fade rule wins');
 
@@ -72,13 +82,15 @@ test('Lift preserves separate panel bands, fades them monotonically, then reveal
 
 test('phone Lift fixes the compact card height and disables its transitions for reduced motion', () => {
   assert.match(css, /@media\(max-width:700px\)\{[\s\S]*?body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.hero-panel\{[^}]*height:74px;min-height:74px/);
+  assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.exploration-rail>:not\(\.atlas-compact-controls\)\{width:100%;min-width:0;transform:translateX\(calc\(-12px \* var\(--atlas-lift,0\)\)\)\}/, 'phone Lift content continues to fill its full-width band');
   const liftRailRule = css.match(/body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.exploration-rail>:not\(\.atlas-compact-controls\)\{([^}]*)\}/)?.[1];
   assert.ok(liftRailRule, 'Lift fades the rail content');
-  assert.doesNotMatch(liftRailRule, /(?:max-width|max-height|overflow|position):/, 'Lift leaves the tree dimensions and scrolling unchanged');
+  assert.match(liftRailRule, /width:min\(320px,max\(270px,calc\(34vw - 12px\)\)\)/, 'desktop Lift retains the initial rail content width');
+  assert.match(liftRailRule, /transform:translateX\(calc\(-266px \* var\(--atlas-lift,0\)\)\)/, 'desktop Lift slides the rail as a full-width unit');
   assert.match(css, /\.has-story:not\(\.invitation-open\) \.exploration-rail \.exploration-tree\{max-height:33dvh;overflow:auto\}/, 'the saved story tree retains its bounded, scrollable phone height during Lift');
   assert.match(css, /\.has-story:not\(\.invitation-open\) \.exploration-rail\{top:118px;right:9px;bottom:auto;left:9px;display:block;width:auto;max-height:33dvh\}/, 'the story tree stays in its original top band');
   assert.match(css, /\.has-story:not\(\.invitation-open\) \.geography-panel\{top:calc\(118px \+ 33dvh \+ 8px\);right:9px;bottom:auto;left:9px;width:auto;max-height:16dvh;overflow:auto\}/, 'geography stays below the story tree');
   assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.atlas-world-details\{top:auto;right:9px;bottom:10px;left:9px;width:auto;max-height:calc\(100dvh - 118px - 33dvh - 16dvh - 36px\)/, 'the hero sheet stays below geography in the original bottom band');
   assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.atlas-world-card\{top:0;right:0;left:0\}/, 'phone card fills the fixed hero panel without changing its layout');
-  assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{\s*body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.hero-panel,[\s\S]*?\.atlas-world-card\{transition:none!important;animation:none!important\}/);
+  assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{\s*body:has\(#atlas-scene\[data-atlas-level="lift"\]\) \.exploration-rail>:not\(\.atlas-compact-controls\),[\s\S]*?\.atlas-world-card\{transition:none!important;animation:none!important;transform:none!important\}/);
 });

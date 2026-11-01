@@ -20,4 +20,6 @@ At 375px, the Other questions control was checked against saved data: opening it
 
 `lift-revised-1440.png` and `lift-revised-375.png` capture the revised Lift panel treatment at 30% zoom. At 50% on the phone, a local computed-style check found the compact card visible while fading in; the fading story tree, geography panel, and full sheet were inert at 30%.
 
+`lift-slide-1440.png` and `lift-slide-375.png` capture the later slide treatment at 30% zoom. On desktop, the local computed widths for both the rail and tree remained 320px while the tree translated left; this check does not prove every transition frame or viewport.
+
 In the recorded local replay at 1440×900, successive 120-pixel wheel inputs reached 10, 19, 29, 38, 48, 57 (Orbit), 67, 76, 86, 95 and 100 (Atlas). The reverse pass reached 90, 81, 71, 62, 57 (Orbit), 47, 38, 28, 19, 9 and 0 (Surface). Both passes left the Orbit stop on the next input.

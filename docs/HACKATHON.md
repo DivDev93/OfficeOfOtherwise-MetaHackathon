@@ -189,3 +189,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: ease attached route interiors into their Atlas shapes; the simplified measurement falls from 44 to 26 crossing frames and 358 to 200 pair observations, while peak simultaneous crossings remain 14. | |
 | 2026-11-01 | Atlas round 3: preserve focused Orbit child labels through lane resize/reparent, reveal them by scrolling only their lane, and avoid per-label world rescans. | |
 | 2026-11-01 | Atlas round 3: fade the full Lift panels without overlapping the compact card, prevent hidden panel input, and enlarge zoom slider targets. | |
+| 2026-11-01 | Atlas round 3: keep the desktop Lift rail at full width while sliding its contents, with reduced-motion transforms disabled. | |
