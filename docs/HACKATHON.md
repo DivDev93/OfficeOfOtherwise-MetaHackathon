@@ -130,3 +130,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-10-31 | Atlas polish: added zoom-responsive compact navigation and selected-world card, a tree/details drawer and mobile bottom sheets, with reduced-motion and keyboard reachability handling. Work remains local pending full Atlas integration and review. | |
 | 2026-10-31 | Atlas polish: corrected wheel, pinch and keyboard zoom directions, endpoint controls, and pan behavior; local tests cover the gesture mapping. | |
 | 2026-10-31 | Atlas polish: added screen-space labels with collision handling, accessible full text, and compact mobile year-first presentation. | |
+| 2026-10-31 | Atlas polish: changed the arrival thread to a direct, stretching path to avoid a globe-sized halo. | |

@@ -946,13 +946,15 @@ export function createAtlasScene(container, {
       const to = worldPosition(child, state, timestamp, markerRadius);
       const surfaceFrom = surfacePoint(parent, fromRadius).normalize();
       const surfaceTo = surfacePoint(child, markerRadius).normalize();
+      const arrivalEdge = child.id === currentId && parent.id === arrivalFromId;
       const arcPoints = [];
       const segments = 10;
       for (let step = 0; step <= segments; step++) {
         const t = step / segments;
         const direction = slerpUnitVector(surfaceFrom, surfaceTo, t);
         const surfaceRadius = fromRadius + (markerRadius - fromRadius) * t;
-        const arc = new THREE.Vector3(direction.x, direction.y, direction.z).multiplyScalar(surfaceRadius).add(earthMesh.position);
+        const arc = arrivalEdge ? from.clone().lerp(to, t)
+          : new THREE.Vector3(direction.x, direction.y, direction.z).multiplyScalar(surfaceRadius).add(earthMesh.position);
         const straight = from.clone().lerp(to, t);
         arc.lerp(straight, state.lift);
         arcPoints.push(arc);
