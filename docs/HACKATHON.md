@@ -164,3 +164,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: move compact desktop controls smoothly beside the expanded rail without covering its content. | |
 | 2026-11-01 | Atlas round 3: route expanded-question and folded-chip stems with world paths, retain both stems for partly folded questions, and suppress stems during axis transitions. | |
 | 2026-11-01 | Atlas round 3: soften routed gutter bends while retaining collision checks. | |
+| 2026-11-01 | Atlas round 3: avoid trapping wheel input at Orbit when normalized zoom introduces floating-point roundoff. | |

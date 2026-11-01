@@ -9,7 +9,7 @@ function gentlyAttractToRestingLevel(current, value, delta) {
   if (Math.abs(delta) < 0.25) return value;
   // A coarse wheel notch can otherwise skip straight across Orbit in either
   // direction. Catch that crossing once; the next notch leaves the stop.
-  if ((current < 57 && value > 57) || (current > 57 && value < 57)) return 57;
+  if ((current < 57 - 1e-6 && value > 57) || (current > 57 + 1e-6 && value < 57)) return 57;
   const restingLevel = RESTING_LEVELS.find(level => Math.abs(value - level) <= 3);
   if (restingLevel === undefined) return value;
   const beforeDistance = Math.abs(current - restingLevel);

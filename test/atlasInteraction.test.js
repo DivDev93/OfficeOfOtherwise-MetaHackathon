@@ -33,6 +33,7 @@ test('coarse wheel notches catch Orbit from either direction without trapping th
   assert.equal(zoomFromWheel(62, -120), 57);
   assert.ok(zoomFromWheel(57, 120) > 57);
   assert.ok(zoomFromWheel(57, -120) < 57);
+  assert.ok(zoomFromWheel((57 / 100) * 100, 120) > 57, 'normalized scene zoom must leave Orbit despite floating-point roundoff');
 });
 
 test('repeated tiny trackpad deltas accumulate away from surface and pass orbit in either direction', () => {
