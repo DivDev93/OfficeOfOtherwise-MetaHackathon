@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import {
   ATLAS_REAL_SPHERE_LIMIT, AXIS_ANIMATION_MS, AXIS_MODES, ATLAS_TIME_SCALE_LABEL, FUTURE_EXTENSION_WIDTH, PRESENT_DAY_REFERENCE,
   atlasLOD, axisTransitionProgress, buildAtlasTimeline, formatHistoricalYear,
-  focusContextTimeX, interpolateAtlasPoint, layoutLogTimeTicks, logDistanceX, planQuestionRootConnections, sampleAtlasEdgePath, worldDistanceMap,
+  focusContextTimeX, interpolateAtlasPoint, layoutLogTimeTicks, logDistanceX, planQuestionRootConnections, routeAtlasEdgePaths,
+  sampleAtlasEdgePath, worldDistanceMap,
 } from '../web/atlas/p2Atlas.js';
 
 function sampleGraph() {
@@ -22,6 +23,38 @@ function sampleGraph() {
     { id: 'q-a', question: 'What if the Sunda Shelf stayed exposed?', divergenceYear: 1800 },
     { id: 'q-b', question: 'What if the Sahara remained green?', divergenceYear: -5000 },
   ] };
+}
+
+function properSegmentCrossing(a, b, c, d) {
+  const orient = (p, q, r) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const abC = orient(a, b, c), abD = orient(a, b, d);
+  const cdA = orient(c, d, a), cdB = orient(c, d, b);
+  return abC * abD < -1e-10 && cdA * cdB < -1e-10;
+}
+
+function edgeCrossings(paths, { includeIncident = false } = {}) {
+  const crossings = [];
+  for (let first = 0; first < paths.length; first++) for (let second = first + 1; second < paths.length; second++) {
+    const a = paths[first], b = paths[second];
+    if (!includeIncident && [a.parentId, a.childId].some(id => id === b.parentId || id === b.childId)) continue;
+    let crossing = false;
+    for (let left = 1; left < a.points.length && !crossing; left++) {
+      for (let right = 1; right < b.points.length; right++) {
+        if (properSegmentCrossing(a.points[left - 1], a.points[left], b.points[right - 1], b.points[right])) {
+          crossing = true; break;
+        }
+      }
+    }
+    if (crossing) crossings.push([`${a.parentId}->${a.childId}`, `${b.parentId}->${b.childId}`]);
+  }
+  return crossings;
+}
+
+function pointSegmentDistanceForTest(point, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const lengthSquared = dx * dx + dy * dy;
+  const t = lengthSquared ? Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared)) : 0;
+  return Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t));
 }
 
 test('log time scale anchors 2026 at the trunk end and compresses BCE distance', () => {
@@ -220,12 +253,60 @@ test('tree rows keep sibling subtrees ordered and parent-child curves are smooth
   const y = id => layout.positions.get(id).y;
   assert.ok(y('sibling') < y('child-a') && y('child-a') < y('grandchild'));
   const path = layout.parentChildPaths.find(edge => edge.parentId === 'child-a' && edge.childId === 'grandchild');
-  assert.equal(path.points.length, 13);
+  assert.equal(path.points.length, 17);
   assert.deepEqual(path.points[0], path.from);
   assert.deepEqual(path.points.at(-1), path.to);
   const sampled = sampleAtlasEdgePath({ x: 0, y: 0 }, { x: 2, y: 1 }, 4);
   assert.equal(sampled.length, 5);
   assert.ok(sampled[1].x > sampled[0].x && sampled[1].x < sampled.at(-1).x);
+});
+
+test('uneven chronological branches use a deterministic lane to avoid their crossing', () => {
+  const worlds = [
+    { id: 'root', parentId: null, questionId: 'q', year: 1000 },
+    { id: 'early-branch', parentId: 'root', questionId: 'q', year: 1020 },
+    { id: 'early-descendant', parentId: 'early-branch', questionId: 'q', year: 1100 },
+    { id: 'early-late-study', parentId: 'early-descendant', questionId: 'q', year: 1500 },
+    { id: 'late-branch', parentId: 'root', questionId: 'q', year: 1200 },
+    { id: 'late-descendant', parentId: 'late-branch', questionId: 'q', year: 1250 },
+    { id: 'late-future-study', parentId: 'late-descendant', questionId: 'q', year: 1800 },
+  ];
+  const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: 1000 }] }, 'late-future-study');
+  assert.deepEqual(edgeCrossings(layout.parentChildPaths, { includeIncident: true }), []);
+  assert.ok(layout.parentChildPaths.find(path => path.parentId === 'root' && path.childId === 'late-branch').routeOffset !== 0,
+    'the deterministic router bends the conflicting long edge into a separate lane');
+  assert.ok(layout.parentChildPaths.every(path => path.unresolvedCrossings.length === 0));
+  assert.ok(layout.parentChildPaths.every(path => path.unresolvedNodes.length === 0));
+});
+
+test('deterministic routing clears crossings and node interiors on a varied 42-world tree', () => {
+  const worlds = [{ id: 'world-0', parentId: null, questionId: 'q', year: 700 }];
+  for (let index = 1; index < 42; index++) {
+    const parentIndex = Math.floor((index - 1) / 3);
+    worlds.push({
+      id: `world-${index}`, parentId: `world-${parentIndex}`, questionId: 'q',
+      year: worlds[parentIndex].year + 1 + ((index * 137) % 900),
+      proposedOrder: (index * 17) % 13,
+    });
+  }
+  const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: 700 }] }, 'world-41');
+  assert.equal(layout.parentChildPaths.length, worlds.length - 1);
+  assert.deepEqual(edgeCrossings(layout.parentChildPaths, { includeIncident: true }), []);
+  assert.ok(layout.parentChildPaths.every(path => path.unresolvedCrossings.length === 0));
+  assert.ok(layout.parentChildPaths.every(path => path.unresolvedNodes.length === 0));
+  const nodes = layout.worlds.map(world => ({ id: world.id, x: world.x, y: world.y }));
+  const repeatedRoutes = routeAtlasEdgePaths(layout.parentChildPaths, { nodes });
+  assert.deepEqual(repeatedRoutes.map(path => path.routeOffset), layout.parentChildPaths.map(path => path.routeOffset));
+  for (const path of layout.parentChildPaths) {
+    for (const node of nodes) {
+      if (node.id === path.parentId || node.id === path.childId) continue;
+      for (let index = 1; index < path.points.length; index++) {
+        assert.ok(Math.hypot(path.points[index].x - path.points[index - 1].x, path.points[index].y - path.points[index - 1].y) > 0);
+        assert.ok(pointSegmentDistanceForTest(node, path.points[index - 1], path.points[index]) >= 0.16 - 1e-9,
+          `edge ${path.parentId}->${path.childId} clears node ${node.id}`);
+      }
+    }
+  }
 });
 
 test('current-world question metadata attaches a parchment question branch to its declared parent', () => {

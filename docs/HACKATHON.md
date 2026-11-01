@@ -141,3 +141,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-10-31 | Atlas round 3: show offscreen lineage direction markers and concise question labels while retaining full accessible text. | |
 | 2026-10-31 | Atlas round 3: integrate curved hover paths, child labels, thinner selection ring, focused camera fitting, and a single present-day marker. | |
 | 2026-10-31 | Atlas round 3: on phones, first zoom-out targets Orbit and other questions are available through an Atlas toggle; preserve initialization and saved-graph synchronization. | |
+| 2026-10-31 | Atlas round 3: route time-anchored tree edges through tested curved lanes and preserve the chosen routes while the layout animates. | |

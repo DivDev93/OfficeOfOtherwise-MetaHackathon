@@ -290,13 +290,53 @@ function tidyTreeRows(worlds, childrenByParent, mode) {
   return rows;
 }
 
-/** Sample a horizontal cubic parent-to-child curve for smooth Atlas edges. */
-export function sampleAtlasEdgePath(from, to, segments = 12) {
+function properSegmentCrossing(a, b, c, d) {
+  const orient = (p, q, r) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const abC = orient(a, b, c), abD = orient(a, b, d);
+  const cdA = orient(c, d, a), cdB = orient(c, d, b);
+  return abC * abD < -1e-10 && cdA * cdB < -1e-10;
+}
+
+function pointSegmentDistance(point, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const lengthSquared = dx * dx + dy * dy;
+  const t = lengthSquared ? clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared, 0, 1) : 0;
+  return Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t));
+}
+
+function pathsCross(a, b) {
+  for (let first = 1; first < a.length; first++) for (let second = 1; second < b.length; second++) {
+    if (properSegmentCrossing(a[first - 1], a[first], b[second - 1], b[second])) return true;
+  }
+  return false;
+}
+
+function pathHitsNode(path, nodes, endpointIds, clearance) {
+  for (const node of nodes) {
+    if (endpointIds.has(String(node.id))) continue;
+    for (let index = 1; index < path.length; index++) {
+      if (pointSegmentDistance(node, path[index - 1], path[index]) < clearance) return true;
+    }
+  }
+  return false;
+}
+
+function nodesHitByPath(path, nodes, endpointIds, clearance) {
+  return nodes.filter(node => !endpointIds.has(String(node.id))
+    && pathHitsNode(path, [node], endpointIds, clearance)).map(node => String(node.id));
+}
+
+/** Sample a smooth cubic parent-child edge; offset bends it around a routing lane. */
+export function sampleAtlasEdgePath(from, to, segments = 12, { offset = 0 } = {}) {
   const count = Math.max(2, Math.floor(Number(segments) || 12));
-  const direction = Math.sign(to.x - from.x) || 1;
-  const bend = Math.min(0.85, Math.abs(to.x - from.x) * 0.42);
-  const control1 = { x: from.x + direction * bend, y: from.y };
-  const control2 = { x: to.x - direction * bend, y: to.y };
+  const dx = to.x - from.x, dy = to.y - from.y;
+  const direction = Math.sign(dx) || 1;
+  const bend = Math.min(0.85, Math.abs(dx) * 0.42);
+  const length = Math.hypot(dx, dy) || 1;
+  const normal = { x: -dy / length, y: dx / length };
+  const lane = Number(offset) || 0;
+  const control1 = { x: from.x + direction * bend + normal.x * lane, y: from.y + normal.y * lane };
+  const control2 = { x: to.x - direction * bend + normal.x * lane, y: to.y + normal.y * lane };
   const points = [];
   for (let index = 0; index <= count; index++) {
     const t = index / count, u = 1 - t;
@@ -307,6 +347,34 @@ export function sampleAtlasEdgePath(from, to, segments = 12) {
     });
   }
   return points;
+}
+
+/** Route a visible forest deterministically, bending conflicting edges into separate lanes. */
+export function routeAtlasEdgePaths(edges = [], {
+  segments = 16, laneGap = 0.5, maxAttempts = 512, nodeClearance = 0.16, nodes = [],
+} = {}) {
+  const ordered = (Array.isArray(edges) ? edges : []).filter(edge => edge?.from && edge?.to)
+    .slice().sort((a, b) => String(a.parentId).localeCompare(String(b.parentId)) || String(a.childId).localeCompare(String(b.childId)));
+  const routed = [];
+  for (const edge of ordered) {
+    const endpointIds = new Set([String(edge.parentId), String(edge.childId)]);
+    let chosen = null, offset = 0;
+    for (let attempt = 0; attempt <= maxAttempts; attempt++) {
+      offset = attempt === 0 ? 0 : Math.ceil(attempt / 2) * laneGap * (attempt % 2 ? 1 : -1);
+      const points = sampleAtlasEdgePath(edge.from, edge.to, segments, { offset });
+      if (routed.every(other => !pathsCross(points, other.points))
+        && !pathHitsNode(points, nodes, endpointIds, nodeClearance)) {
+        chosen = points; break;
+      }
+    }
+    if (!chosen) chosen = sampleAtlasEdgePath(edge.from, edge.to, segments, { offset });
+    const unresolvedCrossings = routed.filter(other => pathsCross(chosen, other.points))
+      .map(other => `${other.parentId}->${other.childId}`);
+    routed.push({ ...edge, points: chosen, routeOffset: offset,
+      unresolvedCrossings,
+      unresolvedNodes: nodesHitByPath(chosen, nodes, endpointIds, nodeClearance) });
+  }
+  return routed;
 }
 
 function occupied(label, labels, width, height) {
@@ -403,13 +471,15 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
   const visibleWorlds = laidOutWorlds.filter(world => !folded.has(world.id));
   const visibleWorldById = new Map(visibleWorlds.map(world => [world.id, world]));
   const worldById = new Map(laidOutWorlds.map(world => [world.id, world]));
-  const parentChildPaths = visibleWorlds.flatMap(child => {
+  const parentChildEdges = visibleWorlds.flatMap(child => {
     const parent = child.world.parentId == null ? null : visibleWorldById.get(String(child.world.parentId));
     if (!parent) return [];
     const from = { x: parent.x, y: parent.y, z: parent.z };
     const to = { x: child.x, y: child.y, z: child.z };
-    return [{ parentId: parent.id, childId: child.id, from, to,
-      lineage: parent.lineage && child.lineage, points: sampleAtlasEdgePath(from, to) }];
+    return [{ parentId: parent.id, childId: child.id, from, to, lineage: parent.lineage && child.lineage }];
+  });
+  const parentChildPaths = routeAtlasEdgePaths(parentChildEdges, {
+    nodes: visibleWorlds.map(world => ({ id: world.id, x: world.x, y: world.y })),
   });
   const questionBranches = qs.map(questionId => {
     const members = worlds.filter(world => String(world.questionId ?? '') === questionId);

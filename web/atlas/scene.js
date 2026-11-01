@@ -454,6 +454,7 @@ export function createAtlasScene(container, {
   }
   function refreshAtlasTimeline() {
     atlasTimeline = buildAtlasTimeline(graphSnapshot(), currentId, axisMode, { expandedQuestionIds: [...expandedQuestionIds], frameAspect: camera.aspect });
+    container.dataset.atlasRouteWarnings = String((atlasTimeline.parentChildPaths || []).filter(path => path.unresolvedCrossings.length || path.unresolvedNodes.length).length);
     const byId = new Map(atlasTimeline.worlds.map(item => [item.id, item]));
     const realSphereIds = new Set(atlasTimeline.realSphereIds);
     const foldedIds = new Set(atlasTimeline.foldedIds);
@@ -1134,7 +1135,7 @@ export function createAtlasScene(container, {
     }
     if (p2Renderer.presentEarth.visible) {
       const point = projectPoint(p2Renderer.presentEarth.getWorldPosition(new THREE.Vector3()));
-      if (point.visible) candidates.push({ id: 'present-earth', text: 'Present-day Earth · 2026', ...point, width: Math.min(152, safeBounds.right - safeBounds.left), height: 18, priority: 95, kind: 'world' });
+      if (point.visible) candidates.push({ id: 'present-earth', text: 'Present-day Earth · 2026', ...point, width: Math.min(200, safeBounds.right - safeBounds.left), height: 18, priority: 95, kind: 'world' });
     }
     const labelDocument = container.ownerDocument || document;
     const reservedRects = [];
@@ -1215,8 +1216,13 @@ export function createAtlasScene(container, {
       const surfaceTo = surfacePoint(child, markerRadius).normalize();
       const arrivalEdge = child.id === currentId && parent.id === arrivalFromId;
       const arcPoints = [];
-      const segments = 10;
-      const atlasCurve = sampleAtlasEdgePath(from, to, segments);
+      const segments = 16;
+      const path = atlasTimeline?.parentChildPaths?.find(item => item.parentId === parent.id && item.childId === child.id);
+      const previousPath = axisTransition?.fromTimeline?.parentChildPaths?.find(item => item.parentId === parent.id && item.childId === child.id);
+      const targetOffset = path?.routeOffset || 0;
+      const progress = axisTransition ? axisTransitionProgress(timestamp - axisTransition.startedAt, AXIS_ANIMATION_MS) : 1;
+      const routeOffset = (previousPath?.routeOffset ?? targetOffset) + (targetOffset - (previousPath?.routeOffset ?? targetOffset)) * progress;
+      const atlasCurve = sampleAtlasEdgePath(from, to, segments, { offset: routeOffset });
       for (let step = 0; step <= segments; step++) {
         const t = step / segments;
         const direction = slerpUnitVector(surfaceFrom, surfaceTo, t);
