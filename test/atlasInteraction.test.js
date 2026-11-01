@@ -28,6 +28,13 @@ test('wheel gently settles on surface, orbit, and Atlas resting levels', () => {
   assert.ok(nearOrbit > 55 && nearOrbit < 57, 'approach to orbit is attracted without jumping');
 });
 
+test('coarse wheel notches catch Orbit from either direction without trapping the next notch', () => {
+  assert.equal(zoomFromWheel(52, 120), 57);
+  assert.equal(zoomFromWheel(62, -120), 57);
+  assert.ok(zoomFromWheel(57, 120) > 57);
+  assert.ok(zoomFromWheel(57, -120) < 57);
+});
+
 test('repeated tiny trackpad deltas accumulate away from surface and pass orbit in either direction', () => {
   let fromSurface = 0;
   for (let index = 0; index < 10; index += 1) fromSurface = zoomFromWheel(fromSurface, 1);
