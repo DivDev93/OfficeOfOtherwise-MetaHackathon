@@ -68,8 +68,8 @@ test('Orbit compact panels expose a selected-world card and accessible controls'
   assert.match(css, /body\.atlas-panels-open:has\([^}]+\.atlas-compact-controls\{opacity:1;visibility:visible;pointer-events:auto\}/, 'the tree toggle stays available to close its sheet');
   assert.match(css, /body\.invitation-open:has\([^}]+\.exploration-rail>#invitation\{[^}]*pointer-events:auto\}/, 'New exploration reveals an interactive prompt at Orbit');
   assert.match(css, /width:238px;height:142px;min-height:142px;max-height:none/, 'the compact panel fits its selected-world card without a full-height details area');
-  assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel>:not\(\.atlas-world-card\),\s*body:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel>:not\(\.atlas-world-card\)\{display:block;position:absolute;inset:0;overflow:hidden;opacity:0;visibility:hidden/, 'the compact card removes full details from layout while keeping them transitionable');
-  assert.match(css, /body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel>:not\(\.atlas-world-card\):not\(\[hidden\]\),\s*body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel>:not\(\.atlas-world-card\):not\(\[hidden\]\)\{display:block;position:relative;inset:auto;max-height:none;overflow:visible;opacity:1;visibility:visible/, 'Open details restores nonhidden chronicle content for a reverse transition');
+  assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel>\.atlas-world-details,\s*body:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel>\.atlas-world-details\{display:block;position:absolute;inset:0;overflow:hidden;opacity:0;visibility:hidden/, 'the compact card removes the complete story sheet from layout while keeping it transitionable');
+  assert.match(css, /body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel>\.atlas-world-details,\s*body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel>\.atlas-world-details\{display:block;position:relative;inset:auto;max-height:none;overflow:visible;opacity:1;visibility:visible/, 'Open details restores the stacked chronicle sheet for a reverse transition');
   assert.match(css, /body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.atlas-world-card,\s*body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.atlas-world-card\{display:grid;position:absolute;[\s\S]*?opacity:0;visibility:hidden;pointer-events:none/, 'the compact card leaves the visible layout when details open');
   assert.match(css, /@media\(max-width:700px\)[\s\S]*body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel,\s*body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel\{top:184px;right:9px;bottom:10px;left:9px;width:auto;height:auto;max-height:calc\(100dvh - 130px\);overflow:auto\}/, 'the phone details sheet starts below the zoom toolbar and scrolls within the remaining viewport');
   assert.match(css, /body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel\{top:218px\}/, 'the Atlas phone sheet starts below the additional Other questions control');
@@ -77,6 +77,7 @@ test('Orbit compact panels expose a selected-world card and accessible controls'
   assert.match(css, /\.atlas-details-close\{[^}]*flex:0 0 44px;width:44px;min-width:44px;min-height:44px/,
     'the visible phone details close action has a 44px touch target');
   assert.match(app, /const cardHidden = !compact \|\| detailsOpen \|\| card\.hidden;[\s\S]*card\.inert = cardHidden;[\s\S]*card\.setAttribute\('aria-hidden', String\(cardHidden\)\)/, 'the hidden compact card leaves keyboard and accessibility navigation');
+  assert.match(app, /const detailSheetHidden = \(compact && !detailsOpen\) \|\| currentLevel === 'lift';\s*restoreAtlasFocusBeforeHiding\(detailSheet, detailSheetHidden\);\s*detailSheet\.inert = detailSheetHidden;[\s\S]*detailSheet\.setAttribute\('aria-hidden', String\(detailSheetHidden\)\)/, 'focus moves to the scene before a hidden story sheet becomes inert');
   assert.match(css, /\.atlas-world-card\{display:grid;position:absolute;[\s\S]*?opacity:0;visibility:hidden/, 'the card stays renderable so Orbit can fade it in');
   assert.match(css, /\.atlas-world-card\{display:grid;position:absolute;[\s\S]*?transition:opacity \.12s ease \.12s,transform \.16s ease \.08s,visibility 0s linear \.08s/, 'the card appears after the full details fade away');
   assert.match(css, /width:min\(320px,max\(270px,calc\(34vw - 12px\)\)\)/, 'the clipped rail content matches the rail minimum width and does not reflow at its boundary');
@@ -88,6 +89,26 @@ test('Orbit compact panels expose a selected-world card and accessible controls'
   assert.match(css, /atlas-panels-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.atlas-world-card,[\s\S]*?visibility:hidden;pointer-events:none;transform:translateY\(6px\)/, 'the phone tree sheet clears the selected-world card before it appears');
   assert.match(css, /\.exploration-rail,\.exploration-rail>\*,\.atlas-compact-controls,\.atlas-compact-controls>\*,\.hero-panel,\.hero-panel>\*,\.geography-panel,\.map-panel>#atlas-scene,\.atlas-toolbar\{transition:none!important;animation:none!important\}/, 'reduced-motion users get immediate panel changes');
   assert.match(css, /prefers-reduced-motion:reduce/);
+});
+
+test('fading Lift panels become inert and focus returns to the scene before they are hidden', () => {
+  const helper = app.match(/function restoreAtlasFocusBeforeHiding\(element, willHide\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(helper, 'shared guarded focus-return helper exists');
+  assert.match(app, /const panelUnavailable = !visible \|\| level === 'lift';\s*restoreAtlasFocusBeforeHiding\(panel, panelUnavailable\);\s*panel\.hidden = !visible;\s*panel\.inert = panelUnavailable;\s*panel\.setAttribute\('aria-hidden', String\(panelUnavailable\)\)/, 'geography is pointer and keyboard unavailable throughout Lift');
+  assert.match(app, /const treeUnavailable = currentLevel === 'lift' \|\| \(compact && !panelsOpen\);[\s\S]*treePanel\.inert = treeUnavailable;[\s\S]*treePanel\.setAttribute\('aria-hidden', String\(treeUnavailable\)\)/, 'the story tree is inert while faded or compact-hidden');
+  assert.match(app, /const invitationUnavailable = currentLevel === 'lift' \|\| \(compact && !invitationOpen\);[\s\S]*invitationPanel\.inert = invitationUnavailable;[\s\S]*invitationPanel\.setAttribute\('aria-hidden', String\(invitationUnavailable\)\)/, 'other fading rail contents are inert throughout Lift');
+  assert.match(app, /restoreAtlasFocusBeforeHiding\(nav, navUnavailable\);\s*nav\.inert = navUnavailable;/, 'compact navigation returns focus before it becomes inert');
+
+  let focusCalls = 0;
+  const scene = { focus(options) { assert.deepEqual(options, { preventScroll:true }); focusCalls++; } };
+  const active = {};
+  const restore = new Function('$', 'document', `${helper}; return restoreAtlasFocusBeforeHiding;`)(id => id === 'atlas-scene' ? scene : null, { activeElement:active });
+  restore({ contains:node => node === active }, true);
+  assert.equal(focusCalls, 1, 'focus inside a panel is returned to the scene before hiding');
+  restore({ contains:() => false }, true);
+  restore({ contains:() => true }, false);
+  restore({}, true);
+  assert.equal(focusCalls, 1, 'focus is preserved when the panel is still available, and unsupported mocks remain safe');
 });
 
 test('New exploration toggles a blank focused prompt without resetting the saved Atlas graph', () => {

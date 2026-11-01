@@ -663,24 +663,52 @@ function applyAtlasGeographyLevel(level = 'surface') {
   syncAtlasCompactButtons(level);
   const automatic = level === 'surface' || level === 'lift' || level === 'unknown';
   const visible = atlasGeographyOverride === null ? automatic : atlasGeographyOverride;
+  const panelUnavailable = !visible || level === 'lift';
+  restoreAtlasFocusBeforeHiding(panel, panelUnavailable);
   panel.hidden = !visible;
+  panel.inert = panelUnavailable;
+  panel.setAttribute('aria-hidden', String(panelUnavailable));
   if (toggle) {
     toggle.textContent = visible ? 'Hide Earth comparison' : 'Show Earth comparison';
     toggle.setAttribute('aria-pressed', String(visible));
   }
   syncAtlasWorldCard(level);
 }
+function restoreAtlasFocusBeforeHiding(element, willHide) {
+  if (willHide && typeof element?.contains === 'function' && element.contains(document.activeElement)) $('atlas-scene')?.focus({ preventScroll:true });
+}
 function syncAtlasCompactButtons(level = '') {
-  const tree = $('atlas-compact-tree'), details = $('atlas-open-details'), detailsClose = $('atlas-close-details');
+  const tree = $('atlas-compact-tree'), details = $('atlas-open-details'), detailsClose = $('atlas-close-details'), detailSheet = $('atlas-world-details');
+  const treePanel = $('exploration-tree'), invitationPanel = $('invitation');
   const newExploration = $('atlas-compact-new'), nav = $('atlas-compact-controls'), card = $('atlas-world-card');
   const currentLevel = level || $('atlas-scene')?.dataset.atlasLevel || '';
   const compact = currentLevel === 'orbit' || currentLevel === 'atlas';
   const panelsOpen = document.body.classList.contains('atlas-panels-open');
   const detailsOpen = document.body.classList.contains('atlas-details-open');
   const invitationOpen = document.body.classList.contains('invitation-open');
+  const treeUnavailable = currentLevel === 'lift' || (compact && !panelsOpen);
+  if (treePanel) {
+    restoreAtlasFocusBeforeHiding(treePanel, treeUnavailable);
+    treePanel.inert = treeUnavailable;
+    treePanel.setAttribute('aria-hidden', String(treeUnavailable));
+  }
+  const invitationUnavailable = currentLevel === 'lift' || (compact && !invitationOpen);
+  if (invitationPanel) {
+    restoreAtlasFocusBeforeHiding(invitationPanel, invitationUnavailable);
+    invitationPanel.inert = invitationUnavailable;
+    invitationPanel.setAttribute('aria-hidden', String(invitationUnavailable));
+  }
+  if (detailSheet) {
+    const detailSheetHidden = (compact && !detailsOpen) || currentLevel === 'lift';
+    restoreAtlasFocusBeforeHiding(detailSheet, detailSheetHidden);
+    detailSheet.inert = detailSheetHidden;
+    detailSheet.setAttribute('aria-hidden', String(detailSheetHidden));
+  }
   if (nav) {
-    nav.inert = !compact || invitationOpen;
-    nav.setAttribute('aria-hidden', String(!compact || invitationOpen));
+    const navUnavailable = !compact || invitationOpen;
+    restoreAtlasFocusBeforeHiding(nav, navUnavailable);
+    nav.inert = navUnavailable;
+    nav.setAttribute('aria-hidden', String(navUnavailable));
   }
   if (tree) {
     tree.setAttribute('aria-expanded', String(panelsOpen));
