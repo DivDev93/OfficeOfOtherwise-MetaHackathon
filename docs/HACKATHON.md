@@ -176,3 +176,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: refresh the wheel recording after route and phone-label adjustments. | |
 | 2026-11-01 | Atlas round 3: return keyboard focus to the scene when the phone question toggle hides. | |
 | 2026-11-01 | Atlas round 3: skip Orbit-to-Atlas endpoint calculations while rendering Surface and Lift. | |
+| 2026-11-01 | Atlas round 3: increase the phone Other questions control to a 44px target and verify it clears the open sheet. | |

@@ -113,7 +113,8 @@ test('small phones keep Surface usable, zoom to Orbit on first zoom-out, and gat
   assert.match(css, /\.map-panel\{[^}]*pointer-events:none/);
   assert.match(css, /\.atlas-other-questions-toggle\{[^}]*pointer-events:auto/, 'the toggle opts back into hit testing inside the noninteractive map panel');
   assert.match(css, /body\.has-story \.atlas-toolbar\{z-index:11\}/, 'phone zoom buttons stack above the story rail');
-  assert.match(css, /\.atlas-other-questions-toggle\{position:absolute;z-index:11;/, 'the question toggle stacks above the story rail too');
+  assert.match(css, /\.atlas-other-questions-toggle\{position:absolute;z-index:11;top:169px;left:50%;transform:translateX\(-50%\);min-height:44px;/, 'the question toggle stacks above the story rail and meets the 44px phone target');
+  assert.ok(169 + 44 < 218, 'the 44px toggle clears the Atlas detail sheet top inset with a 5px gap');
   assert.match(css, /\.map-panel>#atlas-scene\{inset:0;width:100%;\}/, 'the active Atlas remains full width on phones');
 });
 
