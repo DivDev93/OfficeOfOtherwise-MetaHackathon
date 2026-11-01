@@ -24,4 +24,6 @@ At 375px, the Other questions control was checked against saved data: opening it
 
 `lift-title-clear-375.png` captures the saved story at 30% zoom after reserving the visible details sheet as a label obstacle. At 40%, the local replay continued to show other Atlas labels outside the sheet.
 
+`wheel-roundtrip-timed.webm` and `wheel-roundtrip-timed.json` record a later local desktop wheel journey from 0 to 100 and back to 0. The receipt includes each wheel delta, resulting slider value, and browser frame timestamp. Three buffered frames from an earlier capture were excluded; the remaining capture gaps were not shortened. The WebM uses the encoder's 25 Hz time base, so timestamps are approximate to 40 ms; it does not prove every intermediate frame was captured.
+
 In the recorded local replay at 1440×900, successive 120-pixel wheel inputs reached 10, 19, 29, 38, 48, 57 (Orbit), 67, 76, 86, 95 and 100 (Atlas). The reverse pass reached 90, 81, 71, 62, 57 (Orbit), 47, 38, 28, 19, 9 and 0 (Surface). Both passes left the Orbit stop on the next input.
