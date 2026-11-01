@@ -55,6 +55,10 @@
       <div id="branch-list" class="branch-list" aria-label="Story branches"></div>
       <p id="map-empty" class="empty"><span aria-hidden="true">✳</span> A question opens the map. Choose a saved possibility to begin.</p>
     </section>
+    <nav id="atlas-compact-controls" class="atlas-compact-controls" aria-label="Atlas quick navigation">
+      <button id="atlas-compact-tree" type="button" aria-controls="exploration-tree" aria-expanded="false" aria-label="Open story tree"><span aria-hidden="true">☷</span><span>Story tree</span></button>
+      <button id="atlas-compact-new" type="button" aria-controls="invitation" aria-label="Start a new exploration"><span aria-hidden="true">＋</span><span>New exploration</span></button>
+    </nav>
     </aside>
 
     <section id="guardrail" class="guardrail glass-panel" hidden role="alert"><div><span class="eyebrow">A DIFFERENT DIRECTION</span><h2>Let's reframe that question.</h2><p id="reason"></p><p id="reframe"></p></div><button id="retry" class="outline" type="button">Try the suggestion ↗</button></section>
@@ -103,6 +107,11 @@
 
       <section id="chronicle" class="hero-panel glass-vault" aria-labelledby="hero-title">
         <div class="chronicle-heading"><div><p class="eyebrow">THE SELECTED WORLD</p><h2 id="hero-title">A world to step into</h2></div><span id="hero-tag" class="archive-stamp muted">AWAITING A STORY</span></div>
+        <div id="atlas-world-card" class="atlas-world-card" aria-label="Selected world summary">
+          <img id="atlas-world-thumbnail" alt="" hidden>
+          <div class="atlas-world-card-copy"><strong id="atlas-world-title">A world to step into</strong><span id="atlas-world-year"></span></div>
+          <button id="atlas-open-details" type="button" aria-controls="chronicle" aria-expanded="false">Open details</button>
+        </div>
         <p id="selected-branch-context" class="selected-branch-context" hidden></p>
         <div class="view-switch glass-veil" role="tablist" aria-label="Selected world views"><button id="scene-view" type="button" role="tab" aria-selected="true" aria-controls="chronicle-stage">Scene</button><button id="cutout-view" type="button" role="tab" aria-selected="false" aria-controls="chronicle-stage">SAM cutout</button><button id="model-button" type="button" role="tab" aria-selected="false" aria-controls="chronicle-stage">3D object</button><button id="orbit-button" type="button" aria-pressed="false" hidden>Orbit object</button><button id="back-to-atlas" type="button" class="outline" hidden>Back to atlas</button></div>
         <span id="view-loading-indicator" class="activity-indicator" aria-hidden="true" hidden></span><p id="view-status" class="run-status" role="status" aria-live="polite" hidden></p>

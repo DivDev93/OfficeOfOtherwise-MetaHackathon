@@ -597,6 +597,11 @@ function compactAtlasToolbar(toolbar) {
 function applyAtlasGeographyLevel(level = 'surface') {
   const panel = $('geography-panel'), toggle = $('atlas-geography-toggle');
   if (!panel) return;
+  const compact = level === 'orbit' || level === 'atlas';
+  if (!compact) {
+    document.body.classList.remove('atlas-details-open', 'atlas-panels-open');
+  }
+  syncAtlasCompactButtons(level);
   const automatic = level === 'surface' || level === 'lift' || level === 'unknown';
   const visible = atlasGeographyOverride === null ? automatic : atlasGeographyOverride;
   panel.hidden = !visible;
@@ -604,6 +609,52 @@ function applyAtlasGeographyLevel(level = 'surface') {
     toggle.textContent = visible ? 'Hide Earth comparison' : 'Show Earth comparison';
     toggle.setAttribute('aria-pressed', String(visible));
   }
+  syncAtlasWorldCard(level);
+}
+function syncAtlasCompactButtons(level = '') {
+  const tree = $('atlas-compact-tree'), details = $('atlas-open-details'), nav = $('atlas-compact-controls');
+  const currentLevel = level || $('atlas-scene')?.dataset.atlasLevel || '';
+  const compact = currentLevel === 'orbit' || currentLevel === 'atlas';
+  const panelsOpen = document.body.classList.contains('atlas-panels-open');
+  const detailsOpen = document.body.classList.contains('atlas-details-open');
+  if (nav) {
+    nav.inert = !compact;
+    nav.setAttribute('aria-hidden', String(!compact));
+  }
+  if (tree) {
+    tree.setAttribute('aria-expanded', String(panelsOpen));
+    tree.setAttribute('aria-label', panelsOpen ? 'Close story tree' : 'Open story tree');
+    const label = tree.querySelector('span:last-child');
+    if (label) label.textContent = panelsOpen ? 'Close tree' : 'Story tree';
+  }
+  if (details) {
+    details.setAttribute('aria-expanded', String(detailsOpen));
+    details.textContent = detailsOpen ? 'Close details' : 'Open details';
+  }
+}
+function syncAtlasWorldCard(level = '') {
+  const card = $('atlas-world-card');
+  if (!card) return;
+  const branch = branchState.branches.find(item => item.id === selectedBranchId);
+  const world = branch || selectedContext;
+  const title = world?.title || $('hero-title')?.textContent?.trim() || 'A world to step into';
+  const year = world?.year != null ? formatYear(world.year) : '';
+  const thumbnail = $('atlas-world-thumbnail');
+  const event = selectedBranchId ? eventWork.get(eventKey(currentRunId, selectedBranchId)) : null;
+  const savedThumbnail = typeof world?.thumbnail === 'string' ? world.thumbnail : world?.thumbnail?.url;
+  const sceneUrl = event?.sceneUrl
+    || (branch && branch.id === branchState.heroId && hasImage ? asset('hero.png') : '')
+    || savedThumbnail || world?.sceneUrl || '';
+  $('atlas-world-title').textContent = title;
+  $('atlas-world-year').textContent = year;
+  thumbnail.hidden = !sceneUrl;
+  thumbnail.alt = sceneUrl ? `Scene thumbnail for ${title}` : '';
+  if (sceneUrl) thumbnail.src = sceneUrl;
+  card.hidden = !document.body.classList.contains('has-story') || !world;
+  const compact = ['orbit', 'atlas'].includes(level || $('atlas-scene')?.dataset.atlasLevel || '');
+  card.inert = !compact || card.hidden;
+  card.setAttribute('aria-hidden', String(!compact || card.hidden));
+  syncAtlasCompactButtons(level);
 }
 function toggleAtlasGeographyPanel() {
   atlasGeographyOverride = $('geography-panel').hidden;
@@ -611,8 +662,10 @@ function toggleAtlasGeographyPanel() {
 }
 function setAtlasFocused(focused) {
   document.body.classList.toggle('atlas-focused', focused);
+  if (focused) document.body.classList.remove('atlas-details-open', 'atlas-panels-open');
   $('atlas-reopen-controls').hidden = !focused;
   $('focus-atlas')?.setAttribute('aria-pressed', String(focused));
+  syncAtlasCompactButtons();
 }
 function renderExplorationTree(hydrate = false) {
   const host = $('exploration-tree-status');
@@ -919,7 +972,11 @@ async function loadServiceMode() {
   } catch { voiceEnabled = false; localReviewAccess = false; voice.setLocalAccess?.(false); voice.setEnabled(false); applyServiceMode('unknown'); }
 }
 function setInvitationOpen(open) {
-  if (open) setAtlasFocused(false);
+  if (open) {
+    setAtlasFocused(false);
+    document.body.classList.remove('atlas-details-open', 'atlas-panels-open');
+    syncAtlasCompactButtons();
+  }
   document.body.classList.toggle('invitation-open', open);
   const hasStory = document.body.classList.contains('has-story');
   $('show-invitation').setAttribute('aria-expanded', String(!hasStory || open));
@@ -956,6 +1013,7 @@ function setView(view, userSelected = false) {
   $('model-view').hidden = !modelAvailable || view !== 'model';
   $('viewer-hint').hidden = view !== 'model';
   $('stage-empty').hidden = imageAvailable || (modelAvailable && view === 'model');
+  syncAtlasWorldCard();
   const sceneLoading = view === 'scene' && !!selectedEvent?.sceneLoading && !eventImage;
   $('scene-loading').hidden = !sceneLoading;
   $('scene-loading-text').textContent = selectedEvent?.sceneMessage || 'Preparing the selected scene…';
@@ -994,6 +1052,7 @@ function showGuard(data) {
 }
 function renderBranches() {
   document.body.classList.toggle('has-story', branchState.branches.length > 0 || !!selectedContext || !!savedNavigationState);
+  syncAtlasWorldCard();
   $('show-invitation').setAttribute('aria-expanded', String(!document.body.classList.contains('has-story') || document.body.classList.contains('invitation-open')));
   $('branch-list').replaceChildren(); $('map-empty').hidden = branchState.branches.length > 0 || branchState.phase === 'policy-checking' || rootGenerationActive;
   const selected = branchState.branches.find(item => item.id === selectedBranchId);
@@ -1039,6 +1098,7 @@ function selectBranch(branch, { persistLocation = true, runId = currentRunId } =
   context.replaceChildren();
   context.hidden = true;
   $('hero-title').textContent = `${formatYear(branch.year)} · ${branch.title}`;
+  syncAtlasWorldCard();
   $('hero-description').textContent = `${branch.summary || ''}${branch.causalLink ? ` Speculative cause: ${branch.causalLink}` : ''}`;
   $('hero-tag').textContent = branch.id === branchState.heroId && hasImage ? 'SELECTED EVENT · SCENE AVAILABLE' : 'SELECTED EVENT';
   if (branch.id !== branchState.heroId) setStageMessage('Preparing this event’s scene…');
@@ -1486,6 +1546,7 @@ async function expandBranch(branch) {
   viewStatus(''); reset({ preserveExpansion: true }); activeExpansion = { key: eventKey(parentRunId, branch.id), controller: new AbortController() }; const request = replayRequest;
   continuation = { rootRunId, parentRunId, parentBranchId: branch.id, path: [...parentPath, { runId: parentRunId, branchId: branch.id, title: branch.title, year: branch.year, summary: branch.summary, causalLink: branch.causalLink, place: branch.place, geography: branch.geography }], children: [] };
   selectedContext = branch;
+  syncAtlasWorldCard();
   showGeography(branch);
   $('hero-title').textContent = branch.title; $('hero-description').textContent = `${branch.summary || ''}${branch.causalLink ? ` Speculative cause: ${branch.causalLink}` : ''}`;
   $('hero-tag').textContent = 'SELECTED CAUSE · EXPLORING CONSEQUENCES';
@@ -1873,7 +1934,20 @@ $('prompt-form').addEventListener('submit', e => { e.preventDefault(); runPrompt
 $('focus-atlas')?.addEventListener('click', () => { setAtlasFocused(true); atlasController?.scene?.setZoom?.(0.78); $('atlas-scene')?.focus({ preventScroll:true }); });
 $('atlas-show-tree')?.addEventListener('click', () => { setAtlasFocused(false); $('exploration-tree')?.scrollIntoView({ behavior:'smooth', block:'nearest' }); });
 $('atlas-show-selected')?.addEventListener('click', () => { setAtlasFocused(false); $('chronicle')?.scrollIntoView({ behavior:'smooth', block:'nearest' }); });
- $('show-invitation').addEventListener('click', openNewExploration);
+$('atlas-compact-tree')?.addEventListener('click', () => {
+  const open = !document.body.classList.contains('atlas-panels-open');
+  document.body.classList.toggle('atlas-panels-open', open);
+  document.body.classList.remove('atlas-details-open');
+  syncAtlasCompactButtons();
+});
+$('atlas-compact-new')?.addEventListener('click', openNewExploration);
+$('atlas-open-details')?.addEventListener('click', () => {
+  const open = !document.body.classList.contains('atlas-details-open');
+  document.body.classList.toggle('atlas-details-open', open);
+  if (open) document.body.classList.remove('atlas-panels-open');
+  syncAtlasCompactButtons();
+});
+$('show-invitation').addEventListener('click', openNewExploration);
 document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { voice.cancel(); $('prompt').value = b.dataset.prompt; if (b.dataset.run) loadRun(b.dataset.run); else $('prompt').focus(); }));
 $('retry').addEventListener('click', () => {
   voice.cancel(); const prompt = $('retry').dataset.prompt; $('prompt').value = prompt;

@@ -51,6 +51,28 @@ test('Atlas keeps quick zoom visible, moves real view controls into a disclosure
   assert.match(app, /enterWorld\?\.\(starNodeId\(atlasCurrentWorldRunId, branch\.id\), \{ zoom:0 \}\)/, 'explicit story entry returns to the Surface level using the selected event owner');
 });
 
+test('Orbit compact panels expose a selected-world card and accessible controls', () => {
+  for (const id of ['atlas-compact-controls', 'atlas-compact-tree', 'atlas-compact-new', 'atlas-world-card', 'atlas-world-title', 'atlas-world-year', 'atlas-world-thumbnail', 'atlas-open-details']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(app, /function syncAtlasWorldCard\(/);
+  assert.match(app, /formatYear\(world\.year\)/);
+  assert.match(app, /atlas-panels-open/);
+  assert.match(app, /atlas-details-open/);
+  assert.match(css, /var\(--atlas-rail-width,320px\)/);
+  assert.match(css, /var\(--atlas-lift,0\)/);
+  assert.match(css, /@media\(max-width:700px\)[\s\S]*atlas-compact-controls/);
+  assert.match(css, /grid-template-columns:54px minmax\(0,1fr\) minmax\(92px,auto\)/, 'the 390px card reserves at least 92px for its action');
+  assert.match(css, /atlas-compact-controls button\{[^}]*min-height:48px/);
+  assert.match(css, /atlas-world-card button\{[^}]*min-height:44px/);
+  assert.match(css, /body\.atlas-panels-open:has\([^}]+\.atlas-compact-controls\{opacity:1;visibility:visible;pointer-events:auto\}/, 'the tree toggle stays available to close its sheet');
+  assert.match(css, /body\.invitation-open:has\([^}]+\.exploration-rail>#invitation\{[^}]*pointer-events:auto\}/, 'New exploration reveals an interactive prompt at Orbit');
+  assert.match(css, /width:238px;height:fit-content;min-height:0;max-height:none/, 'compact details have no empty full-height area');
+  assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel>:not\(\.atlas-world-card\),\s*body:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel>:not\(\.atlas-world-card\)\{display:none\}/, 'the closed card removes the stage and status rows from layout');
+  assert.match(css, /body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel>:not\(\.atlas-world-card\):not\(\[hidden\]\),\s*body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel>:not\(\.atlas-world-card\):not\(\[hidden\]\)\{display:block/, 'Open details restores nonhidden chronicle content');
+  assert.match(css, /prefers-reduced-motion:reduce/);
+});
+
 test('New exploration toggles a blank focused prompt without resetting the saved Atlas graph', () => {
   assert.match(app, /function openNewExploration\(\) \{\s*const opening = !document\.body\.classList\.contains\('invitation-open'\);\s*if \(opening\) \$\('prompt'\)\.value = '';\s*setInvitationOpen\(opening\);\s*if \(opening\) \$\('prompt'\)\.focus\(\{ preventScroll:true \}\);\s*\}/);
   assert.match(app, /\$\('show-invitation'\)\.addEventListener\('click', openNewExploration\)/);

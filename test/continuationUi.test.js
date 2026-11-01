@@ -543,6 +543,35 @@ test('Earth comparison panel automatically tucks away beyond Lift and returns at
   app.ui.toggleAtlasGeographyPanel(); assert.equal(app.get('geography-panel').hidden, false);
 });
 
+test('compact Atlas card follows the selected world and its quick controls update expanded state', async () => {
+  const fixture = run('compact', choice); fixture.assets = ['hero.png'];
+  const app = harness({ compact:fixture }); await tick();
+  await app.ui.loadRun('compact', { animate:false, autoConsequences:false });
+  assert.equal(app.get('atlas-world-title').textContent, choice.title);
+  assert.equal(app.get('atlas-world-year').textContent, '500 CE');
+  assert.equal(app.get('atlas-world-thumbnail').hidden, false);
+  assert.equal(app.get('atlas-world-thumbnail').src, '/runs/compact/hero.png');
+  app.get('atlas-compact-tree').click();
+  assert.equal(app.document.body.classList.contains('atlas-panels-open'), true);
+  assert.equal(app.get('atlas-compact-tree').getAttribute('aria-expanded'), 'true');
+  app.get('atlas-open-details').click();
+  assert.equal(app.document.body.classList.contains('atlas-panels-open'), false, 'opening details closes the story-tree sheet');
+  assert.equal(app.document.body.classList.contains('atlas-details-open'), true);
+  assert.equal(app.get('atlas-open-details').getAttribute('aria-expanded'), 'true');
+  app.ui.setAtlasLevel('orbit');
+  assert.equal(app.get('atlas-compact-controls').inert, false, 'Orbit exposes the native quick-action buttons to keyboard navigation');
+  assert.equal(app.get('atlas-compact-controls').getAttribute('aria-hidden'), 'false');
+  assert.equal(app.get('atlas-world-card').inert, false, 'Orbit exposes the compact card and close-details button');
+  app.ui.setAtlasLevel('surface');
+  assert.equal(app.document.body.classList.contains('atlas-details-open'), false, 'Surface restores the full panels');
+  assert.equal(app.get('atlas-compact-controls').inert, true, 'the hidden compact strip leaves the keyboard tab order at Surface');
+  assert.equal(app.get('atlas-compact-controls').getAttribute('aria-hidden'), 'true');
+  assert.equal(app.get('atlas-world-card').inert, true, 'the hidden compact card leaves the keyboard tab order at Surface');
+  app.ui.setAtlasLevel('orbit');
+  app.get('atlas-compact-new').click();
+  assert.equal(app.ui.state().invitationOpen, true, 'New exploration opens the prompt instead of leaving it behind the collapsed rail');
+});
+
 test('explicit Present-day Earth entry opens a blank attached-question form without dispatching generation', async () => {
   const root = run('present-entry-root', choice);
   const app = harness({ 'present-entry-root':root }, async () => { throw new Error('Entry must not generate before prompt submission'); }, true);
