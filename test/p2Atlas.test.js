@@ -182,6 +182,27 @@ function pointSegmentDistanceForTest(point, a, b) {
   return Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t));
 }
 
+function largestGradualTurnSweep(path) {
+  const turns = [];
+  for (let index = 1; index < path.points.length - 1; index++) {
+    const a = path.points[index - 1], b = path.points[index], c = path.points[index + 1];
+    const ux = b.x - a.x, uy = b.y - a.y, vx = c.x - b.x, vy = c.y - b.y;
+    const angle = Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+    turns.push(Math.abs(angle) < 0.45 ? angle : 0);
+  }
+  let largest = 0;
+  for (let index = 0; index < turns.length;) {
+    if (!turns[index]) { index++; continue; }
+    const sign = Math.sign(turns[index]); let count = 0, sweep = 0, cursor = index;
+    while (cursor < turns.length && turns[cursor] && Math.sign(turns[cursor]) === sign) {
+      count++; sweep += Math.abs(turns[cursor]); cursor++;
+    }
+    if (count >= 5) largest = Math.max(largest, sweep);
+    index = cursor;
+  }
+  return largest;
+}
+
 function seededRandom(seed) {
   let value = seed >>> 0;
   return () => { value = (1664525 * value + 1013904223) >>> 0; return value / 4294967296; };
@@ -448,6 +469,9 @@ test('nested gutters preserve the equal-year and backward-time 20-world fixture'
     'safe edges use smoother direct cubics');
   assert.ok(layout.parentChildPaths.some(path => path.routeCornerRadius > 0.22),
     'remaining gutter routes use a larger safe corner radius where spacing permits');
+  assert.ok(Math.max(...layout.parentChildPaths.filter(path => path.routeType === 'nested-prefix-gutter')
+    .map(largestGradualTurnSweep)) > 1.0,
+    'the exact rendered polyline contains multi-segment rounded turns instead of square bus corners');
   assert.ok(layout.routeBounds.left < Math.min(...layout.worlds.map(world => world.x)));
   assert.ok(layout.routeBounds.right > Math.max(...layout.worlds.map(world => world.x)));
 });

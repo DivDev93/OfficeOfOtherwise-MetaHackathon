@@ -423,7 +423,7 @@ function roundRouteCorners(points, radius = 0.16, samplesPerCorner = 3) {
     const previous = points[index - 1], corner = points[index], next = points[index + 1];
     const beforeLength = Math.hypot(corner.x - previous.x, corner.y - previous.y);
     const afterLength = Math.hypot(next.x - corner.x, next.y - corner.y);
-    const trim = Math.min(radius, beforeLength * 0.3, afterLength * 0.3);
+    const trim = Math.min(radius, beforeLength * 0.45, afterLength * 0.45);
     if (trim < 1e-4) { result.push(corner); continue; }
     const entry = { x: corner.x + (previous.x - corner.x) * trim / beforeLength,
       y: corner.y + (previous.y - corner.y) * trim / beforeLength };
