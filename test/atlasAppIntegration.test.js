@@ -94,7 +94,7 @@ test('small phones keep Surface usable, zoom to Orbit on first zoom-out, and gat
   assert.match(html, /id="atlas-other-questions"[^>]*aria-pressed="false"[^>]*hidden/);
   assert.doesNotMatch(app, /if \(isAtlasPhone\(\)\) controller\.scene\?\.setZoom/ , 'phones still start at Surface');
   assert.match(app, /\$\('focus-atlas'\)\?\.addEventListener\('click', \(\) => \{ setAtlasFocused\(true\); atlasController\?\.scene\?\.setZoom\?\.\(0\.78\)/, 'Focus atlas opens at Orbit');
-  assert.match(app, /zoomOut\?\.addEventListener\('click', event => \{\s*if \(!isAtlasPhone\(\) \|\| atlasController\?\.scene\?\.getZoom\?\.\(\) >= 0\.22\) return;[\s\S]*?setZoom\?\.\(0\.68\);\s*\}, true\)/, 'the first small-phone zoom-out targets Orbit');
+  assert.match(app, /getZoomOutTarget:zoom => isAtlasPhone\(\) && zoom < 0\.22 \? 0\.68 : null/, 'the first small-phone zoom-out targets Orbit');
   assert.match(app, /function isAtlasPhone\(\) \{ return window\.matchMedia\?\.\('\(max-width: 430px\)'\)\.matches === true; \}/);
   assert.match(app, /worlds\.filter\(world => String\(world\.questionId\) === atlasActiveQuestionId\)/, 'the collapsed phone Atlas contains the active question');
   assert.match(app, /const atlasOnlyView = isAtlasPhone\(\) && atlasController\?\.scene\?\.getLevel\?\.\(\) === 'atlas'/, 'question filtering is disabled in Surface, Lift, and Orbit');
@@ -104,6 +104,8 @@ test('small phones keep Surface usable, zoom to Orbit on first zoom-out, and gat
   assert.match(css, /@media\(max-width:430px\)[\s\S]*\.atlas-other-questions-toggle\{position:absolute/);
   assert.match(css, /\.map-panel\{[^}]*pointer-events:none/);
   assert.match(css, /\.atlas-other-questions-toggle\{[^}]*pointer-events:auto/, 'the toggle opts back into hit testing inside the noninteractive map panel');
+  assert.match(css, /body\.has-story \.atlas-toolbar\{z-index:11\}/, 'phone zoom buttons stack above the story rail');
+  assert.match(css, /\.atlas-other-questions-toggle\{position:absolute;z-index:11;/, 'the question toggle stacks above the story rail too');
   assert.match(css, /\.map-panel>#atlas-scene\{inset:0;width:100%;\}/, 'the active Atlas remains full width on phones');
 });
 

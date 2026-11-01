@@ -224,6 +224,7 @@ test('toolbar has real labelled controls, preview never enters, and only explici
   const api = await createAtlasController({
     container: host, toolbarContainer: toolbar, renderer: scene, document: doc,
     graph: { mapNodes: [root, world], rootManifest: { id: 'run-1', divergence: root.divergence }, currentRunId: 'run-1', selectedBranchId: 'event-1' },
+    getZoomOutTarget: zoom => zoom < 0.22 ? 0.68 : null,
     onEnter() { enterCount++; }, onAttachmentIntent(value) { attachment = value; },
   });
   assert.equal(scene.graph.worlds.find(item => item.id === world.id).id, world.id);
@@ -239,9 +240,11 @@ test('toolbar has real labelled controls, preview never enters, and only explici
   const zoomIn = byLabel(toolbar, 'Zoom in'), zoomOut = byLabel(toolbar, 'Zoom out');
   assert.equal(zoomIn.disabled, true, 'zoom in is disabled at surface');
   zoomOut.dispatch('click');
-  assert.equal(scene.zoom, .08, 'minus moves out toward the atlas');
+  assert.equal(scene.zoom, .68, 'the configured first zoom-out target reaches Orbit');
   zoomIn.dispatch('click');
-  assert.equal(scene.zoom, 0, 'plus moves in toward the surface');
+  assert.equal(Number(scene.zoom.toFixed(2)), .6, 'plus moves one step back toward Surface');
+  zoomOut.dispatch('click');
+  assert.equal(Number(scene.zoom.toFixed(2)), .68, 'later zoom-out returns by its normal increment');
   scene.zoom = 1; zoomOut.dispatch('click');
   assert.equal(scene.zoom, 1, 'zoom out is disabled at the atlas end');
   assert.equal(zoomOut.disabled, true);

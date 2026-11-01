@@ -233,6 +233,7 @@ export async function createAtlasController({
   currentRunId = null, selectedBranchId = null, currentWorldId = null,
   onPreview = () => {}, onEnter = () => {}, onQuestionPreview = () => {}, onQuestionEnter = () => {}, onMetrics = () => {}, onLevelChange = () => {},
   onAttachmentIntent = () => {}, onViewOptionsChange = () => {},
+  getZoomOutTarget = () => null,
   visitedStorage = undefined,
   document: documentObject = container?.ownerDocument, window: windowObject = documentObject?.defaultView,
   reducedMotion = windowObject?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false,
@@ -362,7 +363,11 @@ export async function createAtlasController({
   scene.setGhostTrail?.(false);
   const syncZoom = value => { const zoom = Math.max(0, Math.min(1, Number(value) || 0)); updateZoomControls(zoom); scene.setZoom?.(zoom); };
   updateZoomControls(Number(scene.getZoom?.()) || 0);
-  zoomOut.addEventListener('click', () => syncZoom((Number(scene.getZoom?.()) || 0) + 0.08));
+  zoomOut.addEventListener('click', () => {
+    const currentZoom = Number(scene.getZoom?.()) || 0;
+    const targetZoom = getZoomOutTarget(currentZoom);
+    syncZoom(Number.isFinite(targetZoom) ? targetZoom : currentZoom + 0.08);
+  });
   zoomIn.addEventListener('click', () => syncZoom((Number(scene.getZoom?.()) || 0) - 0.08));
   zoomInput.addEventListener('input', () => syncZoom(Number(zoomInput.value) / 100));
   surface.addEventListener('input', () => { const value = Math.max(0, Math.min(7, Number(surface.value) | 0)); surface.value = String(value); surface.setAttribute('aria-valuetext', `${value} labelled pins`); scene.setSurfaceLabelLevel?.(value); });

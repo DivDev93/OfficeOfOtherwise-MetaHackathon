@@ -572,6 +572,7 @@ function initializeAtlas() {
     container, toolbarContainer:toolbar,
     graph:{ mapNodes:atlasNodes, rootManifest:currentManifest, currentRunId, selectedBranchId },
     reducedMotion:reducedMotion.matches,
+    getZoomOutTarget:zoom => isAtlasPhone() && zoom < 0.22 ? 0.68 : null,
     onPreview:(world, anchor) => showAtlasPreview(world, anchor),
     onQuestionPreview:(question, anchor) => showAtlasPreview(question ? {
       role:'root-question', title:question.question || question.title || 'Saved question',
@@ -631,12 +632,6 @@ function compactAtlasToolbar(toolbar) {
   const controls = [...toolbar.children];
   if (controls.length < 4) return;
   const quick = document.createElement('div'); quick.className = 'atlas-quick-controls'; quick.setAttribute('aria-label', 'Quick Atlas controls');
-  const zoomOut = controls.find(control => control.getAttribute('aria-label') === 'Zoom out');
-  zoomOut?.addEventListener('click', event => {
-    if (!isAtlasPhone() || atlasController?.scene?.getZoom?.() >= 0.22) return;
-    event.preventDefault(); event.stopImmediatePropagation();
-    atlasController?.scene?.setZoom?.(0.68);
-  }, true);
   const options = document.createElement('details'); options.className = 'atlas-view-options';
   const summary = document.createElement('summary'); summary.textContent = 'View options';
   const panel = document.createElement('div'); panel.className = 'atlas-view-options-panel';

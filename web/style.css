@@ -567,7 +567,8 @@ body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{dis
 }
 @media(max-width:430px){
   .map-panel>#atlas-scene{inset:0;width:100%;}
-  .atlas-other-questions-toggle{position:absolute;z-index:6;top:169px;left:50%;transform:translateX(-50%);min-height:38px;padding:7px 13px;border:1px solid rgba(236,228,212,.22);border-radius:999px;background:rgba(8,6,7,.92);box-shadow:0 8px 22px #0006;color:var(--parchment);font:600 11px/1 var(--sans);letter-spacing:.03em;cursor:pointer;pointer-events:auto}
+  body.has-story .atlas-toolbar{z-index:11}
+  .atlas-other-questions-toggle{position:absolute;z-index:11;top:169px;left:50%;transform:translateX(-50%);min-height:38px;padding:7px 13px;border:1px solid rgba(236,228,212,.22);border-radius:999px;background:rgba(8,6,7,.92);box-shadow:0 8px 22px #0006;color:var(--parchment);font:600 11px/1 var(--sans);letter-spacing:.03em;cursor:pointer;pointer-events:auto}
   .atlas-other-questions-toggle[aria-pressed="true"]{border-color:var(--gold);color:#ffe4a8;background:rgba(35,27,18,.96)}
   .atlas-other-questions-toggle:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
   .atlas-other-questions-toggle[hidden]{display:none!important}
