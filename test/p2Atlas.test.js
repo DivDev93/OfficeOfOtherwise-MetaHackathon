@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  ATLAS_REAL_SPHERE_LIMIT, AXIS_ANIMATION_MS, AXIS_MODES, ATLAS_TIME_SCALE_LABEL, FUTURE_EXTENSION_WIDTH, PRESENT_DAY_REFERENCE,
+  ATLAS_REAL_SPHERE_LIMIT, AXIS_ANIMATION_MS, AXIS_MODES, ATLAS_TIME_SCALE_LABEL, FUTURE_EXTENSION_WIDTH, PRESENT_DAY_REFERENCE, UNDATED_LANE_GAP,
   atlasLOD, axisTransitionProgress, buildAtlasTimeline, formatHistoricalYear,
   focusContextTimeX, interpolateAtlasPoint, layoutLogTimeTicks, logDistanceX, planQuestionRootConnections, routeAtlasEdgePaths,
   questionStemPathKey, sampleAtlasEdgePath, transformAtlasEdgeShape, worldDistanceMap,
@@ -262,6 +262,52 @@ test('future events extend monotonically beyond the fixed 2026 trunk end in a bo
   assert.equal(timeline.positions.get('future-2100').x, x2100);
   assert.deepEqual(timeline.futureExtension, { fromX: 3.8, toX: 3.8 + FUTURE_EXTENSION_WIDTH, latestYear: 2100, label: 'FUTURE · 2100 →' });
   assert.ok(timeline.visibleTicks.every(tick => tick.x <= timeline.trunk.right), 'calendar tick labels remain on the history trunk, away from future branch space');
+});
+
+test('undated worlds and all-undated questions use a finite lane outside calendar time', () => {
+  const graph = {
+    worlds: [
+      { id:'dated-root', parentId:null, questionId:'active', year:1800 },
+      { id:'dated-current', parentId:'dated-root', questionId:'active', year:1950 },
+      { id:'unknown-root', parentId:null, questionId:'unknown', title:'Unknown root', year:null },
+      { id:'unknown-child', parentId:'unknown-root', questionId:'unknown', title:'Year zero child', year:0 },
+      { id:'invalid-root', parentId:null, questionId:'unknown', title:'Invalid year root', year:'not a year' },
+    ],
+    questions: [{ id:'active', divergenceYear:1800 }, { id:'unknown', question:'An undated possibility' }],
+  };
+  const folded = buildAtlasTimeline(graph, 'dated-current', 'history-distance', { frameAspect:1.6 });
+  const laneX = folded.undatedLane?.x;
+  assert.ok(Number.isFinite(laneX));
+  assert.ok(laneX < folded.trunk.left, 'the undated lane sits outside the dated trunk');
+  assert.ok(Math.abs(folded.trunk.left - laneX - UNDATED_LANE_GAP * folded.horizontalScale) < 1e-9);
+  for (const id of ['unknown-root', 'unknown-child', 'invalid-root']) assert.equal(folded.positions.get(id).x, laneX);
+  const undatedBranch = folded.questionBranches.find(branch => branch.questionId === 'unknown');
+  assert.equal(undatedBranch.divergenceYear, null);
+  assert.equal(undatedBranch.x, laneX);
+  const undatedChip = folded.chips.find(chip => chip.questionId === 'unknown');
+  assert.equal(undatedChip.x, laneX);
+  assert.ok(folded.questionStemPaths.some(path => path.foldedChip && path.questionId === 'unknown'));
+
+  const foldedMixed = buildAtlasTimeline({
+    worlds: [
+      { id:'active', parentId:null, questionId:'active', year:1900 },
+      { id:'folded-dated', parentId:null, questionId:'folded-mixed', year:1500 },
+      { id:'folded-undated', parentId:'folded-dated', questionId:'folded-mixed', year:null },
+    ],
+    questions: [{ id:'active', divergenceYear:1900 }, { id:'folded-mixed' }],
+  }, 'active');
+  assert.equal(foldedMixed.undatedLane, null,
+    'an undated record hidden inside a dated folded group does not advertise an empty lane');
+  assert.ok(foldedMixed.chips.some(chip => chip.questionId === 'folded-mixed' && chip.divergenceYear === 1500));
+
+  const activeUndated = buildAtlasTimeline(graph, 'unknown-child', 'history-distance', { frameAspect:1.6 });
+  const paths = [...activeUndated.parentChildPaths, ...activeUndated.questionRootPaths, ...activeUndated.questionStemPaths];
+  assert.ok(paths.length > 0);
+  assert.ok(activeUndated.worlds.every(world => Number.isFinite(world.x) && Number.isFinite(world.y)));
+  assert.ok(paths.every(path => path.points.every(point => Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z))));
+  assert.ok(Object.values(activeUndated.routeBounds).every(Number.isFinite));
+  assert.ok(activeUndated.visibleTicks.every(tick => Number.isFinite(tick.x) && !/undated/i.test(tick.label)),
+    'undated records never become calendar tick marks');
 });
 
 test('log tick labels keep a minimum projected gap and retain the present label', () => {

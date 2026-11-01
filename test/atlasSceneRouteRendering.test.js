@@ -22,6 +22,27 @@ test('Atlas renders exact routed corners and preserves them through axis changes
     'rendered line segments follow the exact route vertex count');
 });
 
+test('Atlas P2 labels the finite non-temporal lane only when undated records exist', () => {
+  assert.match(p2Renderer, /const undatedLabel = new THREE\.Sprite/);
+  assert.match(p2Renderer, /const undatedText = layout\.undatedLane\?\.label \|\| 'UNDATED · NO TIME POSITION'/);
+  assert.match(p2Renderer, /undatedLabel\.position\.set\(layout\.undatedLane\?\.x \?\? layout\.trunk\.left/);
+  assert.match(p2Renderer, /undatedLabel\.material\.opacity = layout\.undatedLane \? alpha : 0/);
+  assert.match(p2Renderer, /\[presentLabel, scaleLabel, axisLabel, undatedLabel, \.\.\.questionSprites/,
+    'the lane label is screen-space placed with the other Atlas labels');
+  assert.match(scene, /if \(atlasTimeline\?\.undatedLane\) \{[\s\S]*id:'axis:undated',[\s\S]*text:mobileLabels \? 'UNDATED' : atlasTimeline\.undatedLane\.label/,
+    'the visible lane caption is emitted through the scene screen-label overlay');
+  assert.match(scene, /mobileUndatedShelfY = Math\.min\(safeBounds\.bottom - 12,[\s\S]*topChromeBottoms\.length \? Math\.max\(\.\.\.topChromeBottoms\)[\s\S]*x:safeBounds\.left \+ 46/,
+    'the compact mobile caption occupies a safe shelf below top controls');
+  assert.match(scene, /candidate\.id === currentId\) return \{ \.\.\.candidate, priority:Math\.max\(candidate\.priority \|\| 0, 124\) \};[\s\S]*candidate\.id === undatedLineageWorldId[\s\S]*x:safeBounds\.right - width \/ 2 - 2, y:mobileUndatedShelfY, width, priority:122/,
+    'the undated ancestor gets the other safe shelf slot while selected-world labels keep priority');
+  assert.match(scene, /!candidates\.some\(candidate => candidate\.id === undatedLineageWorldId\)[\s\S]*const entry = undatedLineageEntry[\s\S]*candidates\.push\(\{ id:undatedLineageWorldId/,
+    'the nearest undated ancestor gets a label candidate even when its projected candidate was omitted');
+  assert.match(scene, /edgeMarker\(undatedLineageTarget, \{[\s\S]*left:placement\.x, right:placement\.x, top:placement\.y, bottom:placement\.y,[\s\S]*placement\.text = arrow/,
+    'the mobile ancestor arrow is recalculated from the final shelf slot toward its projected node');
+  assert.match(scene, /object\.isSprite && object\.userData\?\.labelText != null\) object\.material\.opacity = 0/,
+    'the overlay candidate remains necessary because legacy P2 text sprites are intentionally hidden');
+});
+
 test('Atlas route bounds and edge presentation remain complete', () => {
   assert.match(scene, /includeRouteShapeBounds\(transformAtlasEdgeShape\(path\.from, path\.to, path\.routeShape\)/,
     'camera bounds include exact current routed corners');

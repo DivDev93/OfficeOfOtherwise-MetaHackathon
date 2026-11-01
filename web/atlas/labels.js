@@ -3,9 +3,10 @@ const labelPriority = (candidate, currentId, focusedId) => candidate.id === curr
 export function worldLabelText(world = {}, { yearFirst = false } = {}) {
   const title = String(world.title || 'Untitled possibility').trim();
   const numericYear = Number(world.year);
-  const year = world.year == null ? '' : Number.isFinite(numericYear) && numericYear < 0
-    ? `${Math.abs(numericYear)} BCE` : String(world.year);
-  return year ? (yearFirst ? `${year} · ${title}` : `${title} · ${year}`) : title;
+  const year = Number.isSafeInteger(numericYear) && numericYear !== 0
+    ? numericYear < 0 ? `${Math.abs(numericYear)} BCE` : String(numericYear)
+    : 'Undated';
+  return yearFirst ? `${year} · ${title}` : `${title} · ${year}`;
 }
 
 export function shouldShowWorldLabel(entry, currentId, focusedId) {

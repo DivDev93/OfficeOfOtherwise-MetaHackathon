@@ -90,9 +90,12 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
   scaleLabel.scale.set(2.7, 0.32, 1); group.add(scaleLabel);
   const axisLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture('HISTORY DEPTH'), transparent: true, depthWrite: false, opacity: 0 }));
   axisLabel.scale.set(1.75, 0.28, 1); group.add(axisLabel);
+  const undatedLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture('UNDATED · NO TIME POSITION'), transparent: true, depthWrite: false, opacity: 0 }));
+  undatedLabel.scale.set(1.8, 0.25, 1); group.add(undatedLabel);
   setLabelPixels(presentLabel, 190, 30, 90);
   setLabelPixels(scaleLabel, 280, 28, 35);
   setLabelPixels(axisLabel, 210, 28, 80);
+  setLabelPixels(undatedLabel, 190, 24, 50);
   let tickSprites = [], chipSprites = [], questionSprites = [], layout = null, axisMode = 'history-distance';
   let questionBranchOpacity = 1, currentOpacity = 0;
   let disposed = false;
@@ -162,6 +165,10 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     if (axisLabel.userData.labelText !== axisText) replaceLabel(axisLabel, axisText, PARCHMENT, { x: 1.2, y: 0.2 });
     axisLabel.position.set(layout.trunk.left - 0.75, 1.5, 0);
     axisLabel.material.opacity = alpha;
+    const undatedText = layout.undatedLane?.label || 'UNDATED · NO TIME POSITION';
+    if (undatedLabel.userData.labelText !== undatedText) replaceLabel(undatedLabel, undatedText, PARCHMENT, { x: 1.8, y: 0.25 });
+    undatedLabel.position.set(layout.undatedLane?.x ?? layout.trunk.left, layout.trunk.y + 0.34, 0.05);
+    undatedLabel.material.opacity = layout.undatedLane ? alpha : 0;
 
     setLinePositions(trunk, [layout.trunk.left, layout.trunk.y, -0.1, layout.trunk.right, layout.trunk.y, -0.1]);
     const focus = layout.focusContext;
@@ -277,7 +284,7 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
   function layoutLabels(camera, viewport, reservedRects = []) {
     if (disposed || !camera || !viewport?.width || !viewport?.height) return;
     camera.updateMatrixWorld(true); group.updateMatrixWorld(true);
-    const labels = [presentLabel, scaleLabel, axisLabel, ...questionSprites, ...tickSprites, ...chipSprites]
+    const labels = [presentLabel, scaleLabel, axisLabel, undatedLabel, ...questionSprites, ...tickSprites, ...chipSprites]
       .filter(sprite => sprite.visible && sprite.material.opacity > 0.04)
       .sort((a, b) => (b.userData.labelPriority || 0) - (a.userData.labelPriority || 0)
         || String(a.userData.labelText || '').localeCompare(String(b.userData.labelText || '')));

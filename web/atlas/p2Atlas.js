@@ -11,6 +11,7 @@ export const REAL_SPHERE_STEP_LIMIT = 2;
 export const ATLAS_REAL_SPHERE_LIMIT = 24;
 export const ATLAS_TIME_SCALE_LABEL = 'Log distance back from present (2026)';
 export const FUTURE_EXTENSION_WIDTH = 1;
+export const UNDATED_LANE_GAP = 1.25;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const idOf = world => world?.id == null ? null : String(world.id);
@@ -655,7 +656,11 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
   const baseYearToX = year => astronomicalYear(year) > astronomicalYear(presentYear)
     ? logDistanceX(year, { presentYear, earliestYear, latestYear, left, right })
     : useFocusContext ? focusContextTimeX(year, timeOptions) : logDistanceX(year, { presentYear, earliestYear, latestYear, left, right });
-  const yearToX = year => scaleX(baseYearToX(year));
+  const undatedX = layoutLeft - UNDATED_LANE_GAP * horizontalScale;
+  const yearToX = year => {
+    const x = baseYearToX(year);
+    return Number.isFinite(x) ? scaleX(x) : undatedX;
+  };
   const futureExtension = latestYear > presentYear ? {
     fromX: layoutRight,
     toX: layoutRight + FUTURE_EXTENSION_WIDTH * horizontalScale,
@@ -687,8 +692,9 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
   const questionBranches = qs.map(questionId => {
     const members = worlds.filter(world => String(world.questionId ?? '') === questionId);
     const question = byQuestion.get(questionId);
-    const divergenceYear = safeYear(question?.divergenceYear) ?? (members.length ? Math.min(...members.map(world => safeYear(world.year)).filter(year => year != null)) : null);
-    const x = divergenceYear == null ? right : yearToX(divergenceYear);
+    const memberYears = members.map(world => safeYear(world.year)).filter(year => year != null);
+    const divergenceYear = safeYear(question?.divergenceYear) ?? (memberYears.length ? Math.min(...memberYears) : null);
+    const x = divergenceYear == null ? undatedX : yearToX(divergenceYear);
     const questionWorlds = visibleWorlds.filter(world => world.questionId === questionId);
     const questionRows = questionWorlds.map(world => world.y);
     const roots = questionWorlds.filter(world => world.world.parentId == null);
@@ -717,8 +723,8 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
     };
   });
   const chipPlacements = [];
-  const chips = lod.chips.map((chip, index) => {
-    const x = chip.divergenceYear == null ? layoutLeft + index * 0.9 * horizontalScale : yearToX(chip.divergenceYear);
+  const chips = lod.chips.map(chip => {
+    const x = chip.divergenceYear == null ? undatedX : yearToX(chip.divergenceYear);
     let stack = 0;
     const width = Math.min(2.2, Math.max(0.82, chip.label.length * 0.035));
     while (chipPlacements.some(other => Math.abs(other.x - x) < (other.width + width) / 2 + 0.12 && other.stack === stack)) stack++;
@@ -785,6 +791,8 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
     left: Math.min(...routePoints.map(point => point.x)), right: Math.max(...routePoints.map(point => point.x)),
     bottom: Math.min(...routePoints.map(point => point.y)), top: Math.max(...routePoints.map(point => point.y)),
   } : null;
+  const hasVisibleUndatedWorld = visibleWorlds.some(world => astronomicalYear(world.world.year) == null);
+  const hasVisibleUndatedChip = chips.some(chip => chip.divergenceYear == null);
   const questionAttachments = questionBranches.filter(branch => branch.attachment).map(branch => ({
     questionId: branch.questionId, ...branch.attachment, label: branch.label, active: branch.active,
   }));
@@ -817,6 +825,8 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
         + (right - left) * (1 - (focusStartYear > earliestYear ? 0.22 : 0) - (focusEndYear < presentYear ? 0.13 : 0))) } : null,
     frameAspect: Number.isFinite(aspect) && aspect > 0 ? aspect : null,
     horizontalScale,
+    undatedLane: hasVisibleUndatedWorld || hasVisibleUndatedChip
+      ? { x:undatedX, label:'UNDATED · NO TIME POSITION' } : null,
     treeSpan,
     trunk: { left: layoutLeft, right: layoutRight, y: 0 },
     futureExtension,

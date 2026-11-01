@@ -5,11 +5,13 @@ import { createWorldLabelCandidates, edgeMarker, placeScreenLabels, projectedSph
 test('offscreen lineage has a directional marker and visible children can be labelled', () => {
   const bounds = { left: 0, right: 300, top: 0, bottom: 200 };
   assert.match(edgeMarker({ x: 130, y: -12 }, bounds, 'A long ancestor'), /^↑ /);
+  assert.match(edgeMarker({ x: 130, y: 250 }, { left:250, right:250, top:130, bottom:130 }, 'Unknown root · Undated'), /^↙ /,
+    'a shelf marker points down-left when its node is below and left of the placed label');
   const entries = [{ id: 'ancestor', lineage: true, world: { title: 'Ancestor' } }, { id: 'child', world: { title: 'Child' } }];
   const labels = createWorldLabelCandidates(entries, { currentId: 'current', bounds, include: e => e.id === 'child', project: e => ({ x: 100, y: e.id === 'ancestor' ? -5 : 100, visible: true }), measure: () => ({ width: 80, height: 18 }) });
   assert.match(labels[0].text, /^↑ /);
-  assert.equal(labels[0].fullText, 'Ancestor');
-  assert.equal(labels[1].text, 'Child');
+  assert.equal(labels[0].fullText, 'Ancestor · Undated');
+  assert.equal(labels[1].text, 'Child · Undated');
   assert.ok(labels[1].priority > labels[0].priority, 'visible Orbit children take precedence over less immediate lineage labels');
 });
 
@@ -173,11 +175,13 @@ test('mobile edge labels route around projected node hit areas when enough slots
   }
 });
 
-test('world label text is concise and names the year when present', () => {
+test('world label text names valid years and clearly marks invalid or missing years as undated', () => {
   assert.equal(worldLabelText({ title: 'Green Sahara', year: 2100 }), 'Green Sahara · 2100');
   assert.equal(worldLabelText({ title: 'Green Sahara', year: -2800 }), 'Green Sahara · 2800 BCE');
   assert.equal(worldLabelText({ title: 'Sailboats Cross Megalake Chad', year: -2800 }, { yearFirst: true }), '2800 BCE · Sailboats Cross Megalake Chad');
-  assert.equal(worldLabelText({ title: 'Present Earth' }), 'Present Earth');
+  assert.equal(worldLabelText({ title: 'Unknown event' }), 'Unknown event · Undated');
+  assert.equal(worldLabelText({ title: 'Year zero event', year: 0 }), 'Year zero event · Undated');
+  assert.equal(worldLabelText({ title: 'Invalid event', year: 'unknown' }), 'Invalid event · Undated');
 });
 
 test('projected sphere bounds use perspective size for large globe collision regions', () => {
@@ -246,4 +250,36 @@ test('390x844 labels stay inside the mobile safe viewport above a bottom sheet a
   assert.ok(![bottomSheet, compactControls].some(rect =>
     Math.abs(rect.x - label.x) < (rect.width + label.width) / 2
     && Math.abs(rect.y - label.y) < (rect.height + label.height) / 2));
+});
+
+test('mobile undated caption and undated ancestor label remain visible in clear non-overlapping slots', () => {
+  const safe = { left:10, top:8, right:365, bottom:620 };
+  const controls = [{ x:187.5, y:50, width:355, height:80 }];
+  const nodes = [
+    { x:268, y:272, width:44, height:44 },
+    { x:188, y:408, width:56, height:56 },
+  ];
+  const placed = placeScreenLabels([
+    { id:'axis:undated', text:'UNDATED', fullText:'UNDATED · NO TIME POSITION', x:56, y:132, width:88, height:18, priority:126 },
+    { id:'dated-current', text:'1900 · Dated current world', x:188, y:408, width:220, height:18, priority:124 },
+    { id:'undated-ancestor', text:'Undated · Unknown root', x:268, y:132, width:190, height:18, priority:122 },
+    { id:'axis:vertical', text:'HISTORY DEPTH', x:88, y:34, width:116, height:18, priority:110 },
+  ], safe, nodes, controls);
+  const caption = placed.find(item => item.id === 'axis:undated');
+  const current = placed.find(item => item.id === 'dated-current');
+  const ancestor = placed.find(item => item.id === 'undated-ancestor');
+  assert.ok(caption, 'the lane caption remains visible in the mobile safe viewport');
+  assert.ok(current, 'the selected dated world label remains visible beside the lane caption');
+  assert.ok(ancestor, 'the undated lineage world label remains available');
+  for (const item of [caption, current, ancestor]) {
+    assert.ok(item.x - item.width / 2 >= safe.left && item.x + item.width / 2 <= safe.right);
+    assert.ok(item.y - item.height / 2 >= safe.top && item.y + item.height / 2 <= safe.bottom);
+    assert.ok(![...nodes, ...controls].some(other =>
+      Math.abs(other.x - item.x) < (other.width + item.width) / 2 + 3
+      && Math.abs(other.y - item.y) < (other.height + item.height) / 2 + 3));
+  }
+  assert.ok(!(Math.abs(caption.x - ancestor.x) < (caption.width + ancestor.width) / 2 + 3
+    && Math.abs(caption.y - ancestor.y) < (caption.height + ancestor.height) / 2 + 3));
+  assert.ok(!(Math.abs(caption.x - current.x) < (caption.width + current.width) / 2 + 3
+    && Math.abs(caption.y - current.y) < (caption.height + current.height) / 2 + 3));
 });

@@ -7,7 +7,7 @@ import { containsFanRegion, createFanHitRegion, fanMemberOffsets } from './scree
 import { createAtlasP2Renderer } from './p2Renderer.js';
 import { interpolateAttachedAtlasEdgeRoute } from './routeMorph.js';
 import { dragModeForZoom, panDeltaForDrag, zoomFromPinch, zoomFromWheel } from './interaction.js';
-import { createWorldLabelCandidates, placeScreenLabels, projectedSphereDiameterPixels, shortQuestionTitle, worldLabelText } from './labels.js';
+import { createWorldLabelCandidates, edgeMarker, placeScreenLabels, projectedSphereDiameterPixels, shortQuestionTitle, worldLabelText } from './labels.js';
 import {
   GHOST_TRAIL_DEFAULT, arrivalParentWorldId, cutTravelOpacity, interpolateTravelPoint, preservesTravelSource, smoothTravelProgress, travelZoomAt,
   lineageTravelPath, sampleLineagePath, travelDuration,
@@ -1176,6 +1176,8 @@ export function createAtlasScene(container, {
       ? Math.min(safeBounds.bottom - 24, Math.max(safeBounds.top, ...topChromeBottoms) + 8)
       : safeBounds.top;
     const lineageBounds = { ...safeBounds, top: lineageTop };
+    const mobileUndatedShelfY = Math.min(safeBounds.bottom - 12, Math.max(safeBounds.top + 22,
+      (topChromeBottoms.length ? Math.max(...topChromeBottoms) : safeBounds.top) + 20));
     const projectPoint = point => {
       const projected = point.clone().project(camera);
       return {
@@ -1207,7 +1209,40 @@ export function createAtlasScene(container, {
       reservedRects,
       include: entry => state.orbit > 0.3 && state.atlas < 0.6 && entry.orbitVisible && String(entry.parentId) === String(currentId),
     });
-    const candidates = [...worldCandidates];
+    const undatedWorldIds = new Set(entries.filter(entry => {
+      const year = Number(entry.world?.year);
+      return !Number.isSafeInteger(year) || year === 0;
+    }).map(entry => entry.id));
+    const undatedLineageWorldId = entries.filter(entry => undatedWorldIds.has(entry.id) && entry.lineage && entry.id !== currentId)
+      .sort((a, b) => b.depth - a.depth || a.id.localeCompare(b.id))[0]?.id;
+    const undatedLineageEntry = entries.find(entry => entry.id === undatedLineageWorldId);
+    const undatedLineageTarget = undatedLineageEntry
+      ? projectPoint(worldPosition(undatedLineageEntry, state, timestamp, markerRadius).applyMatrix4(atlasGroup.matrixWorld))
+      : null;
+    const candidates = worldCandidates.map(candidate => {
+      if (state.atlas <= 0.5) return candidate;
+      if (candidate.id === currentId) return { ...candidate, priority:Math.max(candidate.priority || 0, 124) };
+      if (mobileLabels && candidate.id === undatedLineageWorldId) {
+        const width = Math.min(220, safeBounds.right - safeBounds.left, candidate.width || 0);
+        return { ...candidate, text:candidate.fullText || candidate.text,
+          directionTarget:undatedLineageTarget,
+          x:safeBounds.right - width / 2 - 2, y:mobileUndatedShelfY, width, priority:122 };
+      }
+      if (undatedWorldIds.has(candidate.id)) return { ...candidate, priority:Math.max(candidate.priority || 0, 116) };
+      return candidate;
+    });
+    if (mobileLabels && state.atlas > 0.5 && undatedLineageWorldId
+      && !candidates.some(candidate => candidate.id === undatedLineageWorldId)) {
+      const entry = undatedLineageEntry;
+      if (entry) {
+        const fullText = worldLabelText(entry.world, { yearFirst:true });
+        const width = Math.min(220, safeBounds.right - safeBounds.left, Math.max(52, fullText.length * 7.5 + 8));
+        candidates.push({ id:undatedLineageWorldId, text:fullText, fullText,
+          directionTarget:undatedLineageTarget,
+          x:safeBounds.right - width / 2 - 2, y:mobileUndatedShelfY,
+          width, height:18, priority:122, kind:'world' });
+      }
+    }
     const visibleWorldIds = new Set([...instanceIds, ...lodIds, ...(currentId ? [currentId] : [])]);
     const nodeRects = [];
     for (const id of visibleWorldIds) {
@@ -1273,6 +1308,19 @@ export function createAtlasScene(container, {
       candidates.push({ id: 'axis:vertical', text: verticalTitle, x: safeBounds.left + 78, y: safeBounds.top + axisGutter + 10, width: 116, height: 18, priority: 110, kind: 'axis' });
       const timeAxisPoint = projectPoint(p2Renderer.group.localToWorld(new THREE.Vector3(atlasTimeline?.trunk?.right || 0, (atlasTimeline?.trunk?.y || 0) - 0.5, 0)));
       candidates.push({ id: 'axis:time', text: 'YEAR', x: timeAxisPoint.x, y: timeAxisPoint.y, width: 46, height: 18, priority: 110, kind: 'axis' });
+      if (atlasTimeline?.undatedLane) {
+        const undatedPoint = mobileLabels ? {
+          x:safeBounds.left + 46,
+          y:mobileUndatedShelfY,
+          visible:true,
+        } : projectPoint(p2Renderer.group.localToWorld(new THREE.Vector3(
+          atlasTimeline.undatedLane.x, (atlasTimeline.trunk?.y || 0) + 0.34, 0.05,
+        )));
+        if (undatedPoint.visible) candidates.push({ id:'axis:undated',
+          text:mobileLabels ? 'UNDATED' : atlasTimeline.undatedLane.label,
+          fullText:atlasTimeline.undatedLane.label, ...undatedPoint,
+          width:Math.min(mobileLabels ? 88 : 220, safeBounds.right - safeBounds.left), height:18, priority:126, kind:'axis' });
+      }
     }
     if (state.orbit > 0.04 && orbitQuestionParent.visible
       && String(orbitQuestionParent.userData.questionId) === String(hoveredQuestionId)) {
@@ -1286,6 +1334,16 @@ export function createAtlasScene(container, {
       if (point.visible) candidates.push({ id: 'present-earth', text: 'Present-day Earth · 2026', ...point, width: Math.min(200, safeBounds.right - safeBounds.left), height: 18, priority: 95, kind: 'world' });
     }
     const placements = placeScreenLabels(candidates, safeBounds, nodeRects, reservedRects);
+    if (mobileLabels && undatedLineageTarget) {
+      for (const placement of placements) {
+        if (placement.id !== undatedLineageWorldId) continue;
+        const arrow = edgeMarker(undatedLineageTarget, {
+          left:placement.x, right:placement.x, top:placement.y, bottom:placement.y,
+        }, placement.fullText || placement.text);
+        if (arrow) placement.text = arrow;
+        break;
+      }
+    }
     const activeLabelIds = new Set();
     const candidateLabelIds = new Set(candidates.map(candidate => candidate.id));
     for (const placement of placements) {

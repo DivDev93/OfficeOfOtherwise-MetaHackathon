@@ -10,4 +10,6 @@ At 375px, the Other questions control was checked against saved data: opening it
 
 `transition-90-375.jpg` records the phone view at 90% zoom: the Other questions toggle is reserved as a label obstacle. Parent–child route interpolation was adjusted to reduce mid-transition crossings on the saved fixture, but it does not eliminate all crossings or establish clearance for every question connector.
 
+`undated-1440.jpg` and `undated-375.jpg` show a separate in-memory mixed-date fixture. Undated worlds use a labeled lane outside the calendar trunk; the fixture makes no API calls and does not modify saved stories.
+
 In the recorded local replay at 1440×900, successive 120-pixel wheel inputs reached 10, 19, 29, 38, 48, 57 (Orbit), 67, 76, 86, 95 and 100 (Atlas). The reverse pass reached 90, 81, 71, 62, 57 (Orbit), 47, 38, 28, 19, 9 and 0 (Surface). Both passes left the Orbit stop on the next input.
