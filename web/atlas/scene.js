@@ -13,7 +13,7 @@ import {
 } from './p3Travel.js';
 import {
   ATLAS_REAL_SPHERE_LIMIT, AXIS_ANIMATION_MS, AXIS_MODES, PRESENT_DAY_REFERENCE,
-  axisTransitionProgress, buildAtlasTimeline, interpolateAtlasPoint, planQuestionRootConnections, sampleAtlasEdgePath,
+  axisTransitionProgress, buildAtlasTimeline, interpolateAtlasPoint, sampleAtlasEdgePath, transformAtlasEdgeShape,
 } from './p2Atlas.js';
 import {
   ATLAS_LEVEL_MAX, ORBIT_UNFOLDED_LEVEL, SURFACE_LABEL_LEVEL,
@@ -32,10 +32,49 @@ const PARCHMENT = new THREE.Color('#eadfca');
 const MUTED = new THREE.Color('#65818a');
 const LIT_TINT = new THREE.Color('#ffffff');
 const MAX_SPHERE_INSTANCES = ATLAS_REAL_SPHERE_LIMIT;
-const MAX_GOLD_EDGE_SEGMENTS = 256;
+const INITIAL_GOLD_EDGE_SEGMENTS = 256;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const DIM_UNENTERED = new THREE.Color('#4d6870');
 const LIT_EARTH = new THREE.Color('#e6e0ce');
+
+function routeVertexFractions(points) {
+  if (!Array.isArray(points) || points.length < 2) return [0, 1];
+  const cumulative = [0];
+  for (let index = 1; index < points.length; index++) cumulative.push(cumulative[index - 1]
+    + Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y));
+  const total = cumulative.at(-1) || 1;
+  return cumulative.map(distance => distance / total);
+}
+
+function sampleRouteAtFraction(points, fractions, fraction) {
+  const target = Math.max(0, Math.min(1, fraction));
+  let segment = 1;
+  while (segment < fractions.length - 1 && fractions[segment] < target - 1e-10) segment++;
+  const span = fractions[segment] - fractions[segment - 1] || 1;
+  const t = Math.max(0, Math.min(1, (target - fractions[segment - 1]) / span));
+  const a = points[segment - 1], b = points[segment];
+  return { x:a.x + (b.x - a.x) * t, y:a.y + (b.y - a.y) * t, z:a.z + (b.z - a.z) * t };
+}
+
+function interpolateAtlasRouteShapes(from, to, fromShape, toShape, progress, fromFractionEndpoints, toFractionEndpoints) {
+  const previous = transformAtlasEdgeShape(from, to, fromShape);
+  const next = transformAtlasEdgeShape(from, to, toShape);
+  if (previous.length < 2 || next.length < 2) return next.length >= 2 ? next : previous;
+  const previousBasis = transformAtlasEdgeShape(fromFractionEndpoints?.from || from, fromFractionEndpoints?.to || to, fromShape);
+  const nextBasis = transformAtlasEdgeShape(toFractionEndpoints?.from || from, toFractionEndpoints?.to || to, toShape);
+  const previousFractions = routeVertexFractions(previous), nextFractions = routeVertexFractions(next);
+  const fractions = [...new Set([...routeVertexFractions(previousBasis), ...routeVertexFractions(nextBasis)])]
+    .sort((a, b) => a - b);
+  return fractions.map(fraction => {
+    const a = sampleRouteAtFraction(previous, previousFractions, fraction);
+    const b = sampleRouteAtFraction(next, nextFractions, fraction);
+    return { x:a.x + (b.x - a.x) * progress, y:a.y + (b.y - a.y) * progress, z:a.z + (b.z - a.z) * progress };
+  });
+}
+
+function includeRouteShapeBounds(points, xs, ys) {
+  for (const point of points) { if (Number.isFinite(point.x)) xs.push(point.x); if (Number.isFinite(point.y)) ys.push(point.y); }
+}
 
 /** Map a point in an orthographic globe disk to the local equirectangular Earth texture. */
 export function orthographicEarthTextureUv(x, y) {
@@ -338,13 +377,21 @@ export function createAtlasScene(container, {
   hoverThreads.name = 'Hovered exploration path'; hoverThreads.frustumCulled = false; atlasGroup.add(hoverThreads);
   const lineageThreads = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#d5a85c', transparent: true, opacity: 0.9, depthWrite: false }));
   lineageThreads.name = 'Gold current lineage edges'; lineageThreads.frustumCulled = false; atlasGroup.add(lineageThreads);
-  const goldEdgeMeshes = new THREE.InstancedMesh(
-    new THREE.CylinderGeometry(1, 1, 1, 6, 1, false),
-    new THREE.MeshBasicMaterial({ color: '#d5a85c', transparent: true, opacity: 0.9, depthWrite: false }),
-    MAX_GOLD_EDGE_SEGMENTS,
-  );
+  const goldEdgeGeometry = new THREE.CylinderGeometry(1, 1, 1, 6, 1, false);
+  const goldEdgeMaterial = new THREE.MeshBasicMaterial({ color: '#d5a85c', transparent: true, opacity: 0.9, depthWrite: false });
+  let goldEdgeCapacity = INITIAL_GOLD_EDGE_SEGMENTS;
+  let goldEdgeMeshes = new THREE.InstancedMesh(goldEdgeGeometry, goldEdgeMaterial, goldEdgeCapacity);
   goldEdgeMeshes.name = 'Thick continuous gold lineage ribbons'; goldEdgeMeshes.count = 0;
   goldEdgeMeshes.instanceMatrix.setUsage(THREE.DynamicDrawUsage); goldEdgeMeshes.frustumCulled = false; atlasGroup.add(goldEdgeMeshes);
+  function ensureGoldEdgeCapacity(required) {
+    if (required <= goldEdgeCapacity) return;
+    const previous = goldEdgeMeshes;
+    goldEdgeCapacity = 2 ** Math.ceil(Math.log2(required));
+    goldEdgeMeshes = new THREE.InstancedMesh(goldEdgeGeometry, goldEdgeMaterial, goldEdgeCapacity);
+    goldEdgeMeshes.name = previous.name; goldEdgeMeshes.count = 0;
+    goldEdgeMeshes.instanceMatrix.setUsage(THREE.DynamicDrawUsage); goldEdgeMeshes.frustumCulled = false;
+    atlasGroup.remove(previous); previous.dispose?.(); atlasGroup.add(goldEdgeMeshes);
+  }
   const questionThreads = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineDashedMaterial({ color: '#eadfca', dashSize: 0.09, gapSize: 0.055, transparent: true, opacity: 0.84, depthWrite: false }));
   questionThreads.name = 'Parchment authored question edges'; questionThreads.frustumCulled = false; atlasGroup.add(questionThreads);
 
@@ -454,7 +501,8 @@ export function createAtlasScene(container, {
   }
   function refreshAtlasTimeline() {
     atlasTimeline = buildAtlasTimeline(graphSnapshot(), currentId, axisMode, { expandedQuestionIds: [...expandedQuestionIds], frameAspect: camera.aspect });
-    container.dataset.atlasRouteWarnings = String((atlasTimeline.parentChildPaths || []).filter(path => path.unresolvedCrossings.length || path.unresolvedNodes.length).length);
+    container.dataset.atlasRouteWarnings = String([...(atlasTimeline.parentChildPaths || []), ...(atlasTimeline.questionRootPaths || [])]
+      .filter(path => path.unresolvedCrossings.length || path.unresolvedNodes.length).length);
     const byId = new Map(atlasTimeline.worlds.map(item => [item.id, item]));
     const realSphereIds = new Set(atlasTimeline.realSphereIds);
     const foldedIds = new Set(atlasTimeline.foldedIds);
@@ -565,6 +613,35 @@ export function createAtlasScene(container, {
     for (const chip of atlasTimeline?.chips || []) { xs.push(chip.x); ys.push(chip.y); }
     const routeBounds = atlasTimeline?.routeBounds;
     if (routeBounds) { xs.push(routeBounds.left, routeBounds.right); ys.push(routeBounds.bottom, routeBounds.top); }
+    const paths = atlasTimeline?.parentChildPaths || [];
+    const previousPaths = new Map((axisTransition?.fromTimeline?.parentChildPaths || [])
+      .map(path => [`${path.parentId}\u0000${path.childId}`, path]));
+    for (const path of paths) {
+      const key = `${path.parentId}\u0000${path.childId}`;
+      const prior = previousPaths.get(key);
+      if (path.routeShape?.length > 1) includeRouteShapeBounds(transformAtlasEdgeShape(path.from, path.to, path.routeShape), xs, ys);
+      if (prior?.routeShape?.length > 1) {
+        includeRouteShapeBounds(transformAtlasEdgeShape(prior.from, prior.to, prior.routeShape), xs, ys);
+        if (path.routeShape?.length > 1) {
+          includeRouteShapeBounds(transformAtlasEdgeShape(path.from, path.to, prior.routeShape), xs, ys);
+          includeRouteShapeBounds(transformAtlasEdgeShape(prior.from, prior.to, path.routeShape), xs, ys);
+        }
+      }
+    }
+    const rootPaths = atlasTimeline?.questionRootPaths || [];
+    const previousRootPaths = new Map((axisTransition?.fromTimeline?.questionRootPaths || [])
+      .map(path => [`${path.questionId}\u0000${path.worldId}`, path]));
+    for (const path of rootPaths) {
+      const prior = previousRootPaths.get(`${path.questionId}\u0000${path.worldId}`);
+      if (path.routeShape?.length > 1) includeRouteShapeBounds(transformAtlasEdgeShape(path.from, path.to, path.routeShape), xs, ys);
+      if (prior?.routeShape?.length > 1) {
+        includeRouteShapeBounds(transformAtlasEdgeShape(prior.from, prior.to, prior.routeShape), xs, ys);
+        if (path.routeShape?.length > 1) {
+          includeRouteShapeBounds(transformAtlasEdgeShape(path.from, path.to, prior.routeShape), xs, ys);
+          includeRouteShapeBounds(transformAtlasEdgeShape(prior.from, prior.to, path.routeShape), xs, ys);
+        }
+      }
+    }
     xs.push(atlasTimeline?.trunk?.left ?? -4.6, atlasTimeline?.trunk?.right ?? 3.8, atlasTimeline?.futureExtension?.toX ?? 0);
     ys.push(atlasTimeline?.trunk?.y ?? 0, -0.8);
     const validX = xs.filter(Number.isFinite), validY = ys.filter(Number.isFinite);
@@ -809,6 +886,7 @@ export function createAtlasScene(container, {
     if (announce) onZoomChange(zoom);
     const presentation = atlasPresentationState(zoom, motionReduced);
     const state = presentation.state;
+    const suppressAtlasThreads = Boolean(axisTransition && state.atlas > 0.015);
     document.documentElement.style.setProperty('--atlas-lift', String(state.lift));
     document.documentElement.style.setProperty('--atlas-rail-width', `${320 - 266 * state.lift}px`);
     reducedMotionOpacity = presentation.opacity;
@@ -1198,10 +1276,10 @@ export function createAtlasScene(container, {
       const onSurface = (parent.id === currentId && child.surfaceVisible) || (child.id === currentId && parent.id === arrivalFromId);
       const inOrbit = (parent.id === currentId && child.orbitVisible) || child.id === currentId || (currentParentId != null && parent.id === String(currentParentId) && child.orbitVisible);
       const inAtlas = visibleAtlasIds.has(parent.id) && visibleAtlasIds.has(child.id);
+      const nonAtlasAlpha = (onSurface ? state.surface : 0) + (inOrbit ? state.orbit : 0);
+      const atlasAlpha = suppressAtlasThreads ? 0 : (inAtlas ? state.atlas : 0);
       const alpha = Math.min(1,
-        (onSurface ? state.surface : 0)
-        + (inOrbit ? state.orbit : 0)
-        + (inAtlas ? state.atlas : 0));
+        nonAtlasAlpha + atlasAlpha);
       if (alpha <= 0.015) continue;
       const childQuestion = questionById.get(String(child.world.questionId ?? ''));
       const isQuestionAttachment = String(childQuestion?.attachmentMode || childQuestion?.mode || '') === 'current-world'
@@ -1211,26 +1289,25 @@ export function createAtlasScene(container, {
         : (isQuestionAttachment || child.world.proposed === false || child.world.questionId !== parent.world.questionId || /question|chronos|time.?token/i.test(`${child.world.kind || ''} ${child.world.type || ''} ${child.world.tokenType || ''}`)) ? 'question'
           : 'proposed';
       edgeOpacity[kind] = Math.max(edgeOpacity[kind], alpha);
-      const fromRadius = parent.id === currentId ? surfaceEarthRadius(state) : markerRadius;
-      const from = worldPosition(parent, state, timestamp, fromRadius);
-      const to = worldPosition(child, state, timestamp, markerRadius);
+      const edgeState = suppressAtlasThreads ? { ...state, atlas:0 } : state;
+      const fromRadius = parent.id === currentId ? surfaceEarthRadius(edgeState) : markerRadius;
+      const from = worldPosition(parent, edgeState, timestamp, fromRadius);
+      const to = worldPosition(child, edgeState, timestamp, markerRadius);
       const surfaceFrom = surfacePoint(parent, fromRadius).normalize();
       const surfaceTo = surfacePoint(child, markerRadius).normalize();
       const arrivalEdge = child.id === currentId && parent.id === arrivalFromId;
       const arcPoints = [];
-      const segments = 16;
       const path = atlasTimeline?.parentChildPaths?.find(item => item.parentId === parent.id && item.childId === child.id);
       const previousPath = axisTransition?.fromTimeline?.parentChildPaths?.find(item => item.parentId === parent.id && item.childId === child.id);
       const progress = axisTransition ? axisTransitionProgress(timestamp - axisTransition.startedAt, AXIS_ANIMATION_MS) : 1;
-      const atlasCurve = sampleAtlasEdgePath(from, to, segments, { routeShape: path?.routeShape });
-      if (previousPath?.routeShape && progress < 1) {
-        const oldCurve = sampleAtlasEdgePath(from, to, segments, { routeShape: previousPath.routeShape });
-        for (let index = 0; index < atlasCurve.length; index++) {
-          atlasCurve[index].x = oldCurve[index].x + (atlasCurve[index].x - oldCurve[index].x) * progress;
-          atlasCurve[index].y = oldCurve[index].y + (atlasCurve[index].y - oldCurve[index].y) * progress;
-          atlasCurve[index].z = oldCurve[index].z + (atlasCurve[index].z - oldCurve[index].z) * progress;
-        }
+      let atlasCurve = path?.routeShape?.length > 1
+        ? transformAtlasEdgeShape(from, to, path.routeShape)
+        : sampleAtlasEdgePath(from, to, 16);
+      if (previousPath?.routeShape?.length > 1 && path?.routeShape?.length > 1 && progress < 1) {
+        atlasCurve = interpolateAtlasRouteShapes(from, to, previousPath.routeShape, path.routeShape, progress,
+          { from:previousPath.from, to:previousPath.to }, { from:path.from, to:path.to });
       }
+      const segments = Math.max(1, atlasCurve.length - 1);
       for (let step = 0; step <= segments; step++) {
         const t = step / segments;
         const direction = slerpUnitVector(surfaceFrom, surfaceTo, t);
@@ -1239,7 +1316,7 @@ export function createAtlasScene(container, {
           : new THREE.Vector3(direction.x, direction.y, direction.z).multiplyScalar(surfaceRadius).add(earthMesh.position);
         const straight = from.clone().lerp(to, t);
         arc.lerp(straight, state.lift);
-        arc.lerp(new THREE.Vector3(atlasCurve[step].x, atlasCurve[step].y, atlasCurve[step].z), state.atlas);
+        arc.lerp(new THREE.Vector3(atlasCurve[step].x, atlasCurve[step].y, atlasCurve[step].z), edgeState.atlas);
         arcPoints.push(arc);
       }
       const values = edgePositions[kind];
@@ -1248,9 +1325,8 @@ export function createAtlasScene(container, {
         values.push(a.x, a.y, a.z, b.x, b.y, b.z);
       }
     }
-    const rootConnections = state.atlas > 0.015
-      ? planQuestionRootConnections(worlds, atlasTimeline?.questionBranches || [], lineageIds)
-        .filter(connection => !folded.has(connection.worldId) || connection.color === 'lineage')
+    const rootConnections = state.atlas > 0.015 && !suppressAtlasThreads
+      ? (atlasTimeline?.questionRootPaths || []).filter(connection => !folded.has(connection.worldId) || connection.color === 'lineage')
       : [];
     if (state.orbit > 0.015 && orbitQuestionParentPosition && orbitQuestionParentQuestion) {
       const currentQuestionId = String(current?.world?.questionId ?? '');
@@ -1259,8 +1335,8 @@ export function createAtlasScene(container, {
       for (const root of entries) {
         if (root.parentId != null || String(root.world?.questionId ?? '') !== currentQuestionId || root.folded) continue;
         const rootOrbit = root.orbit || root.atlas;
-        const rootPoint = new THREE.Vector3(rootOrbit.x, rootOrbit.y, rootOrbit.z || 0).multiplyScalar(state.lift)
-          .lerp(atlasPosition(root, timestamp), state.atlas);
+        const rootPoint = new THREE.Vector3(rootOrbit.x, rootOrbit.y, rootOrbit.z || 0).multiplyScalar(state.lift);
+        if (!suppressAtlasThreads) rootPoint.lerp(atlasPosition(root, timestamp), state.atlas);
         edgePositions.question.push(parentPoint.x, parentPoint.y, parentPoint.z, rootPoint.x, rootPoint.y, rootPoint.z);
       }
       edgeOpacity.question = Math.max(edgeOpacity.question, state.orbit);
@@ -1276,10 +1352,24 @@ export function createAtlasScene(container, {
         tokenX = prior.x + (branch.x - prior.x) * progress;
         tokenY = prior.y + (branch.y - prior.y) * progress;
       }
-      const values = edgePositions[connection.color];
+      const from = new THREE.Vector3(tokenX, tokenY, connection.from?.z ?? 0.06);
       const rootPoint = atlasPosition(root, timestamp);
-      values.push(tokenX, tokenY, 0.06, rootPoint.x, rootPoint.y, rootPoint.z);
-      edgeOpacity[connection.color] = Math.max(edgeOpacity[connection.color], state.atlas);
+      const priorConnection = axisTransition?.fromTimeline?.questionRootPaths?.find(item =>
+        item.questionId === connection.questionId && item.worldId === connection.worldId);
+      let route = transformAtlasEdgeShape(from, rootPoint, connection.routeShape);
+      if (priorConnection?.routeShape?.length > 1 && connection.routeShape?.length > 1 && progress < 1) {
+        route = interpolateAtlasRouteShapes(from, rootPoint, priorConnection.routeShape, connection.routeShape, progress,
+          { from:priorConnection.from, to:priorConnection.to }, { from:connection.from, to:connection.to });
+      }
+      const kind = connection.color === 'lineage' ? 'lineage'
+        : hoverPathIds.has(connection.worldId) ? 'hover'
+          : connection.color === 'question' ? 'question' : 'proposed';
+      const values = edgePositions[kind];
+      for (let index = 0; index < route.length - 1; index++) {
+        const a = route[index], b = route[index + 1];
+        values.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      }
+      edgeOpacity[kind] = Math.max(edgeOpacity[kind], state.atlas);
     }
     writePositionBuffer(threads, new Float32Array(edgePositions.proposed));
     writePositionBuffer(hoverThreads, new Float32Array(edgePositions.hover));
@@ -1289,8 +1379,9 @@ export function createAtlasScene(container, {
     camera.getWorldPosition(goldCameraWorldPosition);
     let goldSegmentCount = 0;
     const goldPositions = edgePositions.lineage;
+    ensureGoldEdgeCapacity(Math.ceil(goldPositions.length / 6));
     if (edgeOpacity.lineage > 0.015) {
-      for (let offset = 0; offset + 5 < goldPositions.length && goldSegmentCount < MAX_GOLD_EDGE_SEGMENTS; offset += 6) {
+      for (let offset = 0; offset + 5 < goldPositions.length; offset += 6) {
         goldSegmentStart.fromArray(goldPositions, offset);
         goldSegmentEnd.fromArray(goldPositions, offset + 3);
         goldSegmentDirection.subVectors(goldSegmentEnd, goldSegmentStart);
@@ -1324,6 +1415,7 @@ export function createAtlasScene(container, {
       branchProgress: axisTransition ? axisTransitionProgress(timestamp - axisTransition.startedAt, AXIS_ANIMATION_MS) : 1,
       fromBranches: axisTransition?.fromTimeline.questionBranches,
     });
+    p2Renderer.setQuestionBranchOpacity(suppressAtlasThreads ? 0 : 1);
     p2Renderer.group.traverse(object => {
       if (object.isSprite && object.userData?.labelText != null) object.material.opacity = 0;
     });
@@ -1864,7 +1956,10 @@ export function createAtlasScene(container, {
     }
     if (axisTransition) {
       applyZoom(zoom, false, timestamp);
-      if (timestamp - axisTransition.startedAt >= AXIS_ANIMATION_MS) axisTransition = null;
+      if (timestamp - axisTransition.startedAt >= AXIS_ANIMATION_MS) {
+        axisTransition = null;
+        applyZoom(zoom, false, timestamp);
+      }
     } else if (!travelState) applySurfaceOrientation(1 - atlasPresentationState(zoom, motionReduced).state.lift, timestamp);
     renderer.render(scene, camera);
     const level = stageForZoom(zoom);

@@ -5,7 +5,7 @@ import {
   ATLAS_REAL_SPHERE_LIMIT, AXIS_ANIMATION_MS, AXIS_MODES, ATLAS_TIME_SCALE_LABEL, FUTURE_EXTENSION_WIDTH, PRESENT_DAY_REFERENCE,
   atlasLOD, axisTransitionProgress, buildAtlasTimeline, formatHistoricalYear,
   focusContextTimeX, interpolateAtlasPoint, layoutLogTimeTicks, logDistanceX, planQuestionRootConnections, routeAtlasEdgePaths,
-  sampleAtlasEdgePath, worldDistanceMap,
+  sampleAtlasEdgePath, transformAtlasEdgeShape, worldDistanceMap,
 } from '../web/atlas/p2Atlas.js';
 
 function sampleGraph() {
@@ -50,6 +50,76 @@ function edgeCrossings(paths, { includeIncident = false } = {}) {
   return crossings;
 }
 
+function unexpectedRouteOverlaps(paths) {
+  const overlaps = [];
+  for (let first = 0; first < paths.length; first++) for (let second = first + 1; second < paths.length; second++) {
+    const a = paths[first], b = paths[second];
+    let overlapOutsideParentStem = false;
+    for (let left = 1; left < a.points.length; left++) for (let right = 1; right < b.points.length; right++) {
+      const p = a.points[left - 1], q = a.points[left], r = b.points[right - 1], s = b.points[right];
+      const dx = q.x - p.x, dy = q.y - p.y, ex = s.x - r.x, ey = s.y - r.y;
+      if (Math.abs(dx * ey - dy * ex) > 1e-8 || Math.abs(dx * (r.y - p.y) - dy * (r.x - p.x)) > 1e-8) continue;
+      const useX = Math.abs(dx) >= Math.abs(dy);
+      const firstRange = [useX ? p.x : p.y, useX ? q.x : q.y].sort((x, y) => x - y);
+      const secondRange = [useX ? r.x : r.y, useX ? s.x : s.y].sort((x, y) => x - y);
+      const overlap = Math.min(firstRange[1], secondRange[1]) - Math.max(firstRange[0], secondRange[0]);
+      if (overlap <= 1e-6) continue;
+      const parentY = a.from.y;
+      if (a.parentId !== b.parentId || Math.abs(b.from.y - parentY) > 1e-8
+        || [p, q, r, s].some(point => Math.abs(point.y - parentY) > 1e-6)) overlapOutsideParentStem = true;
+    }
+    if (overlapOutsideParentStem) overlaps.push([`${a.parentId}->${a.childId}`, `${b.parentId}->${b.childId}`]);
+  }
+  return overlaps;
+}
+
+function assertPlanarAtlasRoutes(layout) {
+  const paths = [...layout.parentChildPaths, ...(layout.questionRootPaths || [])];
+  const nodes = [
+    ...layout.worlds.filter(world => !layout.foldedIds.includes(world.id)).map(world => ({ id: world.id, x: world.x, y: world.y })),
+    ...new Map((layout.questionRootPaths || []).map(path => [path.parentId,
+      { id: path.parentId, x: path.from.x, y: path.from.y }])).values(),
+  ];
+  assert.deepEqual(edgeCrossings(paths, { includeIncident: true }), []);
+  assert.deepEqual(unexpectedRouteOverlaps(paths), [], 'only sibling routes may share their parent stem');
+  assert.ok(paths.every(path => path.unresolvedCrossings.length === 0 && path.unresolvedNodes.length === 0));
+  for (const path of paths) {
+    const decoded = transformAtlasEdgeShape(path.from, path.to, path.routeShape);
+    assert.deepEqual(decoded, path.points, `${path.parentId}->${path.childId} retains every routeShape vertex`);
+    assert.deepEqual(path.points[0], path.from);
+    assert.deepEqual(path.points.at(-1), path.to);
+    for (const node of nodes) {
+      if (node.id === path.parentId || node.id === path.childId) continue;
+      for (let index = 1; index < path.points.length; index++) {
+        assert.ok(pointSegmentDistanceForTest(node, path.points[index - 1], path.points[index]) >= 0.16 - 1e-8,
+          `${path.parentId}->${path.childId} clears ${node.id}`);
+      }
+    }
+  }
+}
+
+test('same-year question roots route from virtual parents outside each subtree without hits or crossings', () => {
+  const worlds = [
+    ...Array.from({ length: 5 }, (_, index) => ({ id: `map-root-${index}`, parentId: null, questionId: 'q-map', year: 1800 })),
+    ...Array.from({ length: 3 }, (_, index) => ({ id: `river-root-${index}`, parentId: null, questionId: 'q-river', year: 1800 })),
+  ];
+  const graph = { worlds, questions: [
+    { id: 'q-map', divergenceYear: 1800 }, { id: 'q-river', divergenceYear: 1800 },
+  ] };
+  const layout = buildAtlasTimeline(graph, 'map-root-0', 'history-distance', { expandedQuestionIds: ['q-river'] });
+  assert.equal(layout.questionRootPaths.length, 8);
+  assertPlanarAtlasRoutes(layout);
+  for (const branch of layout.questionBranches) {
+    const roots = layout.worlds.filter(world => !layout.foldedIds.includes(world.id)
+      && world.parentId == null && world.questionId === branch.questionId);
+    assert.ok(roots.every(root => branch.y < root.y), `${branch.questionId} token sits above its root rows`);
+    const rootPaths = layout.questionRootPaths.filter(path => path.questionId === branch.questionId);
+    assert.ok(rootPaths.every(path => Math.abs(path.from.x - branch.x) < 1e-9 && Math.abs(path.from.y - branch.y) < 1e-9));
+  }
+  assert.ok(layout.questionRootPaths.some(path => path.color === 'lineage'));
+  assert.ok(layout.questionRootPaths.some(path => path.color === 'proposed'));
+});
+
 function pointSegmentDistanceForTest(point, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const lengthSquared = dx * dx + dy * dy;
@@ -60,6 +130,23 @@ function pointSegmentDistanceForTest(point, a, b) {
 function seededRandom(seed) {
   let value = seed >>> 0;
   return () => { value = (1664525 * value + 1013904223) >>> 0; return value / 4294967296; };
+}
+
+function syntheticWorlds(count, seed, yearMode = 'independent') {
+  const random = seededRandom(seed), worlds = [];
+  for (let index = 0; index < count; index++) {
+    const parentIndex = index === 0 ? null : Math.floor(random() * index);
+    const parentYear = parentIndex == null ? 1500 : worlds[parentIndex].year;
+    const year = index === 0 ? 1500
+      : yearMode === 'later' ? parentYear + 1 + Math.floor(random() * 5000)
+        : yearMode === 'earlier' ? parentYear - 1 - Math.floor(random() * 5000)
+          : yearMode === 'ties' ? (index % 3 === 0 ? parentYear : parentYear + 1 + Math.floor(random() * 300))
+            : yearMode === 'same-year' ? parentYear
+              : Math.floor(1000 + random() * 12000);
+    worlds.push({ id: `synthetic-${index}`, parentId: parentIndex == null ? null : `synthetic-${parentIndex}`,
+      questionId: 'q', year, proposedOrder: Math.floor(random() * 16) });
+  }
+  return worlds;
 }
 
 test('log time scale anchors 2026 at the trunk end and compresses BCE distance', () => {
@@ -111,7 +198,8 @@ test('three axis modes keep chronological x and tidy branch slots while question
   const graph = sampleGraph();
   const layouts = AXIS_MODES.map(mode => buildAtlasTimeline(graph, 'child-a', mode));
   for (const layout of layouts) {
-    assert.ok(layout.positions.get('sibling').y < layout.positions.get('child-a').y, 'sibling branch remains in its ordered slot');
+    assert.ok(layout.positions.get('child-a').y < layout.positions.get('sibling').y,
+      'the selected lineage subtree occupies the first branch slot');
     assert.ok(layout.positions.get('grandchild').x > layout.positions.get('child-a').x, 'time remains the horizontal axis');
     assert.ok(layout.parentChildPaths.some(path => path.parentId === 'child-a' && path.childId === 'grandchild'));
   }
@@ -128,7 +216,8 @@ test('three axis modes keep chronological x and tidy branch slots while question
   assert.equal(layouts[0].questionBranches.find(branch => branch.questionId === 'q-a').active, true);
   assert.equal(layouts[0].presentEarth.year, 2026);
   const branch = layouts[1];
-  assert.ok(branch.positions.get('sibling').y < branch.positions.get('child-a').y, 'b1 precedes b2 in proposed branch order');
+  assert.ok(branch.positions.get('child-a').y < branch.positions.get('sibling').y,
+    'active lineage priority precedes branch order for unrelated siblings');
 });
 
 test('root alternatives are two steps apart through their shared question', () => {
@@ -256,7 +345,7 @@ test('optional frame aspect widens time coordinates in proportion without changi
 test('tree rows keep sibling subtrees ordered and parent-child curves are smooth and bounded', () => {
   const layout = buildAtlasTimeline(sampleGraph(), 'child-a', 'branch-order');
   const y = id => layout.positions.get(id).y;
-  assert.ok(y('sibling') < y('child-a') && y('child-a') < y('grandchild'));
+  assert.ok(y('child-a') < y('grandchild') && y('grandchild') < y('sibling'));
   const path = layout.parentChildPaths.find(edge => edge.parentId === 'child-a' && edge.childId === 'grandchild');
   assert.ok(path.points.length >= 2);
   assert.deepEqual(path.points[0], path.from);
@@ -282,13 +371,33 @@ test('uneven chronological branches use a deterministic lane to avoid their cros
   ];
   const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: 1000 }] }, 'late-future-study');
   assert.deepEqual(edgeCrossings(layout.parentChildPaths, { includeIncident: true }), []);
-  assert.match(layout.parentChildPaths.find(path => path.parentId === 'root' && path.childId === 'late-branch').routeType, /^grid-/,
-    'the deterministic obstacle router bends the conflicting long edge into a separate lane');
+  assert.equal(layout.parentChildPaths.find(path => path.parentId === 'root' && path.childId === 'late-branch').routeType,
+    'validated-direct-cubic', 'the selected lineage uses a direct cubic when its exact geometry is clear');
   assert.ok(layout.parentChildPaths.every(path => path.unresolvedCrossings.length === 0));
   assert.ok(layout.parentChildPaths.every(path => path.unresolvedNodes.length === 0));
 });
 
-test('42-world short-first routing removes crossings without runaway detours', () => {
+test('nested gutters preserve the equal-year and backward-time 20-world fixture', () => {
+  const worlds = [
+    ['n0', null, 1800], ['n1', 'n0', 1850], ['n2', 'n0', 1900], ['n3', 'n2', 1950],
+    ['n4', 'n0', 1800], ['n5', 'n4', 1638], ['n6', 'n5', 1850], ['n7', 'n4', 1757],
+    ['n8', 'n6', 1869], ['n9', 'n8', 1718], ['n10', 'n2', 1306], ['n11', 'n5', 1950],
+    ['n12', 'n0', 1603], ['n13', 'n11', 1775], ['n14', 'n9', 1950], ['n15', 'n0', 1850],
+    ['n16', 'n5', 1687], ['n17', 'n5', 1519], ['n18', 'n3', 1825], ['n19', 'n5', 1551],
+  ].map(([id, parentId, year]) => ({ id, parentId, questionId: 'q', year }));
+  const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: 1800 }] }, 'n19');
+  assert.equal(layout.parentChildPaths.length, 19);
+  assertPlanarAtlasRoutes(layout);
+  assert.equal(layout.parentChildPaths.filter(path => ['nested-prefix-gutter', 'validated-direct-cubic'].includes(path.routeType)).length, 19);
+  assert.ok(layout.parentChildPaths.some(path => path.routeType === 'validated-direct-cubic'),
+    'safe edges use smoother direct cubics');
+  assert.ok(layout.parentChildPaths.some(path => path.routeCornerRadius > 0.22),
+    'remaining gutter routes use a larger safe corner radius where spacing permits');
+  assert.ok(layout.routeBounds.left < Math.min(...layout.worlds.map(world => world.x)));
+  assert.ok(layout.routeBounds.right > Math.max(...layout.worlds.map(world => world.x)));
+});
+
+test('42-world nested-gutter routing removes crossings without runaway detours', () => {
   const worlds = [{ id: 'world-0', parentId: null, questionId: 'q', year: 700 }];
   for (let index = 1; index < 42; index++) {
     const parentIndex = Math.floor((index - 1) / 3);
@@ -301,11 +410,17 @@ test('42-world short-first routing removes crossings without runaway detours', (
   const started = performance.now();
   const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: 700 }] }, 'world-41');
   const duration = performance.now() - started;
+  assertPlanarAtlasRoutes(layout);
   assert.equal(layout.parentChildPaths.length, worlds.length - 1);
+  const lineagePaths = layout.parentChildPaths.filter(path => path.lineage);
+  assert.ok(lineagePaths.length > 0 && lineagePaths.every(path => Math.abs(Math.abs(path.to.y - path.from.y) - 0.72) < 1e-8),
+    'selected lineage parent-child nodes occupy adjacent rows');
+  assert.ok(layout.parentChildPaths.some(path => path.routeType === 'validated-direct-cubic'),
+    'safe 42-world branches use direct curves instead of bus detours');
   const crossingPairs = edgeCrossings(layout.parentChildPaths, { includeIncident: true });
   const unresolvedCrossings = layout.parentChildPaths.reduce((total, path) => total + path.unresolvedCrossings.length, 0);
   const unresolvedNodes = layout.parentChildPaths.reduce((total, path) => total + path.unresolvedNodes.length, 0);
-  assert.deepEqual(crossingPairs, [], 'short edges route first so this deterministic fixture has no crossings');
+  assert.deepEqual(crossingPairs, [], 'nested prefix gutters keep this deterministic fixture planar');
   assert.equal(unresolvedCrossings, 0);
   assert.equal(unresolvedNodes, 0);
   assert.ok(layout.parentChildPaths.every(path => Math.abs(path.routeOffset) <= 4), 'fallbacks do not create runaway lanes');
@@ -335,28 +450,37 @@ test('42-world short-first routing removes crossings without runaway detours', (
 });
 
 test('120-world interleaved-date routing bounds conflicts, detours, and search work', () => {
-  const random = seededRandom(120 * 1009 + 120);
-  const worlds = [];
-  for (let index = 0; index < 120; index++) {
-    const parentIndex = index === 0 ? null : Math.floor(random() * index);
-    worlds.push({
-      id: `interleaved-${index}`, parentId: parentIndex == null ? null : `interleaved-${parentIndex}`,
-      questionId: 'q', year: Math.floor(1500 + random() * 8000), proposedOrder: Math.floor(random() * 16),
-    });
-  }
+  const worlds = syntheticWorlds(120, 120 * 1009 + 120);
   const started = performance.now();
-  const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: 1500 }] }, 'interleaved-119');
+  const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: 1500 }] }, 'synthetic-119');
   const duration = performance.now() - started;
   const paths = layout.parentChildPaths;
   const unresolved = paths.filter(path => path.unresolvedCrossings.length || path.unresolvedNodes.length).length;
   const crossingTotal = paths.reduce((total, path) => total + path.unresolvedCrossings.length, 0);
   const nodeTotal = paths.reduce((total, path) => total + path.unresolvedNodes.length, 0);
-  assert.ok(unresolved <= 10, `short-first routing keeps unresolved routes under 10/119 (observed ${unresolved})`);
-  assert.ok(crossingTotal <= 40, `crossing count stays under 40 (observed ${crossingTotal})`);
-  assert.ok(nodeTotal <= 3, `node hit count stays under 3 (observed ${nodeTotal})`);
+  assert.equal(unresolved, 0);
+  assert.equal(crossingTotal, 0);
+  assert.equal(nodeTotal, 0);
+  assertPlanarAtlasRoutes(layout);
   assert.ok(paths.every(path => Math.abs(path.routeOffset) <= 4));
   assert.ok(paths.every(path => path.routeVisited <= 18_000));
   assert.ok(duration < 3_000, `120-world routing stays under three seconds (observed ${duration.toFixed(1)} ms)`);
+});
+
+test('nested gutters handle backward, tied, and larger interleaved date trees', () => {
+  for (const [count, mode, seed] of [
+    [42, 'later', 4242], [42, 'earlier', 4243], [80, 'ties', 8081], [80, 'same-year', 8083],
+    [200, 'independent', 20200],
+  ]) {
+    const worlds = syntheticWorlds(count, seed, mode);
+    const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: worlds[0].year }] }, `synthetic-${count - 1}`);
+    assertPlanarAtlasRoutes(layout);
+    assert.equal(layout.parentChildPaths.length, count - 1);
+    if (count === 80 && mode === 'ties') {
+      assert.ok(layout.parentChildPaths.some(path => path.routeType === 'validated-direct-cubic'),
+        'safe 80-world branches use direct curves while tied-date routes retain clearance');
+    }
+  }
 });
 
 test('current-world question metadata attaches a parchment question branch to its declared parent', () => {

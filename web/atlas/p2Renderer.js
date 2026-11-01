@@ -62,6 +62,7 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
   setLabelPixels(scaleLabel, 280, 28, 35);
   setLabelPixels(axisLabel, 210, 28, 80);
   let tickSprites = [], chipSprites = [], questionSprites = [], layout = null, axisMode = 'history-distance';
+  let questionBranchOpacity = 1, currentOpacity = 0;
   let disposed = false;
 
   function setBaseTexture(texture) {
@@ -103,9 +104,11 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     if (disposed || !nextLayout) return;
     layout = nextLayout; axisMode = nextMode;
     const alpha = Math.max(0, Math.min(1, opacity));
+    currentOpacity = alpha;
     group.visible = alpha > 0;
     trunk.material.opacity = 0.7 * alpha;
-    branches.material.opacity = 0.82 * alpha;
+    branches.material.opacity = 0.82 * alpha * questionBranchOpacity;
+    branches.visible = questionBranchOpacity > 0;
     ticks.material.opacity = 0.64 * alpha;
     focusBreaks.material.opacity = 0.92 * alpha;
     chipStems.material.opacity = 0.78 * alpha;
@@ -160,7 +163,8 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
       attachmentValues.push(branch.attachment.from.x, branch.attachment.from.y, branch.attachment.from.z || 0, chip.x, chip.y, 0.06);
     }
     setLinePositions(questionAttachments, attachmentValues);
-    questionAttachments.material.opacity = 0.86 * alpha;
+    questionAttachments.material.opacity = 0.86 * alpha * questionBranchOpacity;
+    questionAttachments.visible = questionBranchOpacity > 0;
 
     ensureSprites(questionSprites, layout.questionBranches.length, 'Question divergence token');
     layout.questionBranches.forEach((branch, index) => {
@@ -247,6 +251,14 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     }
   }
 
+  function setQuestionBranchOpacity(value) {
+    questionBranchOpacity = Math.max(0, Math.min(1, Number(value) || 0));
+    branches.material.opacity = 0.82 * currentOpacity * questionBranchOpacity;
+    questionAttachments.material.opacity = 0.86 * currentOpacity * questionBranchOpacity;
+    branches.visible = questionBranchOpacity > 0;
+    questionAttachments.visible = questionBranchOpacity > 0;
+  }
+
   function dispose() {
     if (disposed) return; disposed = true; group.removeFromParent();
     group.traverse(object => {
@@ -257,7 +269,7 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
   }
 
   return {
-    update, layoutLabels, dispose, group, presentEarth, setBaseTexture,
+    update, layoutLabels, dispose, group, presentEarth, setBaseTexture, setQuestionBranchOpacity,
     getQuestionChipTargets: () => chipSprites.map((sprite, index) => ({ chip: layout?.chips?.[index] || null, sprite })),
   };
 }

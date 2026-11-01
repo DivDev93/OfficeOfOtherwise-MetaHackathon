@@ -150,3 +150,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-10-31 | Atlas round 3 routing experiment: route short edges first to reduce crossings and bound detours on generated trees; general noncrossing behavior remains under investigation. | |
 | 2026-10-31 | Atlas round 3: refreshed the saved-story visual evidence after routing-order refinement; larger generated trees still need a crossing-free solution. | |
 | 2026-10-31 | Atlas round 3 follow-up: prioritize visible Orbit child labels when laying out screen-space text. | |
+| 2026-10-31 | Atlas round 3 follow-up: route exact branch and question-root paths with preserved junctions, prioritize the active lineage, and suppress paths during axis morphs to avoid transient crossings. | |

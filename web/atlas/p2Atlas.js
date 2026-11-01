@@ -249,16 +249,18 @@ function compareBranchOrder(a, b, mode = 'history-distance') {
 }
 
 /** Give every node its own row while keeping each ordered subtree contiguous. */
-function tidyTreeRows(worlds, childrenByParent, mode) {
+function tidyTreeRows(worlds, childrenByParent, mode, lineage = new Set()) {
   const byId = new Map(worlds.map(world => [idOf(world), world]));
   const children = new Map();
   for (const [parentId, members] of childrenByParent) {
     if (parentId && byId.has(parentId)) children.set(parentId, members.filter(member => idOf(member) !== parentId));
   }
-  for (const members of children.values()) members.sort((a, b) => compareBranchOrder(a, b, mode));
+  const lineageFirst = (a, b) => Number(lineage.has(idOf(b))) - Number(lineage.has(idOf(a)));
+  for (const members of children.values()) members.sort((a, b) => lineageFirst(a, b) || compareBranchOrder(a, b, mode));
 
   const roots = worlds.filter(world => world.parentId == null || !byId.has(String(world.parentId)))
-    .sort((a, b) => String(a.questionId ?? '').localeCompare(String(b.questionId ?? '')) || compareBranchOrder(a, b, mode));
+    .sort((a, b) => lineageFirst(a, b) || String(a.questionId ?? '').localeCompare(String(b.questionId ?? ''))
+      || compareBranchOrder(a, b, mode));
   const rows = new Map(), visiting = new Set(), placed = new Set();
   let cursor = 0;
   function place(world) {
@@ -311,6 +313,23 @@ function pathsCross(a, b) {
   return false;
 }
 
+function pathsOverlap(a, b, allowSharedParentStem = false, parentY = 0) {
+  for (let first = 1; first < a.length; first++) for (let second = 1; second < b.length; second++) {
+    const p = a[first - 1], q = a[first], r = b[second - 1], s = b[second];
+    const dx = q.x - p.x, dy = q.y - p.y, ex = s.x - r.x, ey = s.y - r.y;
+    if (Math.abs(dx * ey - dy * ex) > 1e-8 || Math.abs(dx * (r.y - p.y) - dy * (r.x - p.x)) > 1e-8) continue;
+    const useX = Math.abs(dx) >= Math.abs(dy);
+    const firstRange = [useX ? p.x : p.y, useX ? q.x : q.y].sort((x, y) => x - y);
+    const secondRange = [useX ? r.x : r.y, useX ? s.x : s.y].sort((x, y) => x - y);
+    const overlap = Math.min(firstRange[1], secondRange[1]) - Math.max(firstRange[0], secondRange[0]);
+    if (overlap <= 1e-6) continue;
+    const sharedStem = allowSharedParentStem
+      && [p, q, r, s].every(point => Math.abs(point.y - parentY) <= 1e-6);
+    if (!sharedStem) return true;
+  }
+  return false;
+}
+
 function pathHitsNode(path, nodes, endpointIds, clearance) {
   for (const node of nodes) {
     if (endpointIds.has(String(node.id))) continue;
@@ -326,17 +345,34 @@ function nodesHitByPath(path, nodes, endpointIds, clearance) {
     && pathHitsNode(path, [node], endpointIds, clearance)).map(node => String(node.id));
 }
 
-/** Sample a smooth cubic parent-child edge; offset bends it around a routing lane. */
+function routeGeometryConflicts(points, path, routed, nodes, clearance) {
+  const endpointIds = new Set([String(path.parentId), String(path.childId)]);
+  if (nodesHitByPath(points, nodes, endpointIds, clearance).length) return true;
+  return routed.some(other => other !== path && (
+    pathsCross(points, other.points)
+    || pathsOverlap(points, other.points, other.parentId === path.parentId, path.from.y)
+  ));
+}
+
+export function transformAtlasEdgeShape(from, to, routeShape) {
+  if (!Array.isArray(routeShape) || routeShape.length < 2) return [];
+  const dx = to.x - from.x, dy = to.y - from.y, length = Math.hypot(dx, dy) || 1;
+  const ux = dx / length, uy = dy / length, nx = -uy, ny = ux;
+  const points = routeShape.map(point => ({
+    x: from.x + ux * point.along * length + nx * point.across * length,
+    y: from.y + uy * point.along * length + ny * point.across * length,
+    z: (Number(from.z) || 0) + ((Number(to.z) || 0) - (Number(from.z) || 0)) * (Number(point.zProgress) || 0),
+  }));
+  points[0] = { x: from.x, y: from.y, z: Number(from.z) || 0 };
+  points[points.length - 1] = { x: to.x, y: to.y, z: Number(to.z) || 0 };
+  return points;
+}
+
+/** Sample a smooth parent-child edge; routeShape is resampled to the requested count. */
 export function sampleAtlasEdgePath(from, to, segments = 12, { offset = 0, routeShape = null } = {}) {
   const count = Math.max(2, Math.floor(Number(segments) || 12));
   if (Array.isArray(routeShape) && routeShape.length > 1) {
-    const dx = to.x - from.x, dy = to.y - from.y, length = Math.hypot(dx, dy) || 1;
-    const ux = dx / length, uy = dy / length, nx = -uy, ny = ux;
-    const points = routeShape.map(point => ({
-      x: from.x + ux * point.along * length + nx * point.across * length,
-      y: from.y + uy * point.along * length + ny * point.across * length,
-      z: (Number(from.z) || 0) + ((Number(to.z) || 0) - (Number(from.z) || 0)) * (Number(point.zProgress) || 0),
-    }));
+    const points = transformAtlasEdgeShape(from, to, routeShape);
     const cumulative = [0];
     for (let index = 1; index < points.length; index++) cumulative.push(cumulative[index - 1]
       + Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y));
@@ -377,54 +413,6 @@ export function sampleAtlasEdgePath(from, to, segments = 12, { offset = 0, route
   return points;
 }
 
-function makeHeap() {
-  const values = [];
-  return {
-    push(value) {
-      values.push(value);
-      let index = values.length - 1;
-      while (index) {
-        const parent = (index - 1) >> 1;
-        if (values[parent].score <= value.score) break;
-        values[index] = values[parent]; index = parent;
-      }
-      values[index] = value;
-    },
-    pop() {
-      if (!values.length) return null;
-      const first = values[0], last = values.pop();
-      if (values.length) {
-        let index = 0;
-        while (true) {
-          const left = index * 2 + 1, right = left + 1;
-          if (left >= values.length) break;
-          const child = right < values.length && values[right].score < values[left].score ? right : left;
-          if (values[child].score >= last.score) break;
-          values[index] = values[child]; index = child;
-        }
-        values[index] = last;
-      }
-      return first;
-    },
-    get length() { return values.length; },
-  };
-}
-
-function simplifyRoute(points) {
-  const result = [];
-  for (const point of points) {
-    while (result.length >= 2) {
-      const a = result[result.length - 2], b = result[result.length - 1];
-      const cross = (b.x - a.x) * (point.y - b.y) - (b.y - a.y) * (point.x - b.x);
-      const dot = (b.x - a.x) * (point.x - b.x) + (b.y - a.y) * (point.y - b.y);
-      if (Math.abs(cross) > 1e-9 || dot < 0) break;
-      result.pop();
-    }
-    result.push(point);
-  }
-  return result;
-}
-
 function roundRouteCorners(points, radius = 0.16, samplesPerCorner = 3) {
   if (points.length < 3) return points;
   const result = [points[0]];
@@ -463,191 +451,132 @@ function routeShape(points, from, to) {
   });
 }
 
-function rasterRoute(edge, routed, nodes, { step, margin, edgeClearance, nodeClearance, maxCells, maxVisits }) {
-  const allPoints = [...nodes, edge.from, edge.to, ...routed.flatMap(path => path.points)];
-  const minX = Math.min(...allPoints.map(point => point.x)) - margin;
-  const maxX = Math.max(...allPoints.map(point => point.x)) + margin;
-  const minY = Math.min(...allPoints.map(point => point.y)) - margin;
-  const maxY = Math.max(...allPoints.map(point => point.y)) + margin;
-  const area = (maxX - minX) * (maxY - minY);
-  const gridStep = Math.max(step, Math.sqrt(area / maxCells));
-  const width = Math.ceil((maxX - minX) / gridStep) + 1;
-  const height = Math.ceil((maxY - minY) / gridStep) + 1;
-  if (width * height > maxCells * 1.05) return { points: null, visited: 0, gridStep, failure: 'grid-limit' };
-  const blocked = new Uint8Array(width * height);
-  const toCell = point => ({ x: clamp(Math.round((point.x - minX) / gridStep), 0, width - 1),
-    y: clamp(Math.round((point.y - minY) / gridStep), 0, height - 1) });
-  const indexOf = (x, y) => y * width + x;
-  const markDisc = (point, clearance) => {
-    const cell = toCell(point), radius = Math.ceil(clearance / gridStep) + 1;
-    for (let y = Math.max(0, cell.y - radius); y <= Math.min(height - 1, cell.y + radius); y++) {
-      for (let x = Math.max(0, cell.x - radius); x <= Math.min(width - 1, cell.x + radius); x++) {
-        const center = { x: minX + x * gridStep, y: minY + y * gridStep };
-        if (Math.hypot(center.x - point.x, center.y - point.y) <= clearance + gridStep * 0.72) blocked[indexOf(x, y)] = 1;
-      }
-    }
-  };
-  const markSegment = (a, b, clearance, skipAround = []) => {
-    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / (gridStep * 0.45)));
-    for (let sample = 0; sample <= steps; sample++) {
-      const t = sample / steps, point = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
-      if (skipAround.some(node => Math.hypot(point.x - node.x, point.y - node.y) < clearance)) continue;
-      markDisc(point, clearance);
-    }
-  };
-  const endpointIds = new Set([String(edge.parentId), String(edge.childId)]);
-  for (const node of nodes) if (!endpointIds.has(String(node.id))) markDisc(node, nodeClearance);
-  for (const other of routed) {
-    const sharedNodes = [String(edge.parentId), String(edge.childId)]
-      .filter(id => id === String(other.parentId) || id === String(other.childId))
-      .map(id => nodes.find(node => String(node.id) === id)).filter(Boolean);
-    for (let i = 1; i < other.points.length; i++) markSegment(other.points[i - 1], other.points[i], edgeClearance, sharedNodes);
-  }
-  // Keep an open outer gutter so thickened obstacle cells cannot seal a local pocket.
-  for (let x = 0; x < width; x++) { blocked[indexOf(x, 0)] = 0; blocked[indexOf(x, height - 1)] = 0; }
-  for (let y = 0; y < height; y++) { blocked[indexOf(0, y)] = 0; blocked[indexOf(width - 1, y)] = 0; }
-
-  const start = toCell(edge.from), goal = toCell(edge.to);
-  const startIndex = indexOf(start.x, start.y), goalIndex = indexOf(goal.x, goal.y);
-  for (const endpoint of [start, goal]) {
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      const x = endpoint.x + dx, y = endpoint.y + dy;
-      if (x >= 0 && x < width && y >= 0 && y < height) blocked[indexOf(x, y)] = 0;
-    }
-  }
-  const total = width * height, costs = new Float64Array(total); costs.fill(Number.POSITIVE_INFINITY);
-  const previous = new Int32Array(total); previous.fill(-1);
-  const closed = new Uint8Array(total), heap = makeHeap();
-  const heuristic = (x, y) => {
-    const dx = Math.abs(goal.x - x), dy = Math.abs(goal.y - y);
-    return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy);
-  };
-  costs[startIndex] = 0;
-  heap.push({ index: startIndex, x: start.x, y: start.y, score: heuristic(start.x, start.y) });
-  const directions = [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,Math.SQRT2],[1,-1,Math.SQRT2],[-1,1,Math.SQRT2],[-1,-1,Math.SQRT2]];
-  let visited = 0;
-  const visitLimit = Math.min(total, maxVisits);
-  while (heap.length && visited < visitLimit) {
-    visited++;
-    const current = heap.pop();
-    if (closed[current.index]) continue;
-    if (current.index === goalIndex) {
-      const cells = [];
-      let index = goalIndex;
-      while (index !== -1) {
-        cells.push({ x: index % width, y: Math.floor(index / width) });
-        index = previous[index];
-      }
-      cells.reverse();
-      const raw = [edge.from, ...cells.slice(1, -1).map(cell => ({ x: minX + cell.x * gridStep, y: minY + cell.y * gridStep })), edge.to];
-      return { points: simplifyRoute(raw), visited, gridStep, failure: null };
-    }
-    closed[current.index] = 1;
-    for (const [dx, dy, cost] of directions) {
-      const x = current.x + dx, y = current.y + dy;
-      if (x < 0 || x >= width || y < 0 || y >= height) continue;
-      const index = indexOf(x, y);
-      if (blocked[index] || closed[index]) continue;
-      if (dx && dy && (blocked[indexOf(current.x + dx, current.y)] || blocked[indexOf(current.x, current.y + dy)])) continue;
-      const nextCost = costs[current.index] + cost;
-      if (nextCost >= costs[index]) continue;
-      costs[index] = nextCost; previous[index] = current.index;
-      heap.push({ index, x, y, score: nextCost + heuristic(x, y) });
-    }
-  }
-  return { points: null, visited, gridStep, failure: visited >= visitLimit ? 'search-budget' : 'no-grid-path' };
-}
-
-function conflictScore(points, routed, edge, nodes, nodeClearance) {
-  const endpointIds = new Set([String(edge.parentId), String(edge.childId)]);
-  return {
-    crossings: routed.filter(other => pathsCross(points, other.points)).length,
-    nodes: nodesHitByPath(points, nodes, endpointIds, nodeClearance).length,
-  };
-}
-
-/** Route a visible forest deterministically with bounded obstacle-grid search and a small-lane fallback. */
+/** Route a visible forest through nested, row-local gutters while preserving each junction. */
 export function routeAtlasEdgePaths(edges = [], {
-  segments = 16, laneGap = 0.5, maxOffset = 4, nodeClearance = 0.16,
-  edgeClearance = 0.16, gridStep = 0.2, gridMargin = 2.5, maxGridCells = 180_000,
-  maxGridVisits = 12_000, nodes = [],
+  laneGap = 0.06, routeMargin = 0.25, maxGutter = 3.5, nodeClearance = 0.16, nodes = [],
 } = {}) {
-  const ordered = (Array.isArray(edges) ? edges : []).filter(edge => edge?.from && edge?.to)
-    .slice().sort((a, b) => Math.hypot(a.to.x - a.from.x, a.to.y - a.from.y)
-      - Math.hypot(b.to.x - b.from.x, b.to.y - b.from.y)
-      || String(a.parentId).localeCompare(String(b.parentId))
-      || String(a.childId).localeCompare(String(b.childId)));
-  const routed = [];
-  for (const edge of ordered) {
-    const endpointIds = new Set([String(edge.parentId), String(edge.childId)]);
-    const buildRendered = points => {
-      const shape = routeShape(points, edge.from, edge.to);
-      return { shape, points: sampleAtlasEdgePath(edge.from, edge.to, segments, { routeShape: shape }) };
-    };
-    const direct = buildRendered(sampleAtlasEdgePath(edge.from, edge.to, segments));
-    const directClear = routed.every(other => !pathsCross(direct.points, other.points))
-      && !pathHitsNode(direct.points, nodes, endpointIds, nodeClearance);
-    let chosen = directClear ? direct.points : null;
-    let chosenShape = directClear ? direct.shape : null;
-    let routeType = directClear ? 'direct-cubic' : null;
-    let routeVisited = 0;
-    const gridFailures = [];
-    if (!directClear) {
-      const attempts = [
-        { step: gridStep, margin: gridMargin, edgeClearance, maxVisits: maxGridVisits },
-        { step: gridStep * 0.75, margin: gridMargin + 1, edgeClearance: edgeClearance * 0.5, maxVisits: Math.max(1000, Math.floor(maxGridVisits / 2)) },
-      ];
-      for (const attempt of attempts) {
-        // A conflicting fallback can close a false obstacle cycle in the raster.
-        // Keep it in geometric validation, but do not let it seal the search space.
-        const searchObstacles = routed.filter(other => !other.unresolvedCrossings.length && !other.unresolvedNodes.length);
-        const searched = rasterRoute(edge, searchObstacles, nodes, {
-          ...attempt, nodeClearance, maxCells: maxGridCells,
-        });
-        routeVisited += searched.visited;
-        if (!searched.points) { gridFailures.push(searched.failure); continue; }
-        const rounded = buildRendered(roundRouteCorners(searched.points));
-        const clear = points => routed.every(other => !pathsCross(points, other.points))
-          && !pathHitsNode(points, nodes, endpointIds, nodeClearance);
-        if (clear(rounded.points)) { chosen = rounded.points; chosenShape = rounded.shape; routeType = 'grid-rounded'; break; }
-        const polyline = buildRendered(searched.points);
-        if (clear(polyline.points)) { chosen = polyline.points; chosenShape = polyline.shape; routeType = 'grid-polyline'; break; }
-        gridFailures.push('grid-path-conflict');
-      }
-    }
-    let offset = 0;
-    if (!chosen || routed.some(other => pathsCross(chosen, other.points))
-      || pathHitsNode(chosen, nodes, endpointIds, nodeClearance)) {
-      const candidates = [0];
-      const steps = Math.floor(maxOffset / laneGap);
-      for (let step = 1; step <= steps; step++) candidates.push(step * laneGap, -step * laneGap);
-      let best = null;
-      for (const candidateOffset of candidates) {
-        const candidate = sampleAtlasEdgePath(edge.from, edge.to, segments, { offset: candidateOffset });
-        const rendered = buildRendered(candidate);
-        const score = conflictScore(rendered.points, routed, edge, nodes, nodeClearance);
-        const rank = [score.crossings + score.nodes, Math.abs(candidateOffset), candidateOffset < 0 ? 1 : 0];
-        if (!best || rank.some((value, index) => value < best.rank[index]
-          && rank.slice(0, index).every((prior, priorIndex) => prior === best.rank[priorIndex]))) {
-          best = { points: rendered.points, shape: rendered.shape, offset: candidateOffset, score, rank };
-        }
-        if (!score.crossings && !score.nodes) break;
-      }
-      chosen = best.points; chosenShape = best.shape; offset = best.offset; routeType = 'bounded-lane-fallback';
-    }
-    const unresolvedCrossings = routed.filter(other => pathsCross(chosen, other.points))
-      .map(other => `${other.parentId}->${other.childId}`);
-    const unresolvedNodes = nodesHitByPath(chosen, nodes, endpointIds, nodeClearance);
-    routed.push({ ...edge, points: chosen, routeOffset: offset,
-      routeType, routeShape: chosenShape,
-      routeBounds: { left: Math.min(...chosen.map(point => point.x)), right: Math.max(...chosen.map(point => point.x)),
-        bottom: Math.min(...chosen.map(point => point.y)), top: Math.max(...chosen.map(point => point.y)) },
-      routeVisited, routeGridFailure: gridFailures.length ? gridFailures.join(',') : null,
-      unresolvedCrossings, unresolvedNodes });
+  const validEdges = (Array.isArray(edges) ? edges : []).filter(edge => edge?.from && edge?.to);
+  const childrenByParent = new Map(), parentByChild = new Map();
+  for (const edge of validEdges) {
+    const parentId = String(edge.parentId), childId = String(edge.childId);
+    if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+    childrenByParent.get(parentId).push(edge);
+    parentByChild.set(childId, parentId);
   }
-  // Route easy, short edges first, but keep the exposed order stable for renderers.
+  const depthCache = new Map();
+  const depthOf = (id, ancestry = new Set()) => {
+    const key = String(id);
+    if (depthCache.has(key)) return depthCache.get(key);
+    if (ancestry.has(key)) return 0;
+    const parentId = parentByChild.get(key);
+    const depth = parentId == null ? 0 : depthOf(parentId, new Set([...ancestry, key])) + 1;
+    depthCache.set(key, depth);
+    return depth;
+  };
+  for (const edge of validEdges) { depthOf(edge.parentId); depthOf(edge.childId); }
+
+  const maxDepth = Math.max(0, ...depthCache.values());
+  const maxDegree = Math.max(1, ...[...childrenByParent.values()].map(children => children.length));
+  const maxSameSideLevel = Math.floor(maxDepth / 2);
+  const laneCapacity = (maxSameSideLevel + 1) * (maxDegree + 1) + maxDegree;
+  const margin = Math.max(0.16, Number(routeMargin) || 0.25, Number(nodeClearance) || 0.16);
+  const effectiveLaneGap = Math.min(Math.max(0.001, Number(laneGap) || 0.06),
+    Math.max(0.001, (Math.max(margin, Number(maxGutter) || 3.5) - margin) / Math.max(1, laneCapacity)));
+  const visibleNodes = (Array.isArray(nodes) ? nodes : [])
+    .filter(node => Number.isFinite(node?.x) && Number.isFinite(node?.y));
+  const orderedParents = [...childrenByParent.keys()].sort((a, b) => a.localeCompare(b));
+  const routed = [];
+  const sharpPaths = new Map();
+
+  for (const parentId of orderedParents) {
+    const parentEdges = childrenByParent.get(parentId).slice()
+      .sort((a, b) => a.to.y - b.to.y || String(a.childId).localeCompare(String(b.childId)));
+    const depth = depthOf(parentId);
+    const side = depth % 2 === 0 ? 1 : -1;
+    const level = Math.floor(depth / 2);
+    const levelOffset = margin + (maxSameSideLevel - level) * (maxDegree + 1) * effectiveLaneGap;
+    for (let siblingIndex = 0; siblingIndex < parentEdges.length; siblingIndex++) {
+      const edge = parentEdges[siblingIndex];
+      const lowY = Math.min(edge.from.y, edge.to.y), highY = Math.max(edge.from.y, edge.to.y);
+      const spanNodes = visibleNodes.filter(node => node.y >= lowY - 1e-8 && node.y <= highY + 1e-8);
+      const intervalNodes = spanNodes.length ? spanNodes : [edge.from, edge.to];
+      const minX = Math.min(...intervalNodes.map(node => node.x));
+      const maxX = Math.max(...intervalNodes.map(node => node.x));
+      const busX = side > 0
+        ? maxX + levelOffset + siblingIndex * effectiveLaneGap
+        : minX - levelOffset - siblingIndex * effectiveLaneGap;
+      const sharpPath = [edge.from, { x: busX, y: edge.from.y }, { x: busX, y: edge.to.y }, edge.to];
+      sharpPaths.set(`${parentId}\u0000${edge.childId}`, sharpPath);
+      // A visible radius prevents safe bus routes from reading as square corners.
+      const routePoints = roundRouteCorners(sharpPath, 0.22, 6);
+      const shape = routeShape(routePoints, edge.from, edge.to);
+      const points = transformAtlasEdgeShape(edge.from, edge.to, shape);
+      const endpointIds = new Set([String(edge.parentId), String(edge.childId)]);
+      const unresolvedCrossings = routed.filter(other => pathsCross(points, other.points))
+        .map(other => `${other.parentId}->${other.childId}`);
+      const unresolvedNodes = nodesHitByPath(points, visibleNodes, endpointIds, nodeClearance);
+      routed.push({ ...edge, points, routeOffset: 0, routeType: 'nested-prefix-gutter', routeShape: shape,
+        routeCornerRadius: 0.22,
+        routeBounds: { left: Math.min(...points.map(point => point.x)), right: Math.max(...points.map(point => point.x)),
+          bottom: Math.min(...points.map(point => point.y)), top: Math.max(...points.map(point => point.y)) },
+        routeVisited: 0, routeGridFailure: null, unresolvedCrossings, unresolvedNodes });
+    }
+  }
+
+  // Grow the corner radius only when the rounded route remains globally safe.
+  // Dense siblings may need the small baseline radius, while isolated branches
+  // can use visibly softer turns without changing their gutter or row order.
+  for (const path of routed) {
+    const sharpPath = sharpPaths.get(`${path.parentId}\u0000${path.childId}`);
+    if (!sharpPath) continue;
+    for (const radius of [0.56, 0.44, 0.34, 0.28]) {
+      const shape = routeShape(roundRouteCorners(sharpPath, radius, 8), path.from, path.to);
+      const points = transformAtlasEdgeShape(path.from, path.to, shape);
+      if (routeGeometryConflicts(points, path, routed, visibleNodes, nodeClearance)) continue;
+      path.points = points;
+      path.routeShape = shape;
+      path.routeCornerRadius = radius;
+      path.routeBounds = { left: Math.min(...points.map(point => point.x)), right: Math.max(...points.map(point => point.x)),
+        bottom: Math.min(...points.map(point => point.y)), top: Math.max(...points.map(point => point.y)) };
+      break;
+    }
+  }
+
+  // The bus geometry is the safety baseline. Replace only routes whose direct cubic
+  // remains clear of every current route and visible node; each accepted replacement
+  // is rechecked against the routes already replaced.
+  const candidates = routed.map(path => {
+    const points = sampleAtlasEdgePath(path.from, path.to, 20);
+    const shape = routeShape(points, path.from, path.to);
+    const exactPoints = transformAtlasEdgeShape(path.from, path.to, shape);
+    const chordLength = Math.hypot(path.to.x - path.from.x, path.to.y - path.from.y);
+    const baselineLength = pathLength(path.points);
+    return { path, shape, points: exactPoints, savings: baselineLength - pathLength(exactPoints), chordLength };
+  }).filter(candidate => candidate.savings > 1e-4)
+    .sort((a, b) => b.savings - a.savings || a.chordLength - b.chordLength
+      || String(a.path.parentId).localeCompare(String(b.path.parentId))
+      || String(a.path.childId).localeCompare(String(b.path.childId)));
+  for (const candidate of candidates) {
+    const path = candidate.path;
+    if (routeGeometryConflicts(candidate.points, path, routed, visibleNodes, nodeClearance)) continue;
+    path.points = candidate.points;
+    path.routeShape = candidate.shape;
+    path.routeType = 'validated-direct-cubic';
+    path.routeCornerRadius = null;
+    path.routeBounds = { left: Math.min(...path.points.map(point => point.x)), right: Math.max(...path.points.map(point => point.x)),
+      bottom: Math.min(...path.points.map(point => point.y)), top: Math.max(...path.points.map(point => point.y)) };
+    path.unresolvedCrossings = [];
+    path.unresolvedNodes = [];
+  }
   return routed.sort((a, b) => String(a.parentId).localeCompare(String(b.parentId))
     || String(a.childId).localeCompare(String(b.childId)));
+}
+
+function pathLength(points) {
+  let length = 0;
+  for (let index = 1; index < points.length; index++) length += Math.hypot(points[index].x - points[index - 1].x,
+    points[index].y - points[index - 1].y);
+  return length;
 }
 
 function occupied(label, labels, width, height) {
@@ -702,7 +631,7 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
     if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
     childrenByParent.get(parent).push(world);
   }
-  const treeRows = tidyTreeRows(layoutWorlds, childrenByParent, axisMode);
+  const treeRows = tidyTreeRows(layoutWorlds, childrenByParent, axisMode, lineage);
   const rowValues = [...treeRows.values()];
   const treeSpan = rowValues.length > 1 ? Math.max(...rowValues) - Math.min(...rowValues) : 0;
   const aspect = Number(frameAspect);
@@ -744,28 +673,19 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
   const visibleWorlds = laidOutWorlds.filter(world => !folded.has(world.id));
   const visibleWorldById = new Map(visibleWorlds.map(world => [world.id, world]));
   const worldById = new Map(laidOutWorlds.map(world => [world.id, world]));
-  const parentChildEdges = visibleWorlds.flatMap(child => {
-    const parent = child.world.parentId == null ? null : visibleWorldById.get(String(child.world.parentId));
-    if (!parent) return [];
-    const from = { x: parent.x, y: parent.y, z: parent.z };
-    const to = { x: child.x, y: child.y, z: child.z };
-    return [{ parentId: parent.id, childId: child.id, from, to, lineage: parent.lineage && child.lineage }];
-  });
-  const parentChildPaths = routeAtlasEdgePaths(parentChildEdges, {
-    nodes: visibleWorlds.map(world => ({ id: world.id, x: world.x, y: world.y })),
-  });
-  const routePoints = parentChildPaths.flatMap(path => path.points);
-  const routeBounds = routePoints.length ? {
-    left: Math.min(...routePoints.map(point => point.x)), right: Math.max(...routePoints.map(point => point.x)),
-    bottom: Math.min(...routePoints.map(point => point.y)), top: Math.max(...routePoints.map(point => point.y)),
-  } : null;
   const questionBranches = qs.map(questionId => {
     const members = worlds.filter(world => String(world.questionId ?? '') === questionId);
     const question = byQuestion.get(questionId);
     const divergenceYear = safeYear(question?.divergenceYear) ?? (members.length ? Math.min(...members.map(world => safeYear(world.year)).filter(year => year != null)) : null);
     const x = divergenceYear == null ? right : yearToX(divergenceYear);
-    const questionRows = visibleWorlds.filter(world => world.questionId === questionId).map(world => world.y);
-    const y = questionRows.length ? (Math.min(...questionRows) + Math.max(...questionRows)) / 2 : 0;
+    const questionWorlds = visibleWorlds.filter(world => world.questionId === questionId);
+    const questionRows = questionWorlds.map(world => world.y);
+    const roots = questionWorlds.filter(world => world.world.parentId == null);
+    const centerY = questionRows.length ? (Math.min(...questionRows) + Math.max(...questionRows)) / 2 : 0;
+    // A root-bearing question token is the virtual parent for all its roots. Put
+    // it just outside that question's visible subtree so equal-date roots cannot
+    // turn its straight connector fan into center hits.
+    const y = roots.length ? Math.min(...questionRows) - TREE_ROW_GAP : centerY;
     const label = String(question?.label || question?.title || question?.question || questionId).replace(/^what if\s+/i, '').trim();
     const attachmentMode = String(question?.attachmentMode || question?.mode || 'trunk');
     const parentWorldId = question?.parentWorldId == null ? null : String(question.parentWorldId);
@@ -785,6 +705,38 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
       active: questionId === currentQuestionId,
     };
   });
+  const parentChildEdges = visibleWorlds.flatMap(child => {
+    const parent = child.world.parentId == null ? null : visibleWorldById.get(String(child.world.parentId));
+    if (!parent) return [];
+    const from = { x: parent.x, y: parent.y, z: parent.z };
+    const to = { x: child.x, y: child.y, z: child.z };
+    return [{ parentId: parent.id, childId: child.id, from, to, lineage: parent.lineage && child.lineage }];
+  });
+  const questionRootEdges = questionBranches.flatMap(branch => {
+    const parentId = `\u0000question-root:${branch.questionId}`;
+    return visibleWorlds.filter(world => world.world.parentId == null && world.questionId === branch.questionId).map(world => ({
+      parentId, childId: world.id, from: { x: branch.x, y: branch.y, z: 0.06 },
+      to: { x: world.x, y: world.y, z: world.z }, questionId: branch.questionId,
+      worldId: world.id, color: world.lineage ? 'lineage' : 'proposed', questionRoot: true,
+    }));
+  });
+  const allPaths = routeAtlasEdgePaths([...parentChildEdges, ...questionRootEdges], {
+    nodes: [
+      ...visibleWorlds.map(world => ({ id: world.id, x: world.x, y: world.y })),
+      ...questionRootEdges.map(edge => ({ id: edge.parentId, x: edge.from.x, y: edge.from.y })),
+    ],
+  });
+  const parentChildPaths = allPaths.filter(path => !path.questionRoot);
+  const questionRootPaths = allPaths.filter(path => path.questionRoot).map(path => ({
+    parentId: path.parentId, childId: path.childId, questionId: path.questionId, worldId: path.worldId, color: path.color,
+    from: path.from, to: path.to, points: path.points, routeShape: path.routeShape, routeBounds: path.routeBounds,
+    unresolvedCrossings: path.unresolvedCrossings, unresolvedNodes: path.unresolvedNodes,
+  }));
+  const routePoints = allPaths.flatMap(path => path.points);
+  const routeBounds = routePoints.length ? {
+    left: Math.min(...routePoints.map(point => point.x)), right: Math.max(...routePoints.map(point => point.x)),
+    bottom: Math.min(...routePoints.map(point => point.y)), top: Math.max(...routePoints.map(point => point.y)),
+  } : null;
   const questionAttachments = questionBranches.filter(branch => branch.attachment).map(branch => ({
     questionId: branch.questionId, ...branch.attachment, label: branch.label, active: branch.active,
   }));
@@ -836,6 +788,7 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
     worlds: laidOutWorlds.map(entry => ({ ...entry, labelVisible: worldLabels.get(entry.id) })),
     positions,
     parentChildPaths,
+    questionRootPaths,
     routeBounds,
     questionBranches,
     questionAttachments,
