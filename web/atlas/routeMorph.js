@@ -1,4 +1,23 @@
+import { slerpUnitVector } from '../atlasLayout.js';
+
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+/** Sample a geographic great-circle surface route with attached endpoint radii. */
+export function buildSurfaceArcRoute(fromNormal, toNormal, fromRadius, toRadius, earthCenter = {}, segments = 16) {
+  const count = Math.max(1, Math.floor(Number(segments) || 16));
+  const startRadius = Math.max(0, Number(fromRadius) || 0), endRadius = Math.max(0, Number(toRadius) || 0);
+  const center = { x:Number(earthCenter.x) || 0, y:Number(earthCenter.y) || 0, z:Number(earthCenter.z) || 0 };
+  return Array.from({ length:count + 1 }, (_, index) => {
+    const progress = index / count;
+    const direction = slerpUnitVector(fromNormal, toNormal, progress);
+    const radius = startRadius + (endRadius - startRadius) * progress;
+    return {
+      x:center.x + direction.x * radius,
+      y:center.y + direction.y * radius,
+      z:center.z + direction.z * radius,
+    };
+  });
+}
 
 /** Morph an edge from its source chord to the exact Atlas route while keeping its live endpoints attached. */
 export function interpolateAttachedAtlasEdgeRoute(sourceFrom, sourceTo, targetRoute, progress, attachedEndpoints = {}) {

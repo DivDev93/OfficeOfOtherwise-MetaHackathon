@@ -67,6 +67,22 @@ test('Atlas renders exact routed corners and preserves them through axis changes
     'rendered line segments follow the exact route vertex count');
 });
 
+test('selected-parent Surface lineage follows geographic anchors and morphs continuously into the existing route', () => {
+  const routeMorph = readFileSync(new URL('../web/atlas/routeMorph.js', import.meta.url), 'utf8');
+  assert.match(routeMorph, /export function buildSurfaceArcRoute\(fromNormal, toNormal, fromRadius, toRadius, earthCenter = \{\}, segments = 16\)[\s\S]*slerpUnitVector\(fromNormal, toNormal, progress\)/,
+    'the route helper depends only on geographic normals, radii, and globe center');
+  assert.match(scene, /function worldPosition\(entry, state,[\s\S]*return geographicWorldPosition\(entry, state, timestamp, radius\)/,
+    'the selected parent retains its geographic endpoint instead of a camera-relative arrival position');
+  assert.doesNotMatch(scene, /arrivalSurfacePoint|arrivalEdge \? from\.clone\(\)\.lerp/,
+    'the persistent selected-parent link has no camera-relative endpoint or special straight chord');
+  assert.match(scene, /const surfaceArc = buildSurfaceArcRoute\(surfaceFrom, surfaceTo, fromRadius, markerRadius, earthMesh\.position, segments\);[\s\S]*const arc = new THREE\.Vector3\(surfaceArc\[step\]\.x, surfaceArc\[step\]\.y, surfaceArc\[step\]\.z\);[\s\S]*arc\.lerp\(straight, state\.lift\)/,
+    'the great-circle Surface route morphs toward the current Lift/Orbit chord continuously');
+  assert.match(scene, /interpolateAttachedAtlasEdgeRoute\(orbitFrom, orbitTo, atlasCurve,[\s\S]*\{ from, to, easeInterior:true \}\)/,
+    'the established Orbit-to-Atlas route morph keeps its live endpoints');
+  assert.match(scene, /arrivalFromId = arrivalParentWorldId\(world, worlds\)/,
+    'selecting a previous or child world still derives the connection from its actual parent');
+});
+
 test('Atlas P2 labels the finite non-temporal lane only when undated records exist', () => {
   assert.match(p2Renderer, /const undatedLabel = new THREE\.Sprite/);
   assert.match(p2Renderer, /const undatedText = layout\.undatedLane\?\.label \|\| 'UNDATED · NO TIME POSITION'/);

@@ -8,7 +8,7 @@ import { createLargeClusterPicker, needsPagedClusterPicker, visibleKeyboardNeigh
 import { createAtlasP2Renderer } from './p2Renderer.js';
 import { bindAtlasScreenLabelButton, isAtlasScreenLabelAction } from './screenLabelActions.js';
 import { planAtlasReveal, renderableAtlasRevealPlan } from './revealPlanner.js';
-import { interpolateAttachedAtlasEdgeRoute } from './routeMorph.js';
+import { buildSurfaceArcRoute, interpolateAttachedAtlasEdgeRoute } from './routeMorph.js';
 import { dragModeForZoom, panDeltaForDrag, surfaceDragAngles, surfaceDetailFromPinch, surfaceDetailFromWheel, zoomFromPinch, zoomFromWheel } from './interaction.js';
 import { createOrbitChildLabelLeader, createWorldLabelCandidates, edgeMarker, layoutOrbitChildLabels, placeOrbitFallbackDock, placeOrbitFallbackPanel, placeScreenLabels, projectedSphereDiameterPixels, resolveOrbitFallbackMount, shortQuestionTitle, visibleViewportObstacleRects, viewportObstacleRectsFromCenters, worldLabelText } from './labels.js';
 import {
@@ -25,7 +25,7 @@ import {
   pinScaleAtPresentation, pinAnchorRadiusAtPresentation,
   altitudeForZoom, atlasPresentationState, atlasZoomState, clampAtlasLevel, createWorldRegistry,
   layoutAtlasWorlds, layoutOrbitNeighborhood, measuredFps, surfaceFacingOrientation,
-  worldRadiusForScreenPixels, nearestProjectedAnchorHit, projectedWorldTarget, targetOccludedByEarth, pointerRayDistanceAtTargetDepth, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds, slerpUnitVector,
+  worldRadiusForScreenPixels, nearestProjectedAnchorHit, projectedWorldTarget, targetOccludedByEarth, pointerRayDistanceAtTargetDepth, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds,
   cappedTextureSize, allowEarthBodySelection, fitCenteredCameraDistance, fitSurfaceCameraDistance,
   surfacePanelCenterOffset,
   appendContinuousFrame, stableWorldId, localQuaternionForWorldFacing, isSurfaceNormalVisible,
@@ -610,14 +610,6 @@ export function createAtlasScene(container, {
     worldDelta.applyMatrix3(new THREE.Matrix3().setFromMatrix4(inverse));
     return point.add(worldDelta);
   }
-  function arrivalSurfacePoint() {
-    const earthCenter = earthMesh.getWorldPosition(new THREE.Vector3());
-    const cameraQuaternion = camera.getWorldQuaternion(new THREE.Quaternion());
-    const offset = new THREE.Vector3(-0.4, 0.15, 1.3).applyQuaternion(cameraQuaternion);
-    const worldPoint = earthCenter.add(offset);
-    const inverse = new THREE.Matrix4().copy(atlasGroup.matrixWorld).invert();
-    return worldPoint.applyMatrix4(inverse);
-  }
   function geographicWorldPosition(entry, state, timestamp = performance.now(), radius = surfaceEarthRadius(state)) {
     const planned = revealPlan?.positions.get(entry.id);
     if (planned) return withScreenOffset(new THREE.Vector3(planned.x, planned.y, planned.z || 0), fanOffsets.get(entry.id));
@@ -630,11 +622,7 @@ export function createAtlasScene(container, {
   function worldPosition(entry, state, timestamp = performance.now(), radius = renderedPinAnchorRadius(state)) {
     const planned = revealPlan?.positions.get(entry.id);
     if (planned) return withScreenOffset(new THREE.Vector3(planned.x, planned.y, planned.z || 0), fanOffsets.get(entry.id));
-    if (entry.id !== arrivalFromId) return geographicWorldPosition(entry, state, timestamp, radius);
-    const orbitPosition = entry.orbit || entry.atlas;
-    const orbit = new THREE.Vector3(orbitPosition.x, orbitPosition.y, orbitPosition.z);
-    const point = arrivalSurfacePoint().lerp(orbit, state.lift).lerp(atlasPosition(entry, timestamp), state.atlas);
-    return withScreenOffset(point, fanOffsets.get(entry.id));
+    return geographicWorldPosition(entry, state, timestamp, radius);
   }
   function hitWorldPosition(entry, state, timestamp = performance.now()) {
     const radius = lodIdSet.has(entry.id) ? surfaceEarthRadius(state) + 0.003 : renderedPinAnchorRadius(state);
@@ -1948,7 +1936,6 @@ export function createAtlasScene(container, {
       const to = worldPosition(child, edgeState, timestamp, markerRadius);
       const surfaceFrom = surfacePoint(parent, fromRadius).normalize();
       const surfaceTo = surfacePoint(child, markerRadius).normalize();
-      const arrivalEdge = child.id === currentId && parent.id === arrivalFromId;
       const arcPoints = [];
       const path = atlasTimeline?.parentChildPaths?.find(item => item.parentId === parent.id && item.childId === child.id);
       const previousPath = axisTransition?.fromTimeline?.parentChildPaths?.find(item => item.parentId === parent.id && item.childId === child.id);
@@ -1979,12 +1966,10 @@ export function createAtlasScene(container, {
         ? interpolateAttachedAtlasEdgeRoute(orbitFrom, orbitTo, atlasCurve, inAtlas && !suppressAtlasThreads ? state.atlas : 0,
           { from, to, easeInterior:true })
         : null;
+      const surfaceArc = buildSurfaceArcRoute(surfaceFrom, surfaceTo, fromRadius, markerRadius, earthMesh.position, segments);
       for (let step = 0; step <= segments; step++) {
         const t = step / segments;
-        const direction = slerpUnitVector(surfaceFrom, surfaceTo, t);
-        const surfaceRadius = fromRadius + (markerRadius - fromRadius) * t;
-        const arc = arrivalEdge ? from.clone().lerp(to, t)
-          : new THREE.Vector3(direction.x, direction.y, direction.z).multiplyScalar(surfaceRadius).add(earthMesh.position);
+        const arc = new THREE.Vector3(surfaceArc[step].x, surfaceArc[step].y, surfaceArc[step].z);
         const straight = from.clone().lerp(to, t);
         arc.lerp(straight, state.lift);
         if (directMorph) {
