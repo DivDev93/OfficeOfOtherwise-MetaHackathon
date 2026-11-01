@@ -143,3 +143,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-10-31 | Atlas round 3: on phones, first zoom-out targets Orbit and other questions are available through an Atlas toggle; preserve initialization and saved-graph synchronization. | |
 | 2026-10-31 | Atlas round 3: route time-anchored tree edges through tested curved lanes and preserve the chosen routes while the layout animates. | |
 | 2026-10-31 | Atlas round 3: make the phone question toggle reachable and keep its state stable when saved roots finish loading. | |
+| 2026-10-31 | Atlas round 3: captured desktop and phone views plus a wheel-driven Surface–Atlas–Surface recording; verified saved-tree routing, phone toggle, and reduced-motion panel behavior using local replay fixtures. | |
