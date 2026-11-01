@@ -622,6 +622,10 @@ body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{dis
 @media(prefers-reduced-motion:reduce){.atlas-large-cluster-backdrop,.atlas-large-cluster-picker{transition:none!important;animation:none!important}}
 
 /* Keep Atlas panel geometry reversible while compact and full views trade places. */
+/* Before a story is entered, show the invitation rather than empty story controls. */
+body:not(.has-story) #exploration-tree,
+body:not(.has-story) .atlas-toolbar,
+body:not(.has-story) .map-panel>.panel-head{display:none}
 .has-story .hero-panel{transition:width .24s ease,top .24s ease,right .24s ease,bottom .24s ease,left .24s ease,height .24s ease,opacity .18s ease}
 @media(max-width:700px){
   body:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail>:not(.atlas-compact-controls),

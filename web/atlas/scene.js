@@ -342,6 +342,9 @@ export function createAtlasScene(container, {
     basemapImage = cappedTextureImage(image.image, 2048);
     earthTexture.image = basemapImage; earthTexture.needsUpdate = true;
     miniEarthTexture.image = cappedTextureImage(basemapImage, 512); miniEarthTexture.needsUpdate = true;
+    // The empty entry state has no selected world to draw a marker for, but it
+    // still needs the real Earth basemap instead of a blank texture.
+    if (!currentEntry()) { currentEarthTexture.image = basemapImage; currentEarthTexture.needsUpdate = true; }
     atlasPointTexture?.dispose();
     atlasPointTexture = createOrthographicEarthPointTexture(basemapImage);
     if (lodPointMaterial) {
