@@ -34,6 +34,7 @@ export function placeScreenLabels(candidates, bounds, nodeRects = [], reservedRe
   };
   if (safe.right <= safe.left || safe.bottom <= safe.top) return [];
   const placed = [];
+  const fallback = [];
   const ordered = [...candidates].sort((a, b) => (b.priority || 0) - (a.priority || 0) || String(a.id).localeCompare(String(b.id)));
   for (const candidate of ordered) {
     const width = Math.min(Math.max(28, candidate.width || 0), safe.right - safe.left);
@@ -53,6 +54,40 @@ export function placeScreenLabels(candidates, bounds, nodeRects = [], reservedRe
       const rect = { ...candidate, x, y, width, height };
       if ([...nodeRects, ...reservedRects, ...placed].some(other => overlaps(rect, other, 3))) continue;
       chosen = rect; break;
+    }
+    if (chosen) placed.push(chosen);
+    else if (candidate.edgeFallback) fallback.push({ candidate, width, height });
+  }
+  // Direct children remain discoverable in crowded mobile Orbit views when a
+  // collision-free label can fit in a viewport-edge lane.
+  const laneWidth = safe.right - safe.left;
+  for (const { candidate, width, height } of fallback) {
+    const leftX = safe.left + width / 2 + 2;
+    const rightX = safe.right - width / 2 - 2;
+    const preferredSide = candidate.x >= (safe.left + safe.right) / 2 ? 'right' : 'left';
+    const sides = preferredSide === 'right' ? ['right', 'left'] : ['left', 'right'];
+    const firstY = safe.top + height / 2 + 2;
+    const lastY = safe.bottom - height / 2 - 2;
+    const rowStep = height + 8;
+    let chosen = null;
+    for (let y = firstY; y <= lastY && !chosen; y += rowStep) {
+      for (const side of sides) {
+        const arrowed = /^[←→↑↖↗↙↘]\s/.test(candidate.text)
+          ? candidate.text
+          : `${side === 'left' ? '→' : '←'} ${shortEdgeTitle(candidate.text, 26)}`;
+        const rect = {
+          ...candidate,
+          text: shortEdgeTitle(arrowed, 32),
+          x: side === 'left' ? leftX : rightX,
+          y,
+          width: Math.min(width, laneWidth),
+          height,
+          edgeFallbackPlacement: true,
+        };
+        if ([...nodeRects, ...reservedRects, ...placed].some(other => overlaps(rect, other, 3))) continue;
+        chosen = rect;
+        break;
+      }
     }
     if (chosen) placed.push(chosen);
   }
@@ -83,26 +118,34 @@ export function shortQuestionTitle(text, maxWords = 5) {
   return words.length > maxWords ? `${words.slice(0, maxWords).join(' ')}…` : words.join(' ');
 }
 
-export function createWorldLabelCandidates(entries, { currentId, focusedId, project, measure, yearFirst = false, include = () => false, bounds, lineageBounds = bounds, reservedRects = [] }) {
+export function createWorldLabelCandidates(entries, { currentId, focusedId, project, measure, yearFirst = false, include = () => false, edgeMarkerIncluded = false, bounds, lineageBounds = bounds, reservedRects = [] }) {
   const candidates = [];
   for (const entry of entries || []) {
     const included = include(entry);
     if (!shouldShowWorldLabel(entry, currentId, focusedId) && !included) continue;
     const point = project(entry);
-    if (!point || point.visible === false) continue;
+    if (!point) continue;
+    const canMarkIncludedEdge = edgeMarkerIncluded && included && bounds
+      && Number.isFinite(point.x) && Number.isFinite(point.y)
+      && (point.x < bounds.left || point.x > bounds.right || point.y < bounds.top || point.y > bounds.bottom);
+    if (point.visible === false && !canMarkIncludedEdge) continue;
     const fullText = worldLabelText(entry.world, { yearFirst });
-    const marker = entry.lineage && entry.id !== currentId ? edgeMarker(point, lineageBounds, fullText) : null;
+    const lineageMarker = entry.lineage && entry.id !== currentId ? edgeMarker(point, lineageBounds, fullText) : null;
+    const includedEdgeMarker = canMarkIncludedEdge ? edgeMarker(point, bounds, fullText) : null;
+    const marker = lineageMarker || includedEdgeMarker;
     const text = marker || fullText;
     const size = measure(text);
-    const markerPoint = marker && lineageBounds ? {
-      x: Math.max(lineageBounds.left + size.width / 2 + 2, Math.min(lineageBounds.right - size.width / 2 - 2, point.x)),
-      y: Math.max(lineageBounds.top + size.height / 2 + 2, Math.min(lineageBounds.bottom - size.height / 2 - 2, point.y)),
+    const markerBounds = lineageMarker ? lineageBounds : includedEdgeMarker ? bounds : null;
+    const markerPoint = marker && markerBounds ? {
+      x: Math.max(markerBounds.left + size.width / 2 + 2, Math.min(markerBounds.right - size.width / 2 - 2, point.x)),
+      y: Math.max(markerBounds.top + size.height / 2 + 2, Math.min(markerBounds.bottom - size.height / 2 - 2, point.y)),
     } : point;
     candidates.push({
       id: entry.id, text, x: markerPoint.x, y: markerPoint.y,
       width: size.width, height: size.height,
       priority: Math.max(included ? 85 : 0, labelPriority({ id: entry.id, lineage: entry.lineage }, currentId, focusedId)),
       kind: 'world', fullText,
+      edgeFallback: Boolean(edgeMarkerIncluded && included),
     });
   }
   return candidates;

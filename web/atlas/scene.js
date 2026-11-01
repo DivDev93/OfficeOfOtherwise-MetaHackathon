@@ -1186,6 +1186,7 @@ export function createAtlasScene(container, {
       },
       measure: text => ({ width: Math.min(mobileLabels ? 220 : 320, labelBounds.width * (mobileLabels ? 0.64 : 0.7), safeBounds.right - safeBounds.left, Math.max(52, text.length * 7.5 + 8)), height: 18 }),
       yearFirst: mobileLabels,
+      edgeMarkerIncluded: mobileLabels,
       bounds: safeBounds,
       lineageBounds,
       reservedRects,

@@ -158,3 +158,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-10-31 | Atlas round 3: refreshed local screenshots and wheel recording after per-edge opacity correction. | |
 | 2026-11-01 | Atlas round 3: resolve overlapping event hit targets by nearest visible screen anchor, with depth and stable ID tie-breaking. | |
 | 2026-11-01 | Atlas round 3: keep offscreen ancestry labels clear of top controls and show a directional arrow with a short title. | |
+| 2026-11-01 | Atlas round 3: add compact, collision-aware phone edge labels for visible Orbit children. | |

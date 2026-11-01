@@ -37,6 +37,75 @@ test('ancestors behind top chrome use a short edge marker while Orbit children k
     'the marker clears the header instead of clipping under it');
 });
 
+test('admitted direct children get compact edge markers when partially or fully offscreen', () => {
+  const bounds = { left: 10, top: 8, right: 365, bottom: 802 };
+  const entries = [
+    { id: 'right-child', parentId: 'current', world: { title: 'River Canopy School Ferries', year: 2003 } },
+    { id: 'left-child', parentId: 'current', world: { title: 'Coastal Seed Archive', year: 1998 } },
+    { id: 'folded-child', parentId: 'current', world: { title: 'Folded Canopy Branch', year: 2010 } },
+  ];
+  const candidates = createWorldLabelCandidates(entries, {
+    currentId: 'current', bounds, edgeMarkerIncluded: true, yearFirst: true,
+    include: entry => entry.id !== 'folded-child',
+    project: entry => entry.id === 'right-child'
+      ? { x: 412, y: 386, visible: false }
+      : { x: -18, y: 300, visible: false },
+    measure: text => ({ width: Math.min(220, text.length * 7.5 + 8), height: 18 }),
+  });
+
+  assert.deepEqual(candidates.map(candidate => candidate.id), ['right-child', 'left-child']);
+  const right = candidates[0];
+  assert.match(right.text, /^→ 2003 · River Canopy School…$/);
+  assert.equal(right.fullText, '2003 · River Canopy School Ferries');
+  assert.ok(right.x + right.width / 2 <= bounds.right, 'right marker stays inside the mobile viewport');
+  assert.ok(right.x - right.width / 2 >= bounds.left, 'right marker has a fully visible title');
+  assert.match(candidates[1].text, /^← 1998 · Coastal Seed Archive$/);
+  assert.equal(candidates[1].fullText, '1998 · Coastal Seed Archive');
+});
+
+test('direct-child edge markers are opt-in and still obey the Unfolded inclusion filter', () => {
+  const bounds = { left: 10, top: 8, right: 365, bottom: 802 };
+  const child = { id: 'child', world: { title: 'River Canopy', year: 2003 } };
+  const project = () => ({ x: 412, y: 386, visible: false });
+  const measure = text => ({ width: Math.min(220, text.length * 7.5 + 8), height: 18 });
+  assert.deepEqual(createWorldLabelCandidates([child], {
+    bounds, project, measure, include: () => true,
+  }), [], 'existing callers do not opt into offscreen included labels implicitly');
+  assert.deepEqual(createWorldLabelCandidates([child], {
+    bounds, edgeMarkerIncluded: true, project, measure, include: () => false,
+  }), [], 'folded/excluded children do not receive edge markers');
+  assert.deepEqual(createWorldLabelCandidates([child], {
+    bounds, edgeMarkerIncluded: true, project: () => ({ x: 180, y: 200, visible: false }), measure, include: () => true,
+  }), [], 'an in-bounds point hidden by depth or another visibility rule is still omitted');
+  const [candidate] = createWorldLabelCandidates([child], {
+    bounds, edgeMarkerIncluded: true, yearFirst: true, project, measure, include: () => true,
+  });
+  assert.equal(candidate.text, '→ 2003 · River Canopy');
+});
+
+test('crowded direct-child labels use collision-free edge slots and omit impossible density', () => {
+  const bounds = { left: 10, top: 8, right: 365, bottom: 220 };
+  const centerControls = { x: 187.5, y: 108, width: 355, height: 112 };
+  const children = ['a', 'b', 'c'].map(id => ({
+    id, text: `200${id === 'a' ? 1 : id === 'b' ? 2 : 3} · ${id.toUpperCase()} Canopy Branch`,
+    fullText: `${id.toUpperCase()} Canopy Branch`, x: 187.5, y: 108,
+    width: 220, height: 18, priority: 85, kind: 'world', edgeFallback: true,
+  }));
+  const placed = placeScreenLabels(children, bounds, [], [centerControls]);
+
+  assert.equal(placed.length, 2, 'only the two collision-free edge rows outside the reserved controls fit');
+  assert.ok(placed.every(label => label.edgeFallbackPlacement));
+  assert.ok(placed.every(label => label.x === 122 || label.x === 253), 'fallbacks sit in left/right edge lanes');
+  assert.ok(placed.every(label => label.y < centerControls.y - centerControls.height / 2
+    || label.y > centerControls.y + centerControls.height / 2));
+  assert.ok(placed.every(label => label.text.length <= 32 && label.fullText));
+  for (let i = 0; i < placed.length; i++) {
+    assert.ok(![centerControls, ...placed.filter((_, j) => i !== j)].some(other =>
+      Math.abs(other.x - placed[i].x) < (other.width + placed[i].width) / 2 + 3
+      && Math.abs(other.y - placed[i].y) < (other.height + placed[i].height) / 2 + 3));
+  }
+});
+
 test('world label text is concise and names the year when present', () => {
   assert.equal(worldLabelText({ title: 'Green Sahara', year: 2100 }), 'Green Sahara · 2100');
   assert.equal(worldLabelText({ title: 'Green Sahara', year: -2800 }), 'Green Sahara · 2800 BCE');
