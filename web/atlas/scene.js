@@ -1353,7 +1353,8 @@ export function createAtlasScene(container, {
         tokenY = prior.y + (branch.y - prior.y) * progress;
       }
       const from = new THREE.Vector3(tokenX, tokenY, connection.from?.z ?? 0.06);
-      const rootPoint = atlasPosition(root, timestamp);
+      // Keep the question link attached to the root as it moves between Orbit and Atlas.
+      const rootPoint = worldPosition(root, state, timestamp, markerRadius);
       const priorConnection = axisTransition?.fromTimeline?.questionRootPaths?.find(item =>
         item.questionId === connection.questionId && item.worldId === connection.worldId);
       let route = transformAtlasEdgeShape(from, rootPoint, connection.routeShape);

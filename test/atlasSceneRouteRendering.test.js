@@ -56,6 +56,8 @@ test('question-root attachments render and morph their routed paths with existin
     'axis transitions match the previous route to the same question and root');
   assert.match(scene, /transformAtlasEdgeShape\(from, rootPoint, connection\.routeShape\)/,
     'each routed root attachment keeps all of its exact corners');
+  assert.match(scene, /const rootPoint = worldPosition\(root, state, timestamp, markerRadius\)/,
+    'the routed root endpoint tracks the moving marker during zoom');
   assert.match(scene, /priorConnection\.routeShape, connection\.routeShape, progress/,
     'prior and target attachments animate continuously through their routed shapes');
   assert.match(scene, /connection\.color === 'lineage' \? 'lineage'[\s\S]*hoverPathIds\.has\(connection\.worldId\) \? 'hover'/,

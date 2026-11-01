@@ -109,7 +109,17 @@ test('root Orbit neighborhood uses its question as a virtual parent and limits s
   assert.equal(positions.get('question:q-a').questionId, 'q-a');
   assert.ok(positions.get('question:q-a').x < positions.get('root-a').x);
   assert.ok(positions.get('root-a-sibling').x < positions.get('root-a').x);
+  assert.notEqual(positions.get('root-a-sibling').y, 0, 'a single sibling cannot sit on the question-parent to current path');
   assert.equal(positions.has('root-b'), false, 'another question tree is not a sibling');
+});
+
+test('odd sibling counts never place a sibling on the parent-current Orbit path', () => {
+  for (const count of [1, 3, 5]) {
+    const worlds = [{ id: 'parent', parentId: null }, { id: 'current', parentId: 'parent' },
+      ...Array.from({ length: count }, (_, i) => ({ id: `sibling-${i}`, parentId: 'parent' }))];
+    const positions = layoutOrbitNeighborhood(layoutAtlasWorlds(worlds, 'current'), 'current');
+    for (let i = 0; i < count; i++) assert.notEqual(positions.get(`sibling-${i}`).y, 0);
+  }
 });
 
 test('current geographic normal rotates onto the camera axis and remains shared by surface markers', () => {

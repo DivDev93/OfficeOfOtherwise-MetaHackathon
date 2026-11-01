@@ -346,7 +346,13 @@ export function layoutOrbitNeighborhood(entries = [], currentId) {
     positions.set(entry.id, { x, y: (index - (items.length - 1) / 2) * spacing, z: 0 });
   });
   spread(children, 2.05, 0.72);
-  spread(siblings, -1.05, 0.68);
+  // Leave the parent-to-current sightline clear even when there is one
+  // sibling (or any odd number of siblings).
+  siblings.forEach((entry, index) => {
+    const row = index - (siblings.length - 1) / 2;
+    const separated = siblings.length % 2 ? row + (row < 0 ? -0.5 : 0.5) : row;
+    positions.set(entry.id, { x: -1.05, y: separated * 0.68, z: 0 });
+  });
   return positions;
 }
 
