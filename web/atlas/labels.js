@@ -76,9 +76,9 @@ export function placeScreenLabels(candidates, bounds, nodeRects = [], reservedRe
       for (let y = firstY; y <= lastY; y += rowStep) {
         for (const side of sides) {
           const x = side === 'left' ? safe.left + slotWidth / 2 + 2 : safe.right - slotWidth / 2 - 2;
-          const arrowed = /^[←→↑↖↗↙↘]\s/.test(candidate.text)
-            ? candidate.text
-            : `${side === 'left' ? '→' : '←'} ${candidate.text}`;
+          const hasDirection = /^[←→↑↖↗↙↘]\s/.test(candidate.text);
+          const fallbackText = candidate.lineageFallbackText || candidate.text;
+          const arrowed = hasDirection ? candidate.text : `${side === 'left' ? '→' : '←'} ${fallbackText}`;
           const maxChars = compact ? Math.max(8, Math.floor((slotWidth - 8) / 7.5)) : 32;
           const rect = {
             ...candidate,
@@ -429,6 +429,18 @@ function shortEdgeTitle(text, maxLength = 32) {
   return `${prefix.slice(0, wordBoundary > maxLength * 0.55 ? wordBoundary : maxLength - 1).trimEnd()}…`;
 }
 
+function shortLineageMarkerTitle(world = {}) {
+  const title = String(world.title || 'Untitled possibility').replace(/\s+/g, ' ').trim();
+  const numericYear = Number(world.year);
+  const year = Number.isSafeInteger(numericYear) && numericYear !== 0
+    ? numericYear < 0 ? `${Math.abs(numericYear)} BCE` : String(numericYear)
+    : 'Undated';
+  // Edge labels are capped at 32 characters including the direction arrow.
+  // Put the title first so mobile year-first labels do not lose all context.
+  const titleBudget = Math.max(6, 30 - year.length - 3);
+  return `${shortEdgeTitle(title, titleBudget)} · ${year}`;
+}
+
 export function edgeMarker(point, bounds, text) {
   if (!bounds) return null;
   const dx = point.x < bounds.left ? -1 : point.x > bounds.right ? 1 : 0;
@@ -457,7 +469,10 @@ export function createWorldLabelCandidates(entries, { currentId, focusedId, proj
       && (point.x < bounds.left || point.x > bounds.right || point.y < bounds.top || point.y > bounds.bottom);
     if (point.visible === false && !canMarkIncludedEdge) continue;
     const fullText = worldLabelText(entry.world, { yearFirst });
-    const lineageMarker = entry.lineage && entry.id !== currentId ? edgeMarker(point, lineageBounds, fullText) : null;
+    const lineageFallbackText = entry.lineage && entry.id !== currentId
+      ? shortLineageMarkerTitle(entry.world) : null;
+    const lineageMarker = entry.lineage && entry.id !== currentId
+      ? edgeMarker(point, lineageBounds, lineageFallbackText) : null;
     const includedEdgeMarker = canMarkIncludedEdge ? edgeMarker(point, bounds, fullText) : null;
     const marker = lineageMarker || includedEdgeMarker;
     const text = marker || fullText;
@@ -472,6 +487,7 @@ export function createWorldLabelCandidates(entries, { currentId, focusedId, proj
       width: size.width, height: size.height,
       priority: Math.max(included ? 85 : 0, labelPriority({ id: entry.id, lineage: entry.lineage }, currentId, focusedId)),
       kind: 'world', fullText,
+      ...(lineageFallbackText ? { lineageFallbackText } : {}),
       edgeFallback: Boolean((edgeMarkerIncluded && included) || entry.id === currentId || entry.lineage),
     });
   }

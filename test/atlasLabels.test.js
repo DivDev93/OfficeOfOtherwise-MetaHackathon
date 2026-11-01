@@ -30,13 +30,61 @@ test('ancestors behind top chrome use a short edge marker while Orbit children k
   });
   const ancestor = candidates.find(candidate => candidate.id === 'ancestor');
   const child = candidates.find(candidate => candidate.id === 'child');
-  assert.match(ancestor.text, /^↑ Sundaland River Plain Unites…$/);
+  assert.match(ancestor.text, /^↑ Sundaland River Plain… · 1800$/);
   assert.ok(ancestor.y >= lineageBounds.top + ancestor.height / 2, 'the edge marker is repositioned below the top chrome band');
   assert.equal(child.text, 'Canopy Walkway Network · 1978', 'direct-child labels do not become edge markers');
   const placed = placeScreenLabels([ancestor], bounds, [], [header]);
   assert.equal(placed.length, 1);
   assert.ok(placed[0].y - placed[0].height / 2 > header.y + header.height / 2,
     'the marker clears the header instead of clipping under it');
+});
+
+test('375px mobile ancestor markers keep short titles and years in collision-free slots', () => {
+  const bounds = { left: 10, top: 8, right: 365, bottom: 802 };
+  const header = { x: 187.5, y: 48, width: 355, height: 80 };
+  const entries = [
+    { id: 'root', lineage: true, world: { title: 'Sundaland River Plain Unites Islands', year: 1800 } },
+    { id: 'ancestor', lineage: true, world: { title: 'Canopy Walkway Exploration Network', year: 1902 } },
+  ];
+  const candidates = createWorldLabelCandidates(entries, {
+    currentId: 'current', bounds, lineageBounds: { ...bounds, top: 96 }, reservedRects: [header], yearFirst: true,
+    project: () => ({ x: 187.5, y: 10, visible: true }),
+    measure: text => ({ width: Math.min(230, text.length * 7.5 + 8), height: 18 }),
+  });
+  assert.match(candidates[0].text, /^↑ Sundaland River Plain… · 1800$/);
+  assert.match(candidates[1].text, /^↑ Canopy Walkway… · 1902$/);
+  assert.ok(candidates.every(candidate => candidate.text.length <= 32));
+
+  const placed = placeScreenLabels(candidates, bounds, [], [header]);
+  assert.equal(placed.length, 2, 'both ancestor identities remain visible when space permits');
+  assert.ok(placed.every(label => label.x - label.width / 2 >= bounds.left
+    && label.x + label.width / 2 <= bounds.right
+    && label.y - label.height / 2 >= bounds.top
+    && label.y + label.height / 2 <= bounds.bottom), 'labels stay within the 375 by 812 viewport');
+  assert.ok(placed.every(label => Math.abs(label.x - header.x) >= (label.width + header.width) / 2 + 3
+    || Math.abs(label.y - header.y) >= (label.height + header.height) / 2 + 3), 'labels clear the header');
+  assert.ok(!(Math.abs(placed[0].x - placed[1].x) < (placed[0].width + placed[1].width) / 2 + 3
+    && Math.abs(placed[0].y - placed[1].y) < (placed[0].height + placed[1].height) / 2 + 3), 'ancestor labels do not overlap');
+});
+
+test('375px mobile crowded in-bounds ancestor fallback keeps title before year', () => {
+  const bounds = { left: 10, top: 8, right: 365, bottom: 802 };
+  const controls = { x: 187.5, y: 108, width: 355, height: 112 };
+  const [ancestor] = createWorldLabelCandidates([
+    { id: 'ancestor', lineage: true, world: { title: 'Sundaland River Plain Unites Islands', year: 1800 } },
+  ], {
+    currentId: 'current', bounds, yearFirst: true, project: () => ({ x: 187.5, y: 108, visible: true }),
+    measure: text => ({ width: Math.min(230, text.length * 7.5 + 8), height: 18 }),
+  });
+  assert.equal(ancestor.text, '1800 · Sundaland River Plain Unites Islands', 'the normal in-bounds label keeps its existing format');
+
+  const [placed] = placeScreenLabels([ancestor], bounds, [], [controls]);
+  assert.ok(placed?.edgeFallbackPlacement, 'the blocked local label uses the edge fallback');
+  assert.match(placed.text, /^← Sundaland River Plain… · 1800$/);
+  assert.ok(placed.x - placed.width / 2 >= bounds.left && placed.x + placed.width / 2 <= bounds.right);
+  assert.ok(placed.y - placed.height / 2 >= bounds.top && placed.y + placed.height / 2 <= bounds.bottom);
+  assert.ok(Math.abs(placed.x - controls.x) >= (placed.width + controls.width) / 2 + 3
+    || Math.abs(placed.y - controls.y) >= (placed.height + controls.height) / 2 + 3, 'fallback clears the controls');
 });
 
 test('admitted direct children get compact edge markers when partially or fully offscreen', () => {
