@@ -106,10 +106,18 @@ test('Orbit direct-child labels use accessible scroll lanes only in the Orbit ne
     'visible child buttons retain a 44px touch target');
   assert.match(scene, /visibleViewportObstacleRects\(labelDocument,[\s\S]*\.exploration-rail, #invitation, #exploration-tree/,
     'the floating fallback reserves the visible invitation and exploration rail as well as Atlas controls');
-  assert.match(scene, /fallbackObstacles = \[[\s\S]*viewportObstacleRectsFromCenters\(nodeRects\),[\s\S]*viewportObstacleRectsFromCenters\(orbitLaneLayout\.local\)/,
-    'the fallback drawer clears locally placed child labels as well as node hit areas');
-  assert.match(scene, /placeOrbitFallbackPanel\(fallbackBounds, fallbackObstacles\)[\s\S]*resolveOrbitFallbackMount\([\s\S]*fallbackHost = fallbackMount\.mode === 'tree' \|\| fallbackMount\.mode === 'tree-reopen' \? explorationTree[\s\S]*fallbackHost\.append\(orbitFallbackSection\)/,
-    'the fallback selects a visible host or the Story tree reveal path when no safe portal slot fits');
+  assert.match(scene, /fallbackLabels = viewportObstacleRectsFromCenters\([\s\S]*orbitLaneLayout\.local[\s\S]*placements\.filter/,
+    'the fallback dock clears locally placed child labels and other visible labels');
+  assert.match(scene, /const safeObstacles = \[\.\.\.fallbackControls, \.\.\.fallbackLabels, \.\.\.fallbackNodes\][\s\S]*placeOrbitFallbackPanel\(fallbackBounds, safeObstacles\)[\s\S]*placeOrbitFallbackDock\(fallbackBounds, \[\.\.\.fallbackControls, \.\.\.fallbackLabels\]/,
+    'the fallback tries a full safe panel, a 44px compact dock, then globe-space placement while keeping controls and labels clear');
+  assert.match(scene, /resolveOrbitFallbackMount\([\s\S]*fallbackHost = fallbackMount\.mode === 'tree' \|\| fallbackMount\.mode === 'tree-reopen' \? explorationTree[\s\S]*fallbackHost\.append\(orbitFallbackSection\)/,
+    'the visible portal wins when a safe dock fits, with the tree retained only as the final no-space fallback');
+  assert.match(scene, /heading\.style\.display = fallbackRect\?\.compact \? 'none' : 'block'/,
+    'the compact dock uses its full height for at least one 44px child button');
+  assert.match(scene, /fallbackWorldTitle = current\?\.world\?\.title \|\| 'Current world'[\s\S]*setAttribute\('aria-label', `\$\{fallbackWorldTitle\} direct children in Orbit`\)/,
+    'the dock region accessible name identifies the selected world');
+  assert.match(scene, /116px wide by 82px tall \(a 62px dock for a 44px label plus 10px safety margins\)/,
+    'the no-space warning describes the compact dock geometry and safety gap');
   assert.match(scene, /const content = placement\.local \? labelOverlay[\s\S]*button\.style\.minHeight = '44px'[\s\S]*button\.style\.clipPath = 'none'/,
     'near-node and fallback labels remain visible buttons with full-size touch targets');
   assert.doesNotMatch(scene, /orbitFallback[\s\S]*?classList\.(?:add|remove)\('atlas-panels-open'\)|orbitFallback[\s\S]*?#atlas-compact-tree[\s\S]*?aria-expanded/,

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createOrbitChildLabelLeader, createWorldLabelCandidates, edgeMarker, layoutOrbitChildLabelLanes, layoutOrbitChildLabels, placeOrbitFallbackPanel, placeScreenLabels, projectedSphereDiameterPixels, resolveOrbitFallbackMount, shouldShowWorldLabel, visibleViewportObstacleRects, viewportObstacleRectsFromCenters, worldLabelText } from '../web/atlas/labels.js';
+import { createOrbitChildLabelLeader, createWorldLabelCandidates, edgeMarker, layoutOrbitChildLabelLanes, layoutOrbitChildLabels, placeOrbitFallbackDock, placeOrbitFallbackPanel, placeScreenLabels, projectedSphereDiameterPixels, resolveOrbitFallbackMount, shouldShowWorldLabel, visibleViewportObstacleRects, viewportObstacleRectsFromCenters, worldLabelText } from '../web/atlas/labels.js';
 
 test('offscreen lineage has a directional marker and visible children can be labelled', () => {
   const bounds = { left: 0, right: 300, top: 0, bottom: 200 };
@@ -272,6 +272,41 @@ test('Orbit fallback drawer finds visible viewport space around controls and fit
     || panel.bottom <= control.top - 10 || panel.top >= control.bottom + 10), 'drawer clears every reserved control');
   assert.equal(placeOrbitFallbackPanel({ left:0, top:0, right:80, bottom:54 }, []), null,
     'a viewport too short to show a 44px target is reported as physically too small');
+});
+
+test('compact Orbit fallback dock fits a 44px child label in a constrained 375px viewport', () => {
+  const bounds = { left:0, top:0, right:375, bottom:812 };
+  const controls = [
+    { left:0, top:0, right:375, bottom:180 },
+    { left:0, top:268, right:375, bottom:812 },
+  ];
+  assert.equal(placeOrbitFallbackPanel(bounds, controls), null,
+    'the full panel with a heading does not fit the remaining 88px phone gap plus safety margins');
+  const dock = placeOrbitFallbackDock(bounds, controls, { maxWidth:220 });
+  assert.ok(dock?.compact, 'the compact panel is a visible portal candidate');
+  assert.equal(dock.height, 62, '8px vertical padding and borders leave a complete 44px row');
+  assert.ok(dock.left >= bounds.left && dock.right <= bounds.right
+    && dock.top >= bounds.top && dock.bottom <= bounds.bottom);
+  assert.ok(controls.every(control => dock.right <= control.left - 10 || dock.left >= control.right + 10
+    || dock.bottom <= control.top - 10 || dock.top >= control.bottom + 10),
+  'the dock clears phone controls');
+  assert.deepEqual(resolveOrbitFallbackMount({ hasTree:true, portalRect:dock }),
+    { mode:'portal', visible:true, hint:false }, 'blocked children stay labeled in Orbit without a tree-reopen action');
+});
+
+test('compact Orbit dock may use projected globe space but stays clear of controls and existing labels', () => {
+  const bounds = { left:0, top:0, right:1440, bottom:900 };
+  const controls = [{ left:0, top:0, right:1440, bottom:180 }];
+  const labels = [{ left:500, top:240, right:940, bottom:300 }];
+  const nodeObstacles = [
+    { left:0, top:190, right:1440, bottom:890 },
+  ];
+  const strict = placeOrbitFallbackDock(bounds, [...controls, ...labels, ...nodeObstacles]);
+  assert.equal(strict, null, 'a dense projected sphere field blocks the strict placement');
+  const dock = placeOrbitFallbackDock(bounds, [...controls, ...labels]);
+  assert.ok(dock, 'the visible fallback can use globe space when every control and existing label stays reserved');
+  assert.ok(controls.concat(labels).every(obstacle => dock.right <= obstacle.left - 10
+    || dock.left >= obstacle.right + 10 || dock.bottom <= obstacle.top - 10 || dock.top >= obstacle.bottom + 10));
 });
 
 test('Orbit fallback converts projected node hit areas to viewport obstacles before portal placement', () => {

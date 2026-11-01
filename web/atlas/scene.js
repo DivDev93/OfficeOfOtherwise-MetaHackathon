@@ -8,7 +8,7 @@ import { createLargeClusterPicker, needsPagedClusterPicker, visibleKeyboardNeigh
 import { createAtlasP2Renderer } from './p2Renderer.js';
 import { interpolateAttachedAtlasEdgeRoute } from './routeMorph.js';
 import { dragModeForZoom, panDeltaForDrag, zoomFromPinch, zoomFromWheel } from './interaction.js';
-import { createOrbitChildLabelLeader, createWorldLabelCandidates, edgeMarker, layoutOrbitChildLabels, placeOrbitFallbackPanel, placeScreenLabels, projectedSphereDiameterPixels, resolveOrbitFallbackMount, shortQuestionTitle, visibleViewportObstacleRects, viewportObstacleRectsFromCenters, worldLabelText } from './labels.js';
+import { createOrbitChildLabelLeader, createWorldLabelCandidates, edgeMarker, layoutOrbitChildLabels, placeOrbitFallbackDock, placeOrbitFallbackPanel, placeScreenLabels, projectedSphereDiameterPixels, resolveOrbitFallbackMount, shortQuestionTitle, visibleViewportObstacleRects, viewportObstacleRectsFromCenters, worldLabelText } from './labels.js';
 import {
   GHOST_TRAIL_DEFAULT, arrivalParentWorldId, cutTravelOpacity, interpolateTravelPoint, preservesTravelSource, smoothTravelProgress, travelZoomAt,
   lineageTravelPath, sampleLineagePath, travelDuration,
@@ -1475,16 +1475,24 @@ export function createAtlasScene(container, {
         right:labelDocument.documentElement?.clientWidth || labelDocument.defaultView?.innerWidth || 0,
         bottom:labelDocument.documentElement?.clientHeight || labelDocument.defaultView?.innerHeight || 0,
       };
-      const fallbackObstacles = [
-        ...visibleViewportObstacleRects(labelDocument,
-          '.site-header .brand, .site-header .header-actions, .panel-head, #atlas-toolbar, #atlas-other-questions, #atlas-world-card, #atlas-compact-controls, #atlas-reopen-controls, .geography-panel, .hero-panel, .exploration-rail, #invitation, #exploration-tree'),
-        ...viewportObstacleRectsFromCenters(nodeRects),
-        ...viewportObstacleRectsFromCenters(orbitLaneLayout.local),
-      ];
+      const fallbackControls = visibleViewportObstacleRects(labelDocument,
+        '.site-header .brand, .site-header .header-actions, .panel-head, #atlas-toolbar, #atlas-other-questions, #atlas-world-card, #atlas-compact-controls, #atlas-reopen-controls, .geography-panel, .hero-panel, .exploration-rail, #invitation, #exploration-tree');
+      const fallbackLabels = viewportObstacleRectsFromCenters([
+        ...orbitLaneLayout.local,
+        ...placements.filter(placement => Number.isFinite(placement.x) && Number.isFinite(placement.y)),
+      ]);
+      const fallbackNodes = viewportObstacleRectsFromCenters(nodeRects);
+      const safeObstacles = [...fallbackControls, ...fallbackLabels, ...fallbackNodes];
       // Try a control-free on-screen panel even while the Story tree is open.
       // This keeps direct child labels visible in focused Atlas instead of
       // requiring a separate tree-reopen action.
-      const fallbackRect = placeOrbitFallbackPanel(fallbackBounds, fallbackObstacles);
+      // On a dense globe, a dock may cover a world sphere, since its child
+      // button remains actionable there. It must still clear every control
+      // and every already visible label.
+      const fallbackRect = placeOrbitFallbackPanel(fallbackBounds, safeObstacles)
+        || placeOrbitFallbackDock(fallbackBounds, safeObstacles, { maxWidth:mobileLabels ? 220 : 320 })
+        || placeOrbitFallbackPanel(fallbackBounds, [...fallbackControls, ...fallbackLabels])
+        || placeOrbitFallbackDock(fallbackBounds, [...fallbackControls, ...fallbackLabels], { maxWidth:mobileLabels ? 220 : 320 });
       const fallbackMount = resolveOrbitFallbackMount({
         treeVisible, hasTree:Boolean(explorationTree), invitationVisible,
         hasEmbeddedHost:Boolean(container.parentElement), portalRect:fallbackRect,
@@ -1511,7 +1519,10 @@ export function createAtlasScene(container, {
         orbitFallbackSection.append(orbitFallbackContent);
       }
       const heading = orbitFallbackSection.querySelector('h3');
-      if (heading) heading.textContent = `${current?.world?.title || 'Current world'} · direct children`;
+      const fallbackWorldTitle = current?.world?.title || 'Current world';
+      if (heading) heading.textContent = `${fallbackWorldTitle} · direct children`;
+      orbitFallbackSection.setAttribute('aria-label', `${fallbackWorldTitle} direct children in Orbit`);
+      if (heading) heading.style.display = fallbackRect?.compact ? 'none' : 'block';
       Object.assign(orbitFallbackSection.style, {
         display:'block', boxSizing:'border-box', maxHeight:fallbackMount.mode === 'portal' ? `${fallbackRect?.height || 0}px` : '38dvh',
         overflowY:'auto', overscrollBehavior:'contain', padding:'8px', margin:fallbackMount.mode === 'tree' ? '8px 0' : '0',
@@ -1558,7 +1569,7 @@ export function createAtlasScene(container, {
         orbitFallbackSection.remove();
         orbitFallbackContent = null;
         if (!orbitFallbackPlacementWarned) {
-          console.warn('Atlas Orbit child labels need a control-free viewport area at least 88px tall to show a heading and 44px label; no safe fallback placement is available.');
+          console.warn('Atlas Orbit child labels need a control-free viewport slot at least 116px wide by 82px tall (a 62px dock for a 44px label plus 10px safety margins); no safe fallback placement is available.');
           orbitFallbackPlacementWarned = true;
         }
       }

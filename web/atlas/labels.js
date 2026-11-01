@@ -316,6 +316,18 @@ export function placeOrbitFallbackPanel(bounds = {}, reservedRects = [], {
   return null;
 }
 
+/**
+ * Place a compact Orbit dock when the full heading plus label panel cannot fit.
+ * Callers may retry without projected sphere obstacles, but should retain UI
+ * controls and already visible labels as reserved rectangles.
+ */
+export function placeOrbitFallbackDock(bounds = {}, reservedRects = [], options = {}) {
+  const panel = placeOrbitFallbackPanel(bounds, reservedRects, {
+    ...options, minHeight:62, maxHeight:Math.min(136, Number(options.maxHeight) || 136),
+  });
+  return panel ? { ...panel, compact:true } : null;
+}
+
 export function resolveOrbitFallbackMount({ treeVisible = false, hasTree = false, invitationVisible = false, hasEmbeddedHost = false, portalRect = null } = {}) {
   // Prefer a directly visible viewport panel when one can clear the controls.
   // The story tree remains a last-resort visible host when it is already open.
