@@ -170,3 +170,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: capture the open detail sheet at desktop and phone sizes after browser focus and visibility checks. | |
 | 2026-11-01 | Atlas round 3: keep the phone detail sheet below the zoom toolbar and Atlas question toggle. | |
 | 2026-11-01 | Atlas round 3: add compact overflow lanes for crowded phone child labels while retaining full-width labels where space permits. | |
+| 2026-11-01 | Atlas round 3: enlarge the selected-world close control to a 44px touch target and verify it on phone and desktop. | |

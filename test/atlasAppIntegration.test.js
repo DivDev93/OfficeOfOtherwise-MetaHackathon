@@ -74,6 +74,8 @@ test('Orbit compact panels expose a selected-world card and accessible controls'
   assert.match(css, /@media\(max-width:700px\)[\s\S]*body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel,\s*body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel\{top:184px;right:9px;bottom:10px;left:9px;width:auto;height:auto;max-height:calc\(100dvh - 130px\);overflow:auto\}/, 'the phone details sheet starts below the zoom toolbar and scrolls within the remaining viewport');
   assert.match(css, /body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel\{top:218px\}/, 'the Atlas phone sheet starts below the additional Other questions control');
   assert.match(css, /\.atlas-details-close\[hidden\]\{display:none!important\}/, 'the separate details close control only appears while details are open');
+  assert.match(css, /\.atlas-details-close\{[^}]*flex:0 0 44px;width:44px;min-width:44px;min-height:44px/,
+    'the visible phone details close action has a 44px touch target');
   assert.match(app, /const cardHidden = !compact \|\| detailsOpen \|\| card\.hidden;[\s\S]*card\.inert = cardHidden;[\s\S]*card\.setAttribute\('aria-hidden', String\(cardHidden\)\)/, 'the hidden compact card leaves keyboard and accessibility navigation');
   assert.match(css, /\.atlas-world-card\{display:grid;position:absolute;[\s\S]*?opacity:0;visibility:hidden/, 'the card stays renderable so Orbit can fade it in');
   assert.match(css, /\.atlas-world-card\{display:grid;position:absolute;[\s\S]*?transition:opacity \.12s ease \.12s,transform \.16s ease \.08s,visibility 0s linear \.08s/, 'the card appears after the full details fade away');
