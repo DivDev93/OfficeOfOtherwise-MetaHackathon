@@ -1350,16 +1350,6 @@ export function createAtlasScene(container, {
       const fromRadius = parent.id === currentId ? surfaceEarthRadius(edgeState) : markerRadius;
       const from = worldPosition(parent, edgeState, timestamp, fromRadius);
       const to = worldPosition(child, edgeState, timestamp, markerRadius);
-      const atlasEdgeState = { ...state, lift:1, atlas:1 };
-      const atlasMarkerRadius = pinAnchorRadiusAtPresentation(surfaceEarthRadius(atlasEdgeState), 1, 1);
-      const atlasFromRadius = parent.id === currentId ? surfaceEarthRadius(atlasEdgeState) : atlasMarkerRadius;
-      const atlasFrom = worldPosition(parent, atlasEdgeState, timestamp, atlasFromRadius);
-      const atlasTo = worldPosition(child, atlasEdgeState, timestamp, atlasMarkerRadius);
-      const orbitEdgeState = { ...state, lift:1, atlas:0 };
-      const orbitMarkerRadius = pinAnchorRadiusAtPresentation(surfaceEarthRadius(orbitEdgeState), 1, 0);
-      const orbitFromRadius = parent.id === currentId ? surfaceEarthRadius(orbitEdgeState) : orbitMarkerRadius;
-      const orbitFrom = worldPosition(parent, orbitEdgeState, timestamp, orbitFromRadius);
-      const orbitTo = worldPosition(child, orbitEdgeState, timestamp, orbitMarkerRadius);
       const surfaceFrom = surfacePoint(parent, fromRadius).normalize();
       const surfaceTo = surfacePoint(child, markerRadius).normalize();
       const arrivalEdge = child.id === currentId && parent.id === arrivalFromId;
@@ -1367,15 +1357,29 @@ export function createAtlasScene(container, {
       const path = atlasTimeline?.parentChildPaths?.find(item => item.parentId === parent.id && item.childId === child.id);
       const previousPath = axisTransition?.fromTimeline?.parentChildPaths?.find(item => item.parentId === parent.id && item.childId === child.id);
       const progress = axisTransition ? axisTransitionProgress(timestamp - axisTransition.startedAt, AXIS_ANIMATION_MS) : 1;
+      const directMorphActive = edgeState.lift >= 0.999;
+      let routeFrom = from, routeTo = to, orbitFrom = null, orbitTo = null;
+      if (directMorphActive) {
+        const atlasEdgeState = { ...state, lift:1, atlas:1 };
+        const atlasMarkerRadius = pinAnchorRadiusAtPresentation(surfaceEarthRadius(atlasEdgeState), 1, 1);
+        const atlasFromRadius = parent.id === currentId ? surfaceEarthRadius(atlasEdgeState) : atlasMarkerRadius;
+        routeFrom = worldPosition(parent, atlasEdgeState, timestamp, atlasFromRadius);
+        routeTo = worldPosition(child, atlasEdgeState, timestamp, atlasMarkerRadius);
+        const orbitEdgeState = { ...state, lift:1, atlas:0 };
+        const orbitMarkerRadius = pinAnchorRadiusAtPresentation(surfaceEarthRadius(orbitEdgeState), 1, 0);
+        const orbitFromRadius = parent.id === currentId ? surfaceEarthRadius(orbitEdgeState) : orbitMarkerRadius;
+        orbitFrom = worldPosition(parent, orbitEdgeState, timestamp, orbitFromRadius);
+        orbitTo = worldPosition(child, orbitEdgeState, timestamp, orbitMarkerRadius);
+      }
       let atlasCurve = path?.routeShape?.length > 1
-        ? transformAtlasEdgeShape(atlasFrom, atlasTo, path.routeShape)
-        : sampleAtlasEdgePath(atlasFrom, atlasTo, 16);
+        ? transformAtlasEdgeShape(routeFrom, routeTo, path.routeShape)
+        : sampleAtlasEdgePath(routeFrom, routeTo, 16);
       if (previousPath?.routeShape?.length > 1 && path?.routeShape?.length > 1 && progress < 1) {
-        atlasCurve = interpolateAtlasRouteShapes(atlasFrom, atlasTo, previousPath.routeShape, path.routeShape, progress,
+        atlasCurve = interpolateAtlasRouteShapes(routeFrom, routeTo, previousPath.routeShape, path.routeShape, progress,
           { from:previousPath.from, to:previousPath.to }, { from:path.from, to:path.to });
       }
       const segments = Math.max(1, atlasCurve.length - 1);
-      const directMorph = edgeState.lift >= 0.999
+      const directMorph = directMorphActive
         ? interpolateAttachedAtlasEdgeRoute(orbitFrom, orbitTo, atlasCurve, inAtlas && !suppressAtlasThreads ? state.atlas : 0, { from, to })
         : null;
       for (let step = 0; step <= segments; step++) {

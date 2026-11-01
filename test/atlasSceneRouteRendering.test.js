@@ -8,7 +8,9 @@ const p2Renderer = readFileSync(new URL('../web/atlas/p2Renderer.js', import.met
 
 test('Atlas renders exact routed corners and preserves them through axis changes', () => {
   assert.match(scene, /transformAtlasEdgeShape/);
-  assert.match(scene, /transformAtlasEdgeShape\(atlasFrom, atlasTo, path\.routeShape\)/,
+  assert.match(scene, /const directMorphActive = edgeState\.lift >= 0\.999;[\s\S]*if \(directMorphActive\) \{[\s\S]*routeFrom = worldPosition\(parent, atlasEdgeState,[\s\S]*orbitFrom = worldPosition\(parent, orbitEdgeState,/,
+    'extra Atlas and Orbit endpoints are only computed in the settled direct-morph branch');
+  assert.match(scene, /transformAtlasEdgeShape\(routeFrom, routeTo, path\.routeShape\)/,
     'Atlas routes are built in their settled endpoint coordinates');
   assert.match(scene, /interpolateAttachedAtlasEdgeRoute\(orbitFrom, orbitTo, atlasCurve,[\s\S]*\{ from, to \}\)/,
     'the Orbit chord morphs to the settled route while staying attached to live endpoints');
