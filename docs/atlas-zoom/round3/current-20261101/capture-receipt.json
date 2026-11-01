@@ -1,0 +1,187 @@
+{
+  "schemaVersion": 1,
+  "captureDate": "2026-11-01",
+  "app": {
+    "runId": "acc2e7da-096e-47f8-80bd-9137e8df789f",
+    "eventId": "b3",
+    "selectedWorld": "1978 CE · Canopy Walkway Exploration Network",
+    "replayOnly": true,
+    "remoteDeployment": false,
+    "modelGeneration": false,
+    "metaModelDispatches": 0,
+    "apiSceneResponses": 28,
+    "consoleErrors": 0,
+    "optionalAssetRequestsCanceled": 5
+  },
+  "screenshots": {
+    "browser": "Chrome through existing loopback CDP",
+    "viewportSizesCssPixels": [
+      [
+        1440,
+        900
+      ],
+      [
+        375,
+        812
+      ]
+    ],
+    "levels": [
+      {
+        "name": "Surface",
+        "zoomPercent": 0
+      },
+      {
+        "name": "Lift",
+        "zoomPercent": 30
+      },
+      {
+        "name": "Orbit",
+        "zoomPercent": 57
+      },
+      {
+        "name": "Atlas",
+        "zoomPercent": 100
+      }
+    ],
+    "artifacts": [
+      {
+        "file": "desktop-1440x900-atlas.png",
+        "sha256": "64e49d8a1b0824151c3e5c78c046b96207cc3040cc51aed4dc4f277ffa2ddc13"
+      },
+      {
+        "file": "desktop-1440x900-lift.png",
+        "sha256": "47dcd74085586e968e2437479f5b021f54cd10bafd9fc217ed895e5543510581"
+      },
+      {
+        "file": "desktop-1440x900-orbit.png",
+        "sha256": "bbadd68e5340d2fcb6dee381a3736d923511f0cf5306405880c92e60a2ab2082"
+      },
+      {
+        "file": "desktop-1440x900-surface.png",
+        "sha256": "4da4d3123f7ca521421a57a92842aa09bd9b83bdb29e20c242832b60f2b34cd3"
+      },
+      {
+        "file": "mobile-375x812-atlas.png",
+        "sha256": "4aeafaf956e6fc1639a574e3ec6b3b7014d7af1cbd7fc6ac1671d990f4534353"
+      },
+      {
+        "file": "mobile-375x812-lift.png",
+        "sha256": "5148deded148f62ec50eef18487c3ab706e22ef21e0970c0ecab63604aaca6be"
+      },
+      {
+        "file": "mobile-375x812-orbit.png",
+        "sha256": "289b674d253f44a525299e71a9a42f1a4ee680b2cba4b15bd8180756bcfde5f8"
+      },
+      {
+        "file": "mobile-375x812-surface.png",
+        "sha256": "1e9e01731317b283a0353c992c175a8f7625f64398befac9312ccc26edaca7ed"
+      }
+    ],
+    "physicalDeviceVerification": false
+  },
+  "wheel": {
+    "file": "wheel-roundtrip.webm",
+    "input": "24 synthetic browser wheel events from Surface to Atlas and back",
+    "zoomSamplesPercent": [
+      10,
+      19,
+      29,
+      38,
+      48,
+      57,
+      67,
+      76,
+      86,
+      95,
+      100,
+      100,
+      90,
+      81,
+      71,
+      62,
+      57,
+      47,
+      38,
+      28,
+      19,
+      9,
+      0,
+      0
+    ],
+    "screencastFrames": 600,
+    "encodedFrameRateFps": 12,
+    "applicationRenderFrameRate": "Not measured",
+    "consoleErrors": 0,
+    "metaModelDispatches": 0
+  },
+  "clusterClamp": {
+    "file": "cluster-clamp-mobile-375x812.png",
+    "fixture": "Local synthetic saved-child scene using current workspace Atlas code",
+    "viewportCssPixels": [
+      375,
+      812
+    ],
+    "directChildren": 31,
+    "unenteredDirectChildren": 29,
+    "orbitOverflowChildren": 27,
+    "visibleTriggerBoundsCssPixels": {
+      "left": 317,
+      "top": 214.046875,
+      "right": 375,
+      "bottom": 272.046875,
+      "width": 58,
+      "height": 58
+    },
+    "viewportWidthCssPixels": 375,
+    "horizontalScrollWidthCssPixels": 375,
+    "consoleErrors": 0,
+    "visibleButtonText": "27 possibilities, clipped within the 58px control",
+    "accessibleLabel": "Browse Orbit cluster with 27 saved possibilities under Synthetic root"
+  },
+  "visualReview": "Compared with the earlier same-day actual-app captures: no new obvious scene or layout failure; Atlas route corners look smoother. The phone Atlas timeline remains dense with long labels ellipsized. Visual comparison only; no application render frame rate or physical-device behavior measured.",
+  "artifactsSha256": [
+    {
+      "file": "cluster-clamp-mobile-375x812.png",
+      "sha256": "2bb5704d3b47eb7d9b93431ef6599ed117cb3cee687212eeeae1b9bf2db592c2"
+    },
+    {
+      "file": "desktop-1440x900-atlas.png",
+      "sha256": "64e49d8a1b0824151c3e5c78c046b96207cc3040cc51aed4dc4f277ffa2ddc13"
+    },
+    {
+      "file": "desktop-1440x900-lift.png",
+      "sha256": "47dcd74085586e968e2437479f5b021f54cd10bafd9fc217ed895e5543510581"
+    },
+    {
+      "file": "desktop-1440x900-orbit.png",
+      "sha256": "bbadd68e5340d2fcb6dee381a3736d923511f0cf5306405880c92e60a2ab2082"
+    },
+    {
+      "file": "desktop-1440x900-surface.png",
+      "sha256": "4da4d3123f7ca521421a57a92842aa09bd9b83bdb29e20c242832b60f2b34cd3"
+    },
+    {
+      "file": "mobile-375x812-atlas.png",
+      "sha256": "4aeafaf956e6fc1639a574e3ec6b3b7014d7af1cbd7fc6ac1671d990f4534353"
+    },
+    {
+      "file": "mobile-375x812-lift.png",
+      "sha256": "5148deded148f62ec50eef18487c3ab706e22ef21e0970c0ecab63604aaca6be"
+    },
+    {
+      "file": "mobile-375x812-orbit.png",
+      "sha256": "289b674d253f44a525299e71a9a42f1a4ee680b2cba4b15bd8180756bcfde5f8"
+    },
+    {
+      "file": "mobile-375x812-surface.png",
+      "sha256": "1e9e01731317b283a0353c992c175a8f7625f64398befac9312ccc26edaca7ed"
+    },
+    {
+      "file": "wheel-roundtrip.webm",
+      "sha256": "d8af76576cc49a284c2e14cded4067d9130ba516ad753caa4caffe180324cdaf"
+    }
+  ],
+  "captureBaseCommit": "2a2e04086cd5e7e8a5e89d7d938d2f3a9a034051",
+  "sourceCommit": "83c44ab6b6703d36438649e29f54c0b1d4ca6350",
+  "sourceState": "Captured before commit 83c44ab was created; verified the relevant runtime and test source files match that commit exactly, and no additional source changes are present."
+}

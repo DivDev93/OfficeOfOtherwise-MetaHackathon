@@ -1,5 +1,7 @@
 # Atlas round-three review evidence — 2026-10-31
 
+The latest review is documented in [STATUS.md](STATUS.md), with source-matched captures in [current-20261101](current-20261101/). The earlier notes below describe historical captures and experiments.
+
 The eight screenshots show the saved deep-tree story at Surface, Lift, Orbit and settled Atlas at 1440×900 and 375×812. `wheel-roundtrip.webm` captures wheel input from Surface (0%) to Atlas (100%) and back to Surface (0%); its 69 frames are from the browser screencast, with capture gaps longer than 0.7 seconds shortened.
 
 Exact settled question-root and parent-child paths were independently checked together for crossings, unrelated edge overlaps and non-endpoint node hits. The saved story reported no unresolved paths. Mixed-date synthetic fixtures, including equal and backward dates and multi-root questions, also passed; these cases do not prove every possible graph. A 500-edge independent fixture took about 2.4 seconds to lay out locally. Links are briefly hidden during an axis-layout morph so moving nodes do not display intersecting in-between routes. During the continuous Orbit-to-Atlas zoom blend, in-between geometry can still temporarily intersect before settling.
