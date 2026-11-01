@@ -135,3 +135,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-10-31 | Atlas polish: oriented world snapshots toward their event coordinates and added the root question and sibling branches to Orbit. | |
 | 2026-10-31 | Atlas polish: integrated responsive camera framing, accessible controls and screen-space labels, preserved lineage colours, and culled far-side labels on Surface. | |
 | 2026-10-31 | Atlas polish evidence: recorded both saved stories at all four zoom levels in desktop and mobile viewports, measured local frame cadence, and captured a wheel-driven Surface-to-Atlas-to-Surface walkthrough. Local replay fixture only; no model calls, hosting, or submission. | |
+| 2026-10-31 | Atlas round 3: preserve panel widths while transitioning, sequence the compact controls and sheet, and disable animation under reduced motion. | |

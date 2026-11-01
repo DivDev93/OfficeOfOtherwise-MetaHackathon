@@ -67,9 +67,18 @@ test('Orbit compact panels expose a selected-world card and accessible controls'
   assert.match(css, /atlas-world-card button\{[^}]*min-height:44px/);
   assert.match(css, /body\.atlas-panels-open:has\([^}]+\.atlas-compact-controls\{opacity:1;visibility:visible;pointer-events:auto\}/, 'the tree toggle stays available to close its sheet');
   assert.match(css, /body\.invitation-open:has\([^}]+\.exploration-rail>#invitation\{[^}]*pointer-events:auto\}/, 'New exploration reveals an interactive prompt at Orbit');
-  assert.match(css, /width:238px;height:fit-content;min-height:0;max-height:none/, 'compact details have no empty full-height area');
-  assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel>:not\(\.atlas-world-card\),\s*body:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel>:not\(\.atlas-world-card\)\{display:none\}/, 'the closed card removes the stage and status rows from layout');
-  assert.match(css, /body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel>:not\(\.atlas-world-card\):not\(\[hidden\]\),\s*body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel>:not\(\.atlas-world-card\):not\(\[hidden\]\)\{display:block/, 'Open details restores nonhidden chronicle content');
+  assert.match(css, /width:238px;height:142px;min-height:142px;max-height:none/, 'the compact panel fits its selected-world card without a full-height details area');
+  assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel>:not\(\.atlas-world-card\),\s*body:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel>:not\(\.atlas-world-card\)\{display:block;position:absolute;inset:0;overflow:hidden;opacity:0;visibility:hidden/, 'the compact card removes full details from layout while keeping them transitionable');
+  assert.match(css, /body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel>:not\(\.atlas-world-card\):not\(\[hidden\]\),\s*body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel>:not\(\.atlas-world-card\):not\(\[hidden\]\)\{display:block;position:relative;inset:auto;max-height:none;overflow:visible;opacity:1;visibility:visible/, 'Open details restores nonhidden chronicle content for a reverse transition');
+  assert.match(css, /\.atlas-world-card\{display:grid;position:absolute;[\s\S]*?opacity:0;visibility:hidden/, 'the card stays renderable so Orbit can fade it in');
+  assert.match(css, /\.atlas-world-card\{display:grid;position:absolute;[\s\S]*?transition:opacity \.12s ease \.12s,transform \.16s ease \.08s,visibility 0s linear \.08s/, 'the card appears after the full details fade away');
+  assert.match(css, /width:min\(320px,max\(270px,calc\(34vw - 12px\)\)\)/, 'the clipped rail content matches the rail minimum width and does not reflow at its boundary');
+  assert.match(css, /\.has-story \.hero-panel\{transition:width \.24s ease,top \.24s ease,right \.24s ease,bottom \.24s ease,left \.24s ease,height \.24s ease,opacity \.18s ease\}/, 'the panel geometry transition remains active when leaving Orbit');
+  assert.match(css, /position:absolute;top:0;left:0;width:min\(320px,max\(270px,calc\(34vw - 12px\)\)\);height:100%;max-width:none;max-height:none/, 'the full-width rail content keeps its layout while the rail clips closed');
+  assert.match(css, /transition:opacity \.16s ease \.12s,transform \.2s ease \.08s,visibility 0s linear \.08s/, 'rail content appears after the compact strip fades');
+  assert.match(css, /transition:opacity \.12s ease \.2s,visibility 0s linear \.2s/, 'the compact strip returns after the rail closes');
+  assert.match(css, /atlas-panels-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.atlas-world-card,[\s\S]*?visibility:hidden;pointer-events:none;transform:translateY\(6px\)/, 'the phone tree sheet clears the selected-world card before it appears');
+  assert.match(css, /\.exploration-rail,\.exploration-rail>\*,\.atlas-compact-controls,\.atlas-compact-controls>\*,\.hero-panel,\.hero-panel>\*,\.geography-panel,\.map-panel>#atlas-scene,\.atlas-toolbar\{transition:none!important;animation:none!important\}/, 'reduced-motion users get immediate panel changes');
   assert.match(css, /prefers-reduced-motion:reduce/);
 });
 
@@ -79,4 +88,25 @@ test('New exploration toggles a blank focused prompt without resetting the saved
   assert.match(app, /onEnter:\(world, detail\) => handleAtlasWorldEnter\(world, detail\)/);
   assert.match(app, /source === 'present-day-question'/);
   assert.match(app, /\$\('prompt-form'\)\.addEventListener\('submit'/);
+});
+
+test('small phones keep Surface usable, zoom to Orbit on first zoom-out, and gate other questions to Atlas view', () => {
+  assert.match(html, /id="atlas-other-questions"[^>]*aria-pressed="false"[^>]*hidden/);
+  assert.doesNotMatch(app, /if \(isAtlasPhone\(\)\) controller\.scene\?\.setZoom/ , 'phones still start at Surface');
+  assert.match(app, /\$\('focus-atlas'\)\?\.addEventListener\('click', \(\) => \{ setAtlasFocused\(true\); atlasController\?\.scene\?\.setZoom\?\.\(0\.78\)/, 'Focus atlas opens at Orbit');
+  assert.match(app, /zoomOut\?\.addEventListener\('click', event => \{\s*if \(!isAtlasPhone\(\) \|\| atlasController\?\.scene\?\.getZoom\?\.\(\) >= 0\.22\) return;[\s\S]*?setZoom\?\.\(0\.68\);\s*\}, true\)/, 'the first small-phone zoom-out targets Orbit');
+  assert.match(app, /function isAtlasPhone\(\) \{ return window\.matchMedia\?\.\('\(max-width: 430px\)'\)\.matches === true; \}/);
+  assert.match(app, /worlds\.filter\(world => String\(world\.questionId\) === atlasActiveQuestionId\)/, 'the collapsed phone Atlas contains the active question');
+  assert.match(app, /const atlasOnlyView = isAtlasPhone\(\) && atlasController\?\.scene\?\.getLevel\?\.\(\) === 'atlas'/, 'question filtering is disabled in Surface, Lift, and Orbit');
+  assert.match(app, /atlasController\.scene\?\.setWorlds\?\.\(/, 'the renderer receives the currently visible question set');
+  assert.match(app, /if \(signature !== atlasVisibleGraphSignature\)/, 'unchanged renders do not reset scene navigation or hover');
+  assert.match(app, /\$\('atlas-other-questions'\)\?\.addEventListener\('click'/);
+  assert.match(css, /@media\(max-width:430px\)[\s\S]*\.atlas-other-questions-toggle\{position:absolute/);
+  assert.match(css, /\.map-panel>#atlas-scene\{inset:0;width:100%;\}/, 'the active Atlas remains full width on phones');
+});
+
+test('Atlas graph signatures are recorded only after a controller receives the graph', () => {
+  assert.match(app, /function sendAtlasGraph\(graph\) \{\s*if \(!atlasController\) return false;\s*const sourceGraphSignature = JSON\.stringify\(graph\);\s*if \(sourceGraphSignature === atlasSourceGraphSignature\) return false;\s*atlasController\.setGraph\(graph\);\s*atlasSourceGraphSignature = sourceGraphSignature;/);
+  assert.match(app, /const graph = \{ mapNodes, questions:\[\.\.\.questions\.values\(\)\][\s\S]*?\};\s*sendAtlasGraph\(graph\);/);
+  assert.match(app, /renderStarMap\(continuation\.rootRunId \? knownRunManifests\.get\(continuation\.rootRunId\) \|\| currentManifest : currentManifest\);/);
 });

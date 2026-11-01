@@ -393,38 +393,41 @@ body:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail{
 }
 body:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail>:not(.atlas-compact-controls),
 body:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail>:not(.atlas-compact-controls){
-  max-width:0;max-height:0;overflow:hidden;opacity:0;visibility:hidden;pointer-events:none;
-  transition:max-width .24s ease,max-height .24s ease,opacity .16s ease,visibility .16s;
+  position:absolute;top:0;left:0;width:min(320px,max(270px,calc(34vw - 12px)));height:100%;max-width:none;max-height:none;overflow:auto;
+  opacity:0;visibility:hidden;pointer-events:none;transform:translateX(-12px);
+  transition:opacity .12s ease,transform .2s ease,visibility 0s linear .2s;
 }
-.atlas-compact-controls{position:fixed;z-index:10;top:112px;left:16px;display:grid;gap:7px;max-width:0;max-height:0;overflow:hidden;opacity:0;visibility:hidden;pointer-events:none;transition:max-width .24s ease,max-height .24s ease,opacity .16s ease,visibility .16s}
+.atlas-compact-controls{position:fixed;z-index:10;top:112px;left:16px;display:grid;gap:7px;max-width:70px;max-height:180px;overflow:hidden;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .12s ease,visibility 0s linear .12s}
 .atlas-compact-controls button{display:grid;place-items:center;gap:3px;width:54px;min-height:54px;padding:6px 4px;border:1px solid var(--line);border-radius:9px;background:rgba(8,6,7,.9);box-shadow:0 10px 28px #0005;color:var(--parchment);font:600 8px/1.15 var(--sans);cursor:pointer}
 .atlas-compact-controls button span:first-child{color:var(--gold);font-size:18px}
 .atlas-compact-controls button:focus-visible,.atlas-world-card button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
 body:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-compact-controls,
-body:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-compact-controls{max-width:70px;max-height:180px;opacity:1;visibility:visible;pointer-events:auto}
+body:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-compact-controls{max-width:70px;max-height:180px;opacity:1;visibility:visible;pointer-events:auto;transition:opacity .12s ease .2s,visibility 0s linear .2s}
 body:has(#atlas-scene[data-atlas-level="orbit"]) .map-panel>#atlas-scene,
 body:has(#atlas-scene[data-atlas-level="atlas"]) .map-panel>#atlas-scene{inset:0 270px 0 78px;transition:inset .24s ease}
 body:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-toolbar,
 body:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-toolbar{left:78px;right:270px;transition:left .24s ease,right .24s ease}
 body:has(#atlas-scene[data-atlas-level="orbit"]) .hero-panel,
 body:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{
-  top:112px;right:14px;bottom:auto;width:238px;height:fit-content;min-height:0;max-height:none;overflow:visible;padding:10px;border-radius:12px;
+  top:112px;right:14px;bottom:auto;width:238px;height:142px;min-height:142px;max-height:none;overflow:visible;padding:10px;border-radius:12px;
   transition:width .24s ease,top .24s ease,right .24s ease,bottom .24s ease,left .24s ease,opacity .18s ease;
 }
 body:has(#atlas-scene[data-atlas-level="orbit"]) .hero-panel>:not(.atlas-world-card),
-body:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel>:not(.atlas-world-card){display:none}
-.atlas-world-card{display:none;grid-template-columns:62px minmax(0,1fr);align-items:center;gap:8px;padding:8px;border:1px solid rgba(236,228,212,.15);border-radius:9px;background:rgba(8,6,7,.9);box-shadow:0 10px 28px #0004}
+body:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel>:not(.atlas-world-card){display:block;position:absolute;inset:0;overflow:hidden;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(6px);transition:opacity .12s ease,transform .16s ease,visibility 0s linear .16s}
+.hero-panel>:not(.atlas-world-card){transition:opacity .16s ease .12s,transform .2s ease .08s,visibility 0s linear .08s}
+.atlas-world-card{display:grid;position:absolute;top:10px;right:10px;left:10px;grid-template-columns:62px minmax(0,1fr);align-items:center;gap:8px;padding:8px;border:1px solid rgba(236,228,212,.15);border-radius:9px;background:rgba(8,6,7,.9);box-shadow:0 10px 28px #0004;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(6px);transition:opacity .1s ease,transform .1s ease,visibility 0s linear .1s}
 .atlas-world-card>img{width:62px;height:54px;object-fit:cover;border-radius:6px;background:#151719}
 .atlas-world-card-copy{display:grid;gap:5px;min-width:0}
 .atlas-world-card-copy strong{color:var(--parchment);font:500 17px/1.05 var(--serif);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 .atlas-world-card-copy span{color:var(--neutral-200);font:12px/1.3 var(--sans)}
 .atlas-world-card button{grid-column:1/-1;min-height:42px;border:1px solid #e5c07b66;border-radius:7px;background:rgba(229,192,123,.1);color:#ffe4a8;font:600 11px var(--sans);cursor:pointer}
 body:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-world-card,
-body:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-world-card{display:grid}
+body:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-world-card{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0);transition:opacity .12s ease .12s,transform .16s ease .08s,visibility 0s linear .08s}
+body:not(:has(#atlas-scene[data-atlas-level="orbit"])):not(:has(#atlas-scene[data-atlas-level="atlas"])) .atlas-world-card{opacity:0;visibility:hidden;pointer-events:none;transform:translateY(6px);transition:opacity .1s ease,transform .1s ease,visibility 0s linear .1s}
 body.atlas-details-open:has(#atlas-scene[data-atlas-level="orbit"]) .hero-panel,
-body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{top:101px;bottom:20px;width:min(388px,calc(100vw - 44px));height:auto;max-height:calc(100dvh - 121px);overflow:auto;padding:19px 18px 16px}
+body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{top:101px;bottom:20px;width:min(388px,calc(100vw - 44px));height:auto;min-height:0;max-height:calc(100dvh - 121px);overflow:auto;padding:19px 18px 16px}
 body.atlas-details-open:has(#atlas-scene[data-atlas-level="orbit"]) .hero-panel>:not(.atlas-world-card):not([hidden]),
-body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel>:not(.atlas-world-card):not([hidden]){display:block;max-height:none;overflow:visible;opacity:1;visibility:visible;pointer-events:auto}
+body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel>:not(.atlas-world-card):not([hidden]){display:block;position:relative;inset:auto;max-height:none;overflow:visible;opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0);transition:opacity .16s ease .12s,transform .2s ease .08s,visibility 0s linear .08s}
 body.atlas-details-open:has(#atlas-scene[data-atlas-level="orbit"]) .hero-panel>.chronicle-heading,
 body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel>.chronicle-heading,
 body.atlas-details-open:has(#atlas-scene[data-atlas-level="orbit"]) .hero-panel>.view-switch,
@@ -434,7 +437,7 @@ body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel>
 body.atlas-details-open:has(#atlas-scene[data-atlas-level="orbit"]) .hero-panel>#hero-models:not([hidden]),
 body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel>#hero-models:not([hidden]){display:grid}
 body.atlas-details-open:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-world-card,
-body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-world-card{display:grid;position:sticky;z-index:3;top:0;grid-template-columns:54px minmax(0,1fr) 112px;margin:-8px -8px 12px;padding:8px;background:rgba(8,6,7,.96)}
+body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-world-card{display:grid;position:sticky;z-index:3;top:0;grid-template-columns:54px minmax(0,1fr) 112px;margin:-8px -8px 12px;padding:8px;background:rgba(8,6,7,.96);opacity:1;visibility:visible;pointer-events:auto;transform:none;transition:opacity .12s ease,transform .16s ease,visibility 0s linear}
 body.atlas-details-open:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-world-card button,
 body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-world-card button{grid-column:auto}
 body:has(#atlas-scene[data-atlas-level="orbit"]) .geography-panel,
@@ -442,17 +445,25 @@ body:has(#atlas-scene[data-atlas-level="atlas"]) .geography-panel{opacity:0;visi
 body:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-reopen-controls,
 body:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-reopen-controls{top:112px;right:278px}
 body.atlas-panels-open:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail,
-body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail{width:min(320px,calc(34vw - 12px));min-width:270px;}
+body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail{width:min(320px,calc(34vw - 12px));min-width:270px}
 body.atlas-panels-open:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail>:not(.atlas-compact-controls),
-body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail>:not(.atlas-compact-controls){max-width:none;max-height:none;overflow:auto;opacity:1;visibility:visible;pointer-events:auto}
+body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail>:not(.atlas-compact-controls){opacity:1;visibility:visible;pointer-events:auto;transform:translateX(0);transition:opacity .16s ease .12s,transform .2s ease .08s,visibility 0s linear .08s}
 body.atlas-panels-open:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-compact-controls,
-body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-compact-controls{opacity:0;visibility:hidden;pointer-events:none}
+body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-compact-controls{opacity:0;visibility:hidden;pointer-events:none;transition:opacity .1s ease,visibility 0s linear .1s}
 body.atlas-panels-open:has(#atlas-scene[data-atlas-level="orbit"]) .map-panel>#atlas-scene,
 body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .map-panel>#atlas-scene{inset:0 410px 0 338px}
 body.atlas-panels-open:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-toolbar,
 body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-toolbar{left:max(338px,calc(50vw - 360px));right:max(410px,calc(50vw - 310px))}
+@media(max-width:700px){
+  body.atlas-panels-open:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail>:not(.atlas-compact-controls),
+  body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail>:not(.atlas-compact-controls){transition-delay:.12s,.08s,.08s}
+  body.atlas-panels-open:has(#atlas-scene[data-atlas-level="orbit"]) .hero-panel,
+  body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{background:transparent;border-color:transparent;box-shadow:none}
+  body.atlas-panels-open:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-world-card,
+  body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-world-card{opacity:0;visibility:hidden;pointer-events:none;transform:translateY(6px);transition:opacity .1s ease,transform .1s ease,visibility 0s linear .1s}
+}
 @media(prefers-reduced-motion:reduce){
-  .exploration-rail,.exploration-rail>*,.atlas-compact-controls,.atlas-compact-controls>*,.hero-panel,.hero-panel>*,.geography-panel,.map-panel>#atlas-scene,.atlas-toolbar{transition-duration:.01ms!important}
+  .exploration-rail,.exploration-rail>*,.atlas-compact-controls,.atlas-compact-controls>*,.hero-panel,.hero-panel>*,.geography-panel,.map-panel>#atlas-scene,.atlas-toolbar{transition:none!important;animation:none!important}
 }
 @media(max-width:700px){
   body:has(#atlas-scene[data-atlas-level="orbit"]) .map-panel>#atlas-scene,
@@ -478,9 +489,9 @@ body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-toolba
   body.atlas-details-open:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-compact-controls,
   body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-compact-controls{display:none}
   body.atlas-panels-open:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail,
-  body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail{top:auto;right:9px;bottom:68px;left:9px;display:block;width:auto;min-width:0;max-height:38dvh;overflow:auto;pointer-events:auto;padding:8px;border:1px solid var(--line);border-radius:12px;background:rgba(8,6,7,.94)}
+  body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail{top:auto;right:9px;bottom:68px;left:9px;display:block;width:auto;height:38dvh;min-width:0;max-height:38dvh;overflow:auto;pointer-events:auto;padding:8px;border:1px solid var(--line);border-radius:12px;background:rgba(8,6,7,.94)}
   body.atlas-panels-open:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail>:not(.atlas-compact-controls),
-  body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail>:not(.atlas-compact-controls){max-height:38dvh}
+  body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail>:not(.atlas-compact-controls){height:100%;max-height:38dvh}
 }
 /* The explicit Focus Atlas command keeps its existing full-screen canvas behavior. */
 body.atlas-focused:has(#atlas-scene[data-atlas-level="orbit"]) .map-panel>#atlas-scene,
@@ -544,7 +555,7 @@ body.invitation-open:has(#atlas-scene[data-atlas-level="orbit"]) .hero-panel,
 body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{display:none}
 @media(max-width:700px){
   body.invitation-open:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail,
-  body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail{top:118px;right:9px;bottom:10px;left:9px;display:block;width:auto;min-width:0;max-height:calc(100dvh - 128px);overflow:auto;pointer-events:auto;padding:8px;border:1px solid var(--line);border-radius:12px;background:rgba(8,6,7,.96)}
+  body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail{top:118px;right:9px;bottom:10px;left:9px;display:block;width:auto;height:calc(100dvh - 128px);min-width:0;max-height:calc(100dvh - 128px);overflow:auto;pointer-events:auto;padding:8px;border:1px solid var(--line);border-radius:12px;background:rgba(8,6,7,.96)}
   body.invitation-open:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail>#invitation,
   body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail>#invitation{display:block;max-width:none;max-height:calc(100dvh - 146px);overflow:auto;opacity:1;visibility:visible;pointer-events:auto}
   body.invitation-open:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail>#exploration-tree,
@@ -553,4 +564,24 @@ body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{dis
   body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-compact-controls{display:none}
   body.invitation-open:has(#atlas-scene[data-atlas-level="orbit"]) .hero-panel,
   body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{display:none}
+}
+@media(max-width:430px){
+  .map-panel>#atlas-scene{inset:0;width:100%;}
+  .atlas-other-questions-toggle{position:absolute;z-index:6;top:169px;left:50%;transform:translateX(-50%);min-height:38px;padding:7px 13px;border:1px solid rgba(236,228,212,.22);border-radius:999px;background:rgba(8,6,7,.92);box-shadow:0 8px 22px #0006;color:var(--parchment);font:600 11px/1 var(--sans);letter-spacing:.03em;cursor:pointer}
+  .atlas-other-questions-toggle[aria-pressed="true"]{border-color:var(--gold);color:#ffe4a8;background:rgba(35,27,18,.96)}
+  .atlas-other-questions-toggle:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  .atlas-other-questions-toggle[hidden]{display:none!important}
+}
+
+/* Keep Atlas panel geometry reversible while compact and full views trade places. */
+.has-story .hero-panel{transition:width .24s ease,top .24s ease,right .24s ease,bottom .24s ease,left .24s ease,height .24s ease,opacity .18s ease}
+@media(max-width:700px){
+  body:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail>:not(.atlas-compact-controls),
+  body:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail>:not(.atlas-compact-controls){right:0;left:0;width:auto;height:100%}
+  body:has(#atlas-scene[data-atlas-level="orbit"]) .hero-panel,
+  body:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{height:74px;min-height:74px}
+  body:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-world-card,
+  body:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-world-card{top:0;right:0;left:0}
+  body.invitation-open:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail>#invitation,
+  body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail>#invitation{top:0;right:0;left:0;width:auto;height:100%;transform:none}
 }
