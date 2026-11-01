@@ -1,14 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { interpolateAttachedAtlasEdgeRoute } from '../web/atlas/routeMorph.js';
 
 const scene = readFileSync(new URL('../web/atlas/scene.js', import.meta.url), 'utf8');
 const p2Renderer = readFileSync(new URL('../web/atlas/p2Renderer.js', import.meta.url), 'utf8');
 
 test('Atlas renders exact routed corners and preserves them through axis changes', () => {
   assert.match(scene, /transformAtlasEdgeShape/);
-  assert.match(scene, /transformAtlasEdgeShape\(from, to, path\.routeShape\)/,
-    'static Atlas edges use every normalized route vertex instead of a fixed sample count');
+  assert.match(scene, /transformAtlasEdgeShape\(atlasFrom, atlasTo, path\.routeShape\)/,
+    'Atlas routes are built in their settled endpoint coordinates');
+  assert.match(scene, /interpolateAttachedAtlasEdgeRoute\(orbitFrom, orbitTo, atlasCurve,[\s\S]*\{ from, to \}\)/,
+    'the Orbit chord morphs to the settled route while staying attached to live endpoints');
   assert.match(scene, /routeVertexFractions\(previousBasis\)[\s\S]*routeVertexFractions\(nextBasis\)/,
     'axis morphs include the cumulative-arc fraction of every old and new corner');
   assert.match(scene, /return fractions\.map\(fraction => \{[\s\S]*return \{ x:a\.x \+ \(b\.x - a\.x\) \* progress/,
@@ -74,7 +77,10 @@ test('axis changes suppress routed Atlas threads but retain non-Atlas threads an
     'Atlas links follow their presentation opacity through the Orbit-to-Atlas blend');
   assert.match(scene, /const edgeState = suppressAtlasThreads \? \{ \.\.\.state, atlas:0 \} : state/,
     'only axis-mode suppression switches parent-child endpoints to the non-Atlas state');
-  assert.match(scene, /atlasCurve\[step\]\.z\), edgeState\.atlas\)/);
+  assert.match(scene, /arc\.set\(directMorph\[step\]\.x, directMorph\[step\]\.y, directMorph\[step\]\.z\)/,
+    'the direct route morph supplies the exact rendered vertices after lift');
+  assert.match(scene, /arc\.lerp\(new THREE\.Vector3\(atlasCurve\[step\]\.x, atlasCurve\[step\]\.y, atlasCurve\[step\]\.z\), edgeState\.atlas\)/,
+    'surface and lift rendering retain their previous route interpolation');
   assert.match(scene, /const rootConnections = state\.atlas > 0\.015 && !suppressAtlasThreads/,
     'P2 question-root attachments stay hidden during the route morph');
   assert.match(scene, /p2Renderer\.setQuestionBranchOpacity\(suppressAtlasThreads \? 0 : 1\)/,
@@ -82,6 +88,31 @@ test('axis changes suppress routed Atlas threads but retain non-Atlas threads an
   assert.match(p2Renderer, /function setQuestionBranchOpacity\(value\)[\s\S]*branches\.material\.opacity = 0\.82 \* currentOpacity \* questionBranchOpacity;[\s\S]*questionAttachments\.material\.opacity = 0\.86 \* currentOpacity \* questionBranchOpacity/);
   assert.match(scene, /axisTransition = null;\s*applyZoom\(zoom, false, timestamp\)/,
     'the exact target routes are redrawn on the completion frame');
+});
+
+test('direct Atlas path morph stays attached and reaches the exact axis-interpolated route', () => {
+  const orbitFrom = { x:-2, y:0.5, z:0.1 }, orbitTo = { x:2, y:-0.25, z:0.2 };
+  const oldRoute = [{ x:-1.5, y:-0.2, z:0.15 }, { x:-0.2, y:1.7, z:0.4 }, { x:1.3, y:0.4, z:0.3 }, { x:1.6, y:0.7, z:0.2 }];
+  const newRoute = [{ x:-0.9, y:0.8, z:0.25 }, { x:-0.4, y:-1.1, z:0.2 }, { x:1.1, y:-0.8, z:0.1 }, { x:2.2, y:-0.6, z:0.15 }];
+  const lerp = (a, b, t) => ({ x:a.x + (b.x - a.x) * t, y:a.y + (b.y - a.y) * t, z:a.z + (b.z - a.z) * t });
+  for (const axis of [0, 0.25, 0.5, 0.75, 1]) {
+    const target = oldRoute.map((point, index) => lerp(point, newRoute[index], axis));
+    for (const zoom of [0, 0.2, 0.5, 0.8, 1]) {
+      const liveFrom = lerp(orbitFrom, target[0], zoom);
+      const liveTo = lerp(orbitTo, target.at(-1), zoom);
+      const route = interpolateAttachedAtlasEdgeRoute(orbitFrom, orbitTo, target, zoom, { from:liveFrom, to:liveTo });
+      assert.deepEqual(route[0], liveFrom, `start endpoint at axis=${axis}, zoom=${zoom}`);
+      assert.deepEqual(route.at(-1), liveTo, `end endpoint at axis=${axis}, zoom=${zoom}`);
+      assert.deepEqual(route[1], lerp(lerp(orbitFrom, orbitTo, 1 / 3), target[1], zoom),
+        `route progresses directly at axis=${axis}, zoom=${zoom}`);
+    }
+  }
+  const full = interpolateAttachedAtlasEdgeRoute(orbitFrom, orbitTo, newRoute, 1, { from:newRoute[0], to:newRoute.at(-1) });
+  assert.deepEqual(full, newRoute, 'the final route retains every exact routed corner');
+  const attachedOffset = { from:{ x:-1.25, y:0.4, z:0.2 }, to:{ x:1.4, y:-0.1, z:0.25 } };
+  const offsetRoute = interpolateAttachedAtlasEdgeRoute(orbitFrom, orbitTo, newRoute, 0.5, attachedOffset);
+  assert.deepEqual(offsetRoute[0], attachedOffset.from);
+  assert.deepEqual(offsetRoute.at(-1), attachedOffset.to);
 });
 
 test('question-root attachments render and morph their routed paths with existing edge styling', () => {

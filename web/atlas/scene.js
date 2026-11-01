@@ -5,6 +5,7 @@ import { projectGeographyLocation } from '../terrainRaster.js';
 import { clusterOpacityAtPresentation, orbitClusteredIdsForPresentation, planWorldClusters } from './clusters.js';
 import { containsFanRegion, createFanHitRegion, fanMemberOffsets } from './screenLayout.js';
 import { createAtlasP2Renderer } from './p2Renderer.js';
+import { interpolateAttachedAtlasEdgeRoute } from './routeMorph.js';
 import { dragModeForZoom, panDeltaForDrag, zoomFromPinch, zoomFromWheel } from './interaction.js';
 import { createWorldLabelCandidates, placeScreenLabels, projectedSphereDiameterPixels, shortQuestionTitle, worldLabelText } from './labels.js';
 import {
@@ -1349,6 +1350,16 @@ export function createAtlasScene(container, {
       const fromRadius = parent.id === currentId ? surfaceEarthRadius(edgeState) : markerRadius;
       const from = worldPosition(parent, edgeState, timestamp, fromRadius);
       const to = worldPosition(child, edgeState, timestamp, markerRadius);
+      const atlasEdgeState = { ...state, lift:1, atlas:1 };
+      const atlasMarkerRadius = pinAnchorRadiusAtPresentation(surfaceEarthRadius(atlasEdgeState), 1, 1);
+      const atlasFromRadius = parent.id === currentId ? surfaceEarthRadius(atlasEdgeState) : atlasMarkerRadius;
+      const atlasFrom = worldPosition(parent, atlasEdgeState, timestamp, atlasFromRadius);
+      const atlasTo = worldPosition(child, atlasEdgeState, timestamp, atlasMarkerRadius);
+      const orbitEdgeState = { ...state, lift:1, atlas:0 };
+      const orbitMarkerRadius = pinAnchorRadiusAtPresentation(surfaceEarthRadius(orbitEdgeState), 1, 0);
+      const orbitFromRadius = parent.id === currentId ? surfaceEarthRadius(orbitEdgeState) : orbitMarkerRadius;
+      const orbitFrom = worldPosition(parent, orbitEdgeState, timestamp, orbitFromRadius);
+      const orbitTo = worldPosition(child, orbitEdgeState, timestamp, orbitMarkerRadius);
       const surfaceFrom = surfacePoint(parent, fromRadius).normalize();
       const surfaceTo = surfacePoint(child, markerRadius).normalize();
       const arrivalEdge = child.id === currentId && parent.id === arrivalFromId;
@@ -1357,13 +1368,16 @@ export function createAtlasScene(container, {
       const previousPath = axisTransition?.fromTimeline?.parentChildPaths?.find(item => item.parentId === parent.id && item.childId === child.id);
       const progress = axisTransition ? axisTransitionProgress(timestamp - axisTransition.startedAt, AXIS_ANIMATION_MS) : 1;
       let atlasCurve = path?.routeShape?.length > 1
-        ? transformAtlasEdgeShape(from, to, path.routeShape)
-        : sampleAtlasEdgePath(from, to, 16);
+        ? transformAtlasEdgeShape(atlasFrom, atlasTo, path.routeShape)
+        : sampleAtlasEdgePath(atlasFrom, atlasTo, 16);
       if (previousPath?.routeShape?.length > 1 && path?.routeShape?.length > 1 && progress < 1) {
-        atlasCurve = interpolateAtlasRouteShapes(from, to, previousPath.routeShape, path.routeShape, progress,
+        atlasCurve = interpolateAtlasRouteShapes(atlasFrom, atlasTo, previousPath.routeShape, path.routeShape, progress,
           { from:previousPath.from, to:previousPath.to }, { from:path.from, to:path.to });
       }
       const segments = Math.max(1, atlasCurve.length - 1);
+      const directMorph = edgeState.lift >= 0.999
+        ? interpolateAttachedAtlasEdgeRoute(orbitFrom, orbitTo, atlasCurve, inAtlas && !suppressAtlasThreads ? state.atlas : 0, { from, to })
+        : null;
       for (let step = 0; step <= segments; step++) {
         const t = step / segments;
         const direction = slerpUnitVector(surfaceFrom, surfaceTo, t);
@@ -1372,7 +1386,11 @@ export function createAtlasScene(container, {
           : new THREE.Vector3(direction.x, direction.y, direction.z).multiplyScalar(surfaceRadius).add(earthMesh.position);
         const straight = from.clone().lerp(to, t);
         arc.lerp(straight, state.lift);
-        arc.lerp(new THREE.Vector3(atlasCurve[step].x, atlasCurve[step].y, atlasCurve[step].z), edgeState.atlas);
+        if (directMorph) {
+          arc.set(directMorph[step].x, directMorph[step].y, directMorph[step].z);
+        } else {
+          arc.lerp(new THREE.Vector3(atlasCurve[step].x, atlasCurve[step].y, atlasCurve[step].z), edgeState.atlas);
+        }
         arcPoints.push(arc);
       }
       const values = edgePositions[kind];
