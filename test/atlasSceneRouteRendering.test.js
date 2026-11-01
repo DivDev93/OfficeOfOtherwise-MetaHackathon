@@ -10,10 +10,30 @@ const style = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8')
 test('Surface globe framing accounts for the current center-canvas aspect ratio', () => {
   assert.match(scene, /fitSurfaceCameraDistance\(camera\.aspect, camera\.fov, state\.earthScale \* 1\.025\)/,
     'the camera fit uses the current canvas width and the rendered Earth plus atmosphere radius');
-  assert.match(scene, /const surfaceCameraDistance = Math\.max\(state\.cameraDistance,[\s\S]*fitSurfaceCameraDistance/,
-    'the adaptive fit only backs the camera out and preserves the established wider-screen framing');
+  assert.match(scene, /const fittedSurfaceCameraDistance = Math\.max\(state\.cameraDistance,[\s\S]*fitSurfaceCameraDistance/,
+    'the Surface baseline retains the established aspect-aware fit');
+  assert.match(scene, /const surfaceCameraDistance = Math\.max\(state\.earthScale \* 1\.12,\s*fittedSurfaceCameraDistance \/ \(1 \+ 2 \* surfaceDetailZoom \/ 100\)\)/,
+    'local detail zoom moves closer than the fit but keeps a near-camera clearance bound');
   assert.match(scene, /liveCameraDistance = surfaceCameraDistance \+ \(fittedAtlasDistance\(\) - surfaceCameraDistance\) \* state\.atlas/,
     'the Surface fit transitions continuously into the existing fitted Atlas distance');
+});
+
+test('selected Surface framing offsets the camera focus into the visible side-panel lane', () => {
+  assert.match(scene, /surfacePanelCenterOffset\(/,
+    'Surface framing measures the clear lane between the side panels');
+  assert.match(scene, /zoom <= 0\.001 && state\.lift <= 0\.001 && canvasBounds\.width > 700/,
+    'the adjustment only applies to the wide, fully surfaced view');
+  assert.match(scene, /cameraFocus\.x \+= surfacePanelCenterShift \* worldUnitsPerPixel/,
+    'the camera focus shifts additively so existing user pan state remains in effect');
+});
+
+test('explicit place focus clears manual yaw, pitch, and detail zoom before framing the selected world', () => {
+  const focusWorld = scene.match(/function focusWorld\(id\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(focusWorld, 'the scene exposes a non-entry focus action');
+  assert.match(focusWorld, /rotation = 0;[\s\S]*rotationPitch = 0;[\s\S]*surfaceDetailZoom = 0;/,
+    'manual orientation and close zoom are cleared before refocusing');
+  assert.match(focusWorld, /currentId = worldId;[\s\S]*applyZoom\(0\)/,
+    'the selected world is centered at fitted Surface without dispatching a world-entry callback');
 });
 
 test('reduced-motion axis changes swap immediately without blanking the canvas', () => {

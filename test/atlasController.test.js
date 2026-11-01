@@ -36,7 +36,7 @@ function sampleNodes() {
   const sceneRef = { path: 'fixture/run-1/event.png', status: 'complete' };
   const eventRef = { runId: 'run-1', branchId: 'event-1' };
   const root = { id: 'root:run-1', role: 'root-question', rootNodeId: 'root:run-1', runId: 'run-1', divergence: 'What if the coast stayed exposed?', divergenceYear: 1800 };
-  const world = { id: 'run-1::event-1', parentId: root.id, runId: 'run-1', branchId: 'event-1', rootRunId: 'run-1', year: 1902, title: 'Kuching', summary: 'A connected coast.', place: { lat: 1.55, lon: 110.35 }, sceneRef, eventRef, thumbnail: '/fixture-asset?worldId=run-1%3A%3Aevent-1&kind=scene', theme: 'geography-ecology', boldness: .8 };
+  const world = { id: 'run-1::event-1', parentId: root.id, runId: 'run-1', branchId: 'event-1', rootRunId: 'run-1', year: 1902, title: 'Kuching', summary: 'A connected coast.', place: { name: 'Kuching', lat: 1.55, lon: 110.35 }, sceneRef, eventRef, thumbnail: '/fixture-asset?worldId=run-1%3A%3Aevent-1&kind=scene', theme: 'geography-ecology', boldness: .8 };
   return { root, world, sceneRef, eventRef };
 }
 
@@ -51,6 +51,7 @@ test('adapter preserves stable world IDs, parent/event references, verified refs
   assert.equal(result.parentId, null, 'the prompt node is not a spatial parent world');
   assert.equal(result.questionId, 'run-1');
   assert.equal(result.eventRef, eventRef);
+  assert.deepEqual(result.place, world.place);
   assert.equal(result.sceneRef, sceneRef);
   assert.equal(result.thumbnail, world.thumbnail);
   assert.deepEqual([result.year, result.lat, result.lon, result.theme, result.boldness], [1902, 1.55, 110.35, 'geography-ecology', .8]);
@@ -219,7 +220,9 @@ test('toolbar has real labelled controls, preview never enters, and only explici
     setGeography(geography, mode, renderState) { this.geographyPreview = { geography, mode, renderState }; },
     setSurfaceLabelLevel(value) { this.surfaceLevel = value; }, setOrbitLevel(value) { this.orbitLevel = value; },
     setTravelMode(value) { this.travelMode = value; }, setGhostTrail(value) { this.ghost = value; },
-    getZoom() { return this.zoom || 0; }, setZoom(value) { this.zoom = value; }, enterWorld(id, options) { this.entered = { id, options }; return true; },
+    getZoom() { return this.zoom || 0; }, setZoom(value) { this.zoom = value; },
+    getSurfaceDetailZoom() { return this.surfaceDetail || 0; }, setSurfaceDetailZoom(value) { this.surfaceDetail = value; },
+    focusWorld(id) { this.focused = id; return true; }, enterWorld(id, options) { this.entered = { id, options }; return true; },
   };
   const api = await createAtlasController({
     container: host, toolbarContainer: toolbar, renderer: scene, document: doc,
@@ -228,6 +231,20 @@ test('toolbar has real labelled controls, preview never enters, and only explici
     onEnter() { enterCount++; }, onAttachmentIntent(value) { attachment = value; },
   });
   assert.equal(scene.graph.worlds.find(item => item.id === world.id).id, world.id);
+  assert.equal(byLabel(toolbar, 'Branching location context').textContent, 'Kuching · 1.5500°, 110.3500°');
+  assert.equal(byLabel(toolbar, 'Branching location context').title, 'Branching location: Kuching · 1.5500°, 110.3500°');
+  const presentAttachment = byLabel(toolbar, 'Present-day Earth');
+  presentAttachment.checked = true; presentAttachment.dispatch('change');
+  assert.deepEqual(api.getAttachmentIntent(), { mode: 'present-day', parentId: null, divergenceYear: 2026, currentWorldId: world.id },
+    'a selected world location is not attached to a present-day question until the user explicitly focuses it');
+  const currentAttachment = byLabel(toolbar, 'Current world');
+  currentAttachment.checked = true; currentAttachment.dispatch('change');
+  const focusPlace = byLabel(toolbar, 'Focus selected location on Surface');
+  assert.equal(focusPlace.disabled, false);
+  focusPlace.dispatch('click');
+  assert.equal(scene.focused, world.id, 'location focus uses the scene API that resets manual orientation');
+  assert.equal(enterCount, 0, 'location focus reuses Surface orientation without firing world-entry actions');
+  assert.equal(api.getAttachmentIntent().parentId, world.id, 'focused location remains associated with the selected branching world');
   const geographyPreview = { version: 2, seaLevelMeters: -120, continentalTransforms: [], changes: [] };
   api.setGeography(geographyPreview, 'scenario', geographyPreview);
   assert.deepEqual(scene.geographyPreview, { geography: geographyPreview, mode: 'scenario', renderState: geographyPreview });
@@ -235,10 +252,15 @@ test('toolbar has real labelled controls, preview never enters, and only explici
   assert.equal(scene.travelMode, 'threads'); assert.equal(scene.ghost, false);
   assert.equal(byText(toolbar, 'Labelled pins (surface)').children[0].value, '3');
   assert.equal(byText(toolbar, 'Unfolded worlds (orbit)').children[0].value, '2');
-  const zoomSlider = byLabel(toolbar, 'Zoom (left: surface, right: atlas)');
+  const zoomSlider = byLabel(toolbar, 'Zoom (left: closer than Surface, center: Surface, right: Atlas)');
   assert.equal(zoomSlider.type, 'range');
+  assert.equal(zoomSlider.min, '-100');
   const zoomIn = byLabel(toolbar, 'Zoom in'), zoomOut = byLabel(toolbar, 'Zoom out');
-  assert.equal(zoomIn.disabled, true, 'zoom in is disabled at surface');
+  assert.equal(zoomIn.disabled, false, 'zoom in remains available for closer Surface detail');
+  zoomIn.dispatch('click');
+  assert.equal(scene.surfaceDetail, 8); assert.equal(zoomSlider.value, '-8');
+  zoomOut.dispatch('click');
+  assert.equal(scene.surfaceDetail, 0, 'zoom out returns from detail to fitted Surface first');
   zoomOut.dispatch('click');
   assert.equal(scene.zoom, .68, 'the configured first zoom-out target reaches Orbit');
   zoomIn.dispatch('click');
@@ -250,6 +272,12 @@ test('toolbar has real labelled controls, preview never enters, and only explici
   assert.equal(zoomOut.disabled, true);
   scene.zoom = 0.4; zoomSlider.value = '65'; zoomSlider.dispatch('input');
   assert.equal(scene.zoom, .65, 'slider moves left-to-right from surface to atlas');
+  zoomSlider.value = '-38'; zoomSlider.dispatch('input');
+  assert.equal(scene.zoom, 0); assert.equal(scene.surfaceDetail, 38, 'negative slider values control Surface detail');
+  assert.equal(zoomSlider.value, '-38');
+  zoomSlider.value = '-100'; zoomSlider.dispatch('input');
+  assert.equal(zoomIn.disabled, true, 'plus is disabled only when maximum Surface detail is reached');
+  zoomSlider.value = '0'; zoomSlider.dispatch('input');
   assert.equal(api.getAttachmentIntent().mode, 'current-world');
   assert.equal(api.getAttachmentIntent().parentId, world.id);
   // Invoking the controller API represents an explicit user entry action.
@@ -265,7 +293,8 @@ test('toolbar has real labelled controls, preview never enters, and only explici
   assert.equal(scene.ghost, true);
   const present = byLabel(toolbar, 'Present-day Earth');
   present.checked = true; present.dispatch('change');
-  assert.deepEqual(attachment, { mode: 'present-day', parentId: null, divergenceYear: 2026, currentWorldId: world.id });
+  assert.deepEqual(attachment, { mode: 'present-day', parentId: null, divergenceYear: 2026, currentWorldId: world.id,
+    divergencePlace: { name: 'Kuching', lat: 1.55, lon: 110.35 } });
   assert.equal(api.getAttachmentIntent().mode, 'present-day');
   const current = byLabel(toolbar, 'Current world'); current.checked = true; current.dispatch('change');
   assert.deepEqual(attachment, { mode: 'current-world', parentId: world.id, divergenceYear: 1902, currentWorldId: world.id });

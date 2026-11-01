@@ -15,6 +15,13 @@ test('page uses one persistent Atlas canvas and keeps the complete text explorat
   assert.doesNotMatch(html, /popover="manual"/);
 });
 
+test('evidence panel renders only the validated evidence endpoint response', () => {
+  assert.match(app, /fetch\(`\/runs\/\$\{encodeURIComponent\(runId\)\}\/evidence`/);
+  assert.doesNotMatch(app, /currentManifest\.branch\?\.evidence\b/);
+  assert.match(html, /Other questions can still be explored as hypotheticals/);
+  assert.doesNotMatch(html, /that run stops without showing unsourced outcomes/);
+});
+
 test('Atlas controller is the only spatial entry surface and previews stay separate from explicit entry', () => {
   assert.match(app, /import \{ createAtlasController \} from '\.\/atlas\/controller\.js'/);
   assert.doesNotMatch(app, /createStarMap|createGlobe/);
@@ -42,6 +49,8 @@ test('Atlas keeps quick zoom visible, moves real view controls into a disclosure
   assert.match(app, /function compactAtlasToolbar\(toolbar\)/);
   assert.match(app, /controls\.slice\(0, 3\)/);
   assert.match(app, /controls\.slice\(3\)/);
+  assert.match(app, /quick\.append\(placeContext\)/, 'the selected branching location stays visible beside quick Atlas controls');
+  assert.match(css, /\.atlas-place-context\{[^}]*text-overflow:ellipsis/, 'the location readout remains bounded on narrow screens');
   assert.match(html, /id="atlas-reopen-controls"[\s\S]*id="atlas-show-tree"[\s\S]*id="atlas-show-selected"/);
   assert.match(css, /\.atlas-view-options-panel/);
   assert.match(css, /\.atlas-focused \.exploration-rail,\.atlas-focused \.hero-panel\{display:none!important\}/);

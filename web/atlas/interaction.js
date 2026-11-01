@@ -2,6 +2,13 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const ZOOM_MAX = 100;
 const WHEEL_ZOOM_PER_PIXEL = 0.08;
 const WHEEL_STEP_LIMIT = 16;
+/** Apply a Surface drag while keeping the poles within reach. */
+export function surfaceDragAngles(yawOffset, pitchOffset, facingPitch, dx, dy) {
+  const facing = Number(facingPitch) || 0;
+  const pitch = clamp(facing + (Number(pitchOffset) || 0) + (Number(dy) || 0) * 0.006, -Math.PI / 2, Math.PI / 2);
+  return { yaw: (Number(yawOffset) || 0) + (Number(dx) || 0) * 0.006, pitch: pitch - facing };
+}
+export const SURFACE_DETAIL_MAX = 100;
 const RESTING_LEVELS = [0, 57, 100];
 
 function gentlyAttractToRestingLevel(current, value, delta) {
@@ -25,6 +32,21 @@ export function zoomFromWheel(zoom, deltaY, { deltaMode = 0, viewportHeight = 1 
   const current = clamp(Number(zoom) || 0, 0, ZOOM_MAX);
   const delta = clamp((Number(deltaY) || 0) * unit * WHEEL_ZOOM_PER_PIXEL, -WHEEL_STEP_LIMIT, WHEEL_STEP_LIMIT);
   return gentlyAttractToRestingLevel(current, clamp(current + delta, 0, ZOOM_MAX), delta);
+}
+
+/** Wheel zoom within the fitted Surface view, where negative deltas move closer. */
+export function surfaceDetailFromWheel(detail, deltaY, { deltaMode = 0, viewportHeight = 1 } = {}) {
+  const unit = deltaMode === 1 ? 16 : deltaMode === 2 ? Math.max(1, viewportHeight) : 1;
+  const current = clamp(Number(detail) || 0, 0, SURFACE_DETAIL_MAX);
+  const delta = clamp((Number(deltaY) || 0) * unit * WHEEL_ZOOM_PER_PIXEL, -WHEEL_STEP_LIMIT, WHEEL_STEP_LIMIT);
+  return clamp(current - delta, 0, SURFACE_DETAIL_MAX);
+}
+
+/** A wider two-finger gap zooms closer while Surface is at its fitted level. */
+export function surfaceDetailFromPinch(startDetail, startDistance, currentDistance) {
+  const start = Math.max(1, Number(startDistance) || 1);
+  const current = Math.max(1, Number(currentDistance) || 1);
+  return clamp((Number(startDetail) || 0) + Math.log2(current / start) * 28, 0, SURFACE_DETAIL_MAX);
 }
 
 /** A wider two-finger gap zooms toward the surface; a narrower gap moves outward. */

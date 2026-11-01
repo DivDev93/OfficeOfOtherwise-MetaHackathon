@@ -42,6 +42,8 @@ test('completion preserves blocked and empty outcomes', () => {
  assert.match(completionStatus({status:'blocked'}),/reframe/);
  assert.match(completionStatus({status:'empty'}),/No suitable/);
  assert.equal(completionStatus({status:'ok'}),'Story complete');
+ assert.match(completionStatus({status:'ok',evidenceStatus:{status:'unavailable'}}),/no source passage retrieved; hypothetical only/);
+ assert.match(completionStatus({status:'empty',evidenceStatus:{status:'unavailable'}}),/no source passage is available/);
  assert.equal(completionStatus({status:'ok',renderStatus:'2d-only',renderReason:'no-segmentation-mask'}),'2D scene only · no SAM cutout available');
 });
 test('health response selects replay-only/live mode and fails closed when unavailable or malformed', () => {

@@ -217,3 +217,11 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas: preserve selected and ancestry labels on narrow settled views by using collision-checked edge slots when local placements are blocked; cover 390px and 375px layouts offline. | |
 | 2026-11-01 | Atlas entry: initialize the Earth texture before a world is selected and keep the four saved starting questions open on first load. Offline entry tests pass. | |
 | 2026-11-01 | Atlas: fit the Surface globe to the center canvas aspect so narrow panels do not crop it after changing the selected world. | |
+| 2026-11-01 | Atlas: enable reversible wheel, pinch and keyboard zoom closer than the fitted globe while Surface is at its starting level; outward input returns to the fitted view before continuing Surface-to-Orbit-to-Atlas. Local interaction tests; no model calls, hosting, or submission. | |
+| 2026-11-01 | Atlas: focus a selected saved world's recorded place on Surface, show its name and coordinates, and carry that place into present-day branching context. Uses existing local coordinates; no external gazetteer or map service. | |
+| 2026-11-01 | Atlas: extend the Surface canvas across the viewport so close zoom is not cut off at the desktop canvas edges. | |
+| 2026-11-01 | Atlas: rotate the Surface globe vertically as well as horizontally when dragged, with pole limits. | |
+| 2026-11-01 | Atlas: center the Surface globe in the visible space between open side panels while retaining the full-width canvas. | |
+| 2026-11-01 | Restore saved replay histories alongside live continuations, preserving branch identity, ancestry, and read-only package data. | |
+| 2026-11-01 | Restore bounded source retrieval and evidence-linked briefs, preserving complete quoted units and uncertainty. | |
+| 2026-11-01 | Continue unsupported or ungrounded topics as explicitly unsourced speculation, without invented citations or additional proposal calls. | |

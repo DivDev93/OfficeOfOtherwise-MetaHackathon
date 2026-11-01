@@ -27,6 +27,21 @@ function coordinatesOf(node) {
   };
 }
 
+function branchingPlaceOf(world) {
+  if (!world || !Number.isFinite(world.lat) || world.lat < -90 || world.lat > 90
+    || !Number.isFinite(world.lon) || world.lon < -180 || world.lon > 180) return undefined;
+  const name = text(object(world.place || world.location).name);
+  return name ? { name, lat: world.lat, lon: world.lon } : undefined;
+}
+
+function locationLabel(world) {
+  if (!world || !Number.isFinite(world.lat) || world.lat < -90 || world.lat > 90
+    || !Number.isFinite(world.lon) || world.lon < -180 || world.lon > 180) return '';
+  const name = text(object(world.place || world.location).name);
+  const coordinates = `${world.lat.toFixed(4)}°, ${world.lon.toFixed(4)}°`;
+  return name ? `${name} · ${coordinates}` : `Recorded coordinates · ${coordinates}`;
+}
+
 function verifiedImageIdentity(node) {
   const event = object(node.eventRef || node.eventReference);
   const provenance = object(node.provenance);
@@ -242,6 +257,7 @@ export async function createAtlasController({
   const data = adaptAtlasGraph({ ...graph, mapNodes: graph.mapNodes ?? mapNodes, worlds: graph.worlds ?? worlds, questions: graph.questions ?? questions, runData: graph.runData ?? runData, rootManifest: graph.rootManifest ?? rootManifest, currentRunId: graph.currentRunId ?? currentRunId, selectedBranchId: graph.selectedBranchId ?? selectedBranchId, currentWorldId: graph.currentWorldId ?? currentWorldId });
   let disposed = false;
   let currentId = data.currentWorldId;
+  let focusedPlaceWorldId = null;
   let storage = visitedStorage;
   if (storage === undefined) { try { storage = windowObject?.sessionStorage; } catch { storage = null; } }
   const isSafeWorldId = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value);
@@ -271,14 +287,15 @@ export async function createAtlasController({
   toolbar.replaceChildren?.(); toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', 'Atlas controls');
   const makeButton = (label, ariaLabel) => { const button = documentObject.createElement('button'); button.type = 'button'; button.textContent = label; button.setAttribute('aria-label', ariaLabel); button.style.minWidth = '44px'; button.style.minHeight = '44px'; toolbar.append(button); return button; };
   const zoomOut = makeButton('−', 'Zoom out'), zoomIn = makeButton('+', 'Zoom in');
-  const zoomInput = documentObject.createElement('input'); zoomInput.type = 'range'; zoomInput.min = '0'; zoomInput.max = '100'; zoomInput.step = '1'; zoomInput.value = '0';
-  zoomInput.setAttribute('aria-label', 'Zoom (left: surface, right: atlas)');
-  const zoomLabel = documentObject.createElement('label'); zoomLabel.textContent = 'Zoom (left: surface, right: atlas)'; zoomLabel.append(zoomInput); toolbar.append(zoomLabel);
-  const updateZoomControls = value => {
+  const zoomInput = documentObject.createElement('input'); zoomInput.type = 'range'; zoomInput.min = '-100'; zoomInput.max = '100'; zoomInput.step = '1'; zoomInput.value = '0';
+  zoomInput.setAttribute('aria-label', 'Zoom (left: closer than Surface, center: Surface, right: Atlas)');
+  const zoomLabel = documentObject.createElement('label'); zoomLabel.textContent = 'Zoom (closer ← Surface → Atlas)'; zoomLabel.append(zoomInput); toolbar.append(zoomLabel);
+  const updateZoomControls = (value, surfaceDetail = sceneApi?.getSurfaceDetailZoom?.() ?? 0) => {
     const zoom = Math.max(0, Math.min(1, Number(value) || 0));
-    zoomInput.value = String(Math.round(zoom * 100));
+    const detail = Math.max(0, Math.min(100, Number(surfaceDetail) || 0));
+    zoomInput.value = String(detail > 0 ? -Math.round(detail) : Math.round(zoom * 100));
     zoomOut.disabled = zoom >= 1;
-    zoomIn.disabled = zoom <= 0;
+    zoomIn.disabled = zoom <= 0 && detail >= 100;
   };
   const surface = makeControl(documentObject, 'input', 'Labelled pins (surface)', toolbar).control;
   surface.type = 'range'; surface.min = '0'; surface.max = '7'; surface.step = '1'; surface.value = String(SURFACE_LABEL_LEVEL); surface.setAttribute('aria-valuetext', `${SURFACE_LABEL_LEVEL} labelled pins`);
@@ -297,6 +314,23 @@ export async function createAtlasController({
   const attachment = radioGroup(documentObject, toolbar, 'Attach a new question to', 'atlas-question-attachment', [['current', 'Current world'], ['present', 'Present-day Earth']], viewOptions.attachment);
 
   const currentWorld = () => data.worlds.find(world => world.id === currentId) || null;
+  const focusPlace = makeButton('Focus place', 'Focus selected location on Surface');
+  const placeStatus = documentObject.createElement('span');
+  placeStatus.setAttribute('role', 'status');
+  placeStatus.setAttribute('aria-live', 'polite');
+  placeStatus.className = 'atlas-place-context';
+  placeStatus.setAttribute('aria-label', 'Branching location context');
+  toolbar.append(placeStatus);
+  const updatePlaceControls = () => {
+    const world = currentWorld();
+    const hasCoordinates = Boolean(world && Number.isFinite(world.lat) && world.lat >= -90 && world.lat <= 90
+      && Number.isFinite(world.lon) && world.lon >= -180 && world.lon <= 180);
+    focusPlace.disabled = !hasCoordinates;
+    focusPlace.hidden = !hasCoordinates;
+    placeStatus.hidden = !hasCoordinates;
+    placeStatus.textContent = locationLabel(world);
+    placeStatus.title = hasCoordinates ? `Branching location: ${locationLabel(world)}` : '';
+  };
   const markWorldVisited = id => {
     const worldId = String(id ?? '');
     if (!isSafeWorldId(worldId) || !worldRecords.has(worldId)) return null;
@@ -308,7 +342,8 @@ export async function createAtlasController({
     return visited;
   };
   const intent = () => viewOptions.attachment === 'present'
-    ? { mode: 'present-day', parentId: null, divergenceYear: ATLAS_PRESENT_YEAR, currentWorldId: currentId }
+    ? { mode: 'present-day', parentId: null, divergenceYear: ATLAS_PRESENT_YEAR, currentWorldId: currentId,
+      ...(focusedPlaceWorldId === currentId && branchingPlaceOf(currentWorld()) ? { divergencePlace: branchingPlaceOf(currentWorld()) } : {}) }
     : { mode: 'current-world', parentId: currentId, divergenceYear: currentWorld()?.year ?? null, currentWorldId: currentId };
   const notifyViewOptions = () => onViewOptionsChange({ ...viewOptions });
   let sceneApi = renderer;
@@ -325,8 +360,10 @@ export async function createAtlasController({
     }
     const id = stableWorldId(world);
     if (!id || !worldRecords.has(id)) return false;
+    if (id !== currentId) focusedPlaceWorldId = null;
     currentId = id;
     const visited = markWorldVisited(id) || world;
+    updatePlaceControls();
     sceneApi?.setWorlds?.({ worlds: data.worlds, questions: data.questions, currentId });
     sceneApi?.enterWorld?.(id, { zoom: 0 });
     onEnter(visited, { source: 'atlas-explicit-entry' });
@@ -348,6 +385,7 @@ export async function createAtlasController({
       },
       onMetrics,
       onZoomChange: zoom => updateZoomControls(zoom),
+      onSurfaceDetailChange: (detail, zoom) => updateZoomControls(zoom, detail),
       onLevelChange: level => { updateZoomControls(Number(level?.zoom ?? sceneApi?.getZoom?.() ?? 0)); onLevelChange(level); },
       surfaceLabelLevel: SURFACE_LABEL_LEVEL,
       orbitLevel: ORBIT_UNFOLDED_LEVEL,
@@ -361,15 +399,43 @@ export async function createAtlasController({
   scene.setOrbitLevel?.(ORBIT_UNFOLDED_LEVEL);
   scene.setTravelMode?.(viewOptions.travelMode);
   scene.setGhostTrail?.(false);
+  updatePlaceControls();
+  const focusSelectedPlace = () => {
+    if (disposed || focusPlace.disabled || !currentId) return false;
+    // Reuse the scene's selected-world Surface orientation without firing the
+    // app's world-entry callback or starting consequence generation.
+    const focused = typeof scene.focusWorld === 'function'
+      ? scene.focusWorld(currentId)
+      : scene.enterWorld?.(currentId, { zoom: 0 });
+    if (focused === false) return false;
+    focusedPlaceWorldId = currentId;
+    onAttachmentIntent(intent());
+    return true;
+  };
+  const syncSurfaceDetail = value => {
+    scene.setSurfaceDetailZoom?.(value);
+    updateZoomControls(Number(scene.getZoom?.()) || 0, Number(scene.getSurfaceDetailZoom?.()) || 0);
+  };
   const syncZoom = value => { const zoom = Math.max(0, Math.min(1, Number(value) || 0)); updateZoomControls(zoom); scene.setZoom?.(zoom); };
   updateZoomControls(Number(scene.getZoom?.()) || 0);
   zoomOut.addEventListener('click', () => {
     const currentZoom = Number(scene.getZoom?.()) || 0;
+    const detail = Number(scene.getSurfaceDetailZoom?.()) || 0;
+    if (detail > 0) { syncSurfaceDetail(Math.max(0, detail - 8)); return; }
     const targetZoom = getZoomOutTarget(currentZoom);
     syncZoom(Number.isFinite(targetZoom) ? targetZoom : currentZoom + 0.08);
   });
-  zoomIn.addEventListener('click', () => syncZoom((Number(scene.getZoom?.()) || 0) - 0.08));
-  zoomInput.addEventListener('input', () => syncZoom(Number(zoomInput.value) / 100));
+  zoomIn.addEventListener('click', () => {
+    const currentZoom = Number(scene.getZoom?.()) || 0;
+    if (currentZoom <= 0) syncSurfaceDetail(Math.min(100, (Number(scene.getSurfaceDetailZoom?.()) || 0) + 8));
+    else syncZoom(currentZoom - 0.08);
+  });
+  zoomInput.addEventListener('input', () => {
+    const value = Number(zoomInput.value) || 0;
+    if (value < 0) { scene.setZoom?.(0); syncSurfaceDetail(-value); }
+    else { if ((Number(scene.getSurfaceDetailZoom?.()) || 0) > 0) syncSurfaceDetail(0); syncZoom(value / 100); }
+  });
+  focusPlace.addEventListener('click', focusSelectedPlace);
   surface.addEventListener('input', () => { const value = Math.max(0, Math.min(7, Number(surface.value) | 0)); surface.value = String(value); surface.setAttribute('aria-valuetext', `${value} labelled pins`); scene.setSurfaceLabelLevel?.(value); });
   unfold.addEventListener('input', () => { const value = Math.max(0, Math.min(7, Number(unfold.value) | 0)); unfold.value = String(value); unfold.setAttribute('aria-valuetext', `${value} unfolded worlds`); scene.setOrbitLevel?.(value); });
   axis.addEventListener('change', () => { if (!ATLAS_AXIS_MODES.some(([value]) => value === axis.value)) return; viewOptions.axisMode = axis.value; scene.setAxisMode?.(axis.value); notifyViewOptions(); });
@@ -385,6 +451,7 @@ export async function createAtlasController({
     getData: () => ({ worlds: [...data.worlds], questions: [...data.questions], currentWorldId: currentId }),
     getViewOptions: () => ({ ...viewOptions }),
     getAttachmentIntent: intent,
+    focusSelectedPlace,
     setGeography(geography, mode, renderState) { if (!disposed) scene.setGeography?.(geography, mode, renderState); },
     setGraph(next = {}) {
       if (disposed) return;
@@ -418,10 +485,12 @@ export async function createAtlasController({
       data.questions = [...questionRecords.values()];
       if (Object.prototype.hasOwnProperty.call(next, 'currentWorldId')) {
         const requested = next.currentWorldId == null ? null : String(next.currentWorldId);
+        if (requested !== currentId) focusedPlaceWorldId = null;
         currentId = requested && worldRecords.has(requested) ? requested : null;
         if (currentId) markWorldVisited(currentId);
       }
       data.worlds = [...worldRecords.values()];
+      updatePlaceControls();
       scene.setWorlds?.({ worlds: data.worlds, questions: data.questions, currentId });
     },
     enterWorld(id, { zoom = 0 } = {}) {
@@ -429,8 +498,10 @@ export async function createAtlasController({
       if (String(id) === PRESENT_DAY_WORLD_ID) return explicitEnter({ id: PRESENT_DAY_WORLD_ID, kind: 'present-day', year: ATLAS_PRESENT_YEAR, title: 'Present-day Earth' });
       const world = data.worlds.find(item => item.id === String(id));
       if (!world || world.selectable === false || world.isExpansionPlaceholder) return false;
+      if (world.id !== currentId) focusedPlaceWorldId = null;
       currentId = world.id;
       const visited = markWorldVisited(world.id) || world;
+      updatePlaceControls();
       scene.setWorlds?.({ worlds: data.worlds, questions: data.questions, currentId });
       scene.enterWorld?.(world.id, { zoom }); onEnter(visited, { source: 'controller-explicit-entry' }); return true;
     },

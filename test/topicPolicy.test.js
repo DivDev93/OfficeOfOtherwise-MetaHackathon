@@ -88,6 +88,29 @@ test('checkBranches keeps clean branches and reports why others were rejected', 
   assert.deepEqual(rejected.map(r => [r.branch.title, r.layer]), [['Siege of the library', 'keyword'], ['Fight for the crown', 'model']]);
 });
 
+test('checkBranches applies topic policy to evidence and geography fields shown in the UI', async () => {
+  const policy = createTopicPolicy({ classifyBranches: async text => /election/i.test(text)
+    ? { verdict: 'block', category: 'politics', reason: 'political content' }
+    : { verdict: 'allow' } });
+  const fields = [
+    { changedAssumption: 'An election changes the assumption.' },
+    { causalSteps: ['The election changes the first step.'] },
+    { baselineClaims: [{ text: 'The source discusses an election.', sourceIds: ['source-one'] }] },
+    { uncertainty: 'The election outcome is uncertain.' },
+    { citations: ['election-source'] },
+    { unverifiedClaims: ['An election changes the route.'] },
+    { demonstrates: 'The election demonstrates a path.' },
+    { doesNotEstablish: 'The election is not established.' },
+    { discussionQuestion: 'Which election records remain?' },
+    { geography: { changes: [{ uncertainty: 'The election boundary is unclear.' }] } },
+  ];
+  for (const field of fields) {
+    const { kept, rejected } = await policy.checkBranches([{ id: 'b1', title: 'Clean title', summary: 'Clean summary', ...field }]);
+    assert.equal(kept.length, 0, JSON.stringify(field));
+    assert.equal(rejected.length, 1, JSON.stringify(field));
+  }
+});
+
 test('parseVerdict tolerates prose around the JSON and rejects junk', () => {
   assert.deepEqual(parseVerdict('Sure! {"verdict":"block","category":"war","reason":"army"} done'), { verdict: 'block', category: 'war', reason: 'army' });
   assert.equal(parseVerdict('no json here'), null);

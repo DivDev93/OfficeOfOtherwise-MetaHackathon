@@ -8,7 +8,7 @@ import { createLargeClusterPicker, needsPagedClusterPicker, visibleKeyboardNeigh
 import { createAtlasP2Renderer } from './p2Renderer.js';
 import { planAtlasReveal, renderableAtlasRevealPlan } from './revealPlanner.js';
 import { interpolateAttachedAtlasEdgeRoute } from './routeMorph.js';
-import { dragModeForZoom, panDeltaForDrag, zoomFromPinch, zoomFromWheel } from './interaction.js';
+import { dragModeForZoom, panDeltaForDrag, surfaceDragAngles, surfaceDetailFromPinch, surfaceDetailFromWheel, zoomFromPinch, zoomFromWheel } from './interaction.js';
 import { createOrbitChildLabelLeader, createWorldLabelCandidates, edgeMarker, layoutOrbitChildLabels, placeOrbitFallbackDock, placeOrbitFallbackPanel, placeScreenLabels, projectedSphereDiameterPixels, resolveOrbitFallbackMount, shortQuestionTitle, visibleViewportObstacleRects, viewportObstacleRectsFromCenters, worldLabelText } from './labels.js';
 import {
   GHOST_TRAIL_DEFAULT, arrivalParentWorldId, cutTravelOpacity, interpolateTravelPoint, preservesTravelSource, smoothTravelProgress, travelZoomAt,
@@ -26,6 +26,7 @@ import {
   layoutAtlasWorlds, layoutOrbitNeighborhood, measuredFps, surfaceFacingOrientation,
   worldRadiusForScreenPixels, nearestProjectedAnchorHit, projectedWorldTarget, targetOccludedByEarth, pointerRayDistanceAtTargetDepth, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds, slerpUnitVector,
   cappedTextureSize, allowEarthBodySelection, fitCenteredCameraDistance, fitSurfaceCameraDistance,
+  surfacePanelCenterOffset,
   appendContinuousFrame, stableWorldId, localQuaternionForWorldFacing, isSurfaceNormalVisible,
 } from '../atlasLayout.js';
 
@@ -250,6 +251,7 @@ export function createAtlasScene(container, {
   onQuestionEnter = () => {},
   onMetrics = () => {},
   onZoomChange = () => {},
+  onSurfaceDetailChange = () => {},
   onLevelChange = () => {},
   resolveWorldImageUrl = defaultWorldImageUrl,
   basemapUrl = '/assets/earth-blue-marble.jpg',
@@ -262,10 +264,11 @@ export function createAtlasScene(container, {
   let motionReduced = reducedMotion == null ? Boolean(motionQuery?.matches) : Boolean(reducedMotion);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color('#07121a');
+  // Let the page's continuous background show through the bounded atlas canvas.
+  scene.background = null;
   const camera = new THREE.PerspectiveCamera(38, 1, 0.05, 120);
   scene.add(camera);
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 1.5));
   renderer.domElement.tabIndex = 0;
@@ -468,8 +471,8 @@ export function createAtlasScene(container, {
   const lodIdSet = new Set();
   const stageFps = new Map();
   const domListeners = [];
-  let worlds = [], questions = [], entries = [], currentId = null, arrivalFromId = null, zoom = 0, rotation = 0;
-  let surfaceFacingAngle = 0, surfaceFacingPitch = 0;
+  let worlds = [], questions = [], entries = [], currentId = null, arrivalFromId = null, zoom = 0, surfaceDetailZoom = 0, rotation = 0;
+  let surfaceFacingAngle = 0, surfaceFacingPitch = 0, rotationPitch = 0;
   let orbitNeighborhoodIds = new Set();
   let liveCameraDistance = altitudeForZoom(zoom);
   let clusterPlan = { surface: { visibleIds: [], clusters: [] }, orbit: { visibleIds: [], clusters: [] } };
@@ -656,12 +659,13 @@ export function createAtlasScene(container, {
       : { yaw: surfaceFacingAngle, pitch: surfaceFacingPitch };
     const amount = clamp(Number(blend ?? 1), 0, 1);
     const yaw = (facing.yaw + rotation) * amount;
-    const pitch = facing.pitch * amount;
+    const adjustedPitch = clamp(facing.pitch + rotationPitch, -Math.PI / 2, Math.PI / 2);
+    const pitch = adjustedPitch * amount;
     surfaceYawQuaternion.setFromAxisAngle(surfaceYawAxis, yaw);
     surfacePitchQuaternion.setFromAxisAngle(surfacePitchAxis, pitch);
     atlasGroup.quaternion.copy(surfacePitchQuaternion).multiply(surfaceYawQuaternion);
     earthFacingYawQuaternion.setFromAxisAngle(surfaceYawAxis, facing.yaw + rotation);
-    earthFacingPitchQuaternion.setFromAxisAngle(surfacePitchAxis, facing.pitch);
+    earthFacingPitchQuaternion.setFromAxisAngle(surfacePitchAxis, adjustedPitch);
     earthDesiredWorldQuaternion.copy(earthFacingPitchQuaternion).multiply(earthFacingYawQuaternion);
     const earthLocalFacing = localQuaternionForWorldFacing(atlasGroup.quaternion, earthDesiredWorldQuaternion);
     earthMesh.quaternion.set(earthLocalFacing.x, earthLocalFacing.y, earthLocalFacing.z, earthLocalFacing.w);
@@ -977,11 +981,14 @@ export function createAtlasScene(container, {
 
 
   function applyZoom(value, announce = true, timestamp = performance.now()) {
+    const previousSurfaceDetailZoom = surfaceDetailZoom;
     zoom = clamp(Number(value) || 0, 0, 1);
+    if (zoom > 0) surfaceDetailZoom = 0;
     const zoomStage = stageForZoom(zoom);
     container.dataset.atlasLevel = zoomStage;
     renderer.domElement.dataset.atlasLevel = zoomStage;
     if (announce) onZoomChange(zoom);
+    if (previousSurfaceDetailZoom !== surfaceDetailZoom) onSurfaceDetailChange(surfaceDetailZoom, zoom);
     const presentation = atlasPresentationState(zoom, motionReduced);
     const state = presentation.state;
     const revealCandidate = zoom >= 0.84 && !travelState && !axisTransition && atlasTimeline && entries.length
@@ -1048,13 +1055,32 @@ export function createAtlasScene(container, {
     const atlasCenter = new THREE.Vector3((frame.left + frame.right) / 2, (frame.bottom + frame.top) / 2, 0);
     const cameraFocus = travelState && !travelState.cut ? earthMesh.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3().lerp(atlasCenter, state.atlas);
     cameraFocus.x += panOffset.x; cameraFocus.y += panOffset.y;
-    const surfaceCameraDistance = Math.max(state.cameraDistance,
+    const fittedSurfaceCameraDistance = Math.max(state.cameraDistance,
       fitSurfaceCameraDistance(camera.aspect, camera.fov, state.earthScale * 1.025));
+    const surfaceCameraDistance = Math.max(state.earthScale * 1.12,
+      fittedSurfaceCameraDistance / (1 + 2 * surfaceDetailZoom / 100));
     liveCameraDistance = surfaceCameraDistance + (fittedAtlasDistance() - surfaceCameraDistance) * state.atlas;
     container.dataset.atlasCameraDistance = String(liveCameraDistance);
     // Desktop canvas insets already follow the panels. On narrow screens the
     // bottom sheet overlaps the full-width canvas, so frame the remaining area.
     const canvasBounds = renderer.domElement.getBoundingClientRect();
+    const visiblePanelBounds = element => {
+      if (!element) return null;
+      const style = getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) < 0.05) return null;
+      const bounds = element.getBoundingClientRect();
+      return bounds.width > 0 && bounds.height > 0 ? bounds : null;
+    };
+    const surfacePanelCenterShift = zoom <= 0.001 && state.lift <= 0.001 && canvasBounds.width > 700 && canvasBounds.height > 0
+      ? surfacePanelCenterOffset(
+        canvasBounds,
+        visiblePanelBounds(document.getElementById('exploration-rail')),
+        visiblePanelBounds(document.querySelector('.hero-panel')),
+      ) : 0;
+    if (surfacePanelCenterShift) {
+      const worldUnitsPerPixel = 2 * liveCameraDistance * Math.tan(camera.fov * Math.PI / 360) / canvasBounds.height;
+      cameraFocus.x += surfacePanelCenterShift * worldUnitsPerPixel;
+    }
     const sheet = document.getElementById('chronicle');
     const sheetBounds = sheet?.getBoundingClientRect();
     const bottomOverlap = state.lift > 0 && canvasBounds.width <= 700 && sheetBounds && sheetBounds.width > canvasBounds.width * 0.7
@@ -2114,6 +2140,29 @@ export function createAtlasScene(container, {
     return true;
   }
 
+  function focusWorld(id) {
+    const worldId = String(id);
+    const world = worlds.find(item => stableWorldId(item) === worldId);
+    if (!world || world.selectable === false) return false;
+    travelState = null;
+    rotation = 0;
+    rotationPitch = 0;
+    surfaceDetailZoom = 0;
+    arrivalFromId = arrivalParentWorldId(world, worlds);
+    currentId = worldId;
+    updateLayout({ animateQuestionRefocus: true });
+    drawCurrentMarker();
+    applyZoom(0);
+    return true;
+  }
+
+  function setSurfaceDetailZoom(value) {
+    const previousSurfaceDetailZoom = surfaceDetailZoom;
+    surfaceDetailZoom = clamp(Number(value) || 0, 0, 100);
+    applyZoom(zoom, false);
+    if (previousSurfaceDetailZoom !== surfaceDetailZoom) onSurfaceDetailChange(surfaceDetailZoom, zoom);
+  }
+
   function setZoom(value) {
     if (travelState) travelState.zoomOverridden = true;
     applyZoom(value);
@@ -2477,7 +2526,7 @@ export function createAtlasScene(container, {
       activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (activePointers.size === 2) {
         const [first, second] = [...activePointers.values()];
-        pinchGesture = { distance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)), zoom };
+        pinchGesture = { distance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)), zoom, surfaceDetail: surfaceDetailZoom };
         drag = null;
         event.preventDefault?.();
         return;
@@ -2492,7 +2541,9 @@ export function createAtlasScene(container, {
         const [first, second] = [...activePointers.values()];
         const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
         // Pinching apart moves toward the surface; pinching together moves out toward the atlas.
-        setZoom(zoomFromPinch(pinchGesture.zoom * 100, pinchGesture.distance, distance) / 100);
+        if (pinchGesture.zoom <= 0.001 && (distance >= pinchGesture.distance || pinchGesture.surfaceDetail > 0)) {
+          setSurfaceDetailZoom(surfaceDetailFromPinch(pinchGesture.surfaceDetail, pinchGesture.distance, distance));
+        } else setZoom(zoomFromPinch(pinchGesture.zoom * 100, pinchGesture.distance, distance) / 100);
         event.preventDefault?.();
         return;
       }
@@ -2501,7 +2552,8 @@ export function createAtlasScene(container, {
       const dx = event.clientX - drag.lastX, dy = event.clientY - drag.lastY;
       drag.lastX = event.clientX; drag.lastY = event.clientY;
       if (dragModeForZoom(zoom * 100) === 'rotate') {
-        rotation += dx * 0.006;
+        const angles = surfaceDragAngles(rotation, rotationPitch, surfaceFacingPitch, dx, dy);
+        rotation = angles.yaw; rotationPitch = angles.pitch;
         applySurfaceOrientation(1 - atlasPresentationState(zoom, motionReduced).state.lift);
       } else {
         const delta = panDeltaForDrag(dx, dy, {
@@ -2605,11 +2657,27 @@ export function createAtlasScene(container, {
   });
   listen(renderer.domElement, 'wheel', event => {
     event.preventDefault();
+    if (zoom <= 0.001 && event.deltaY < 0) {
+      setSurfaceDetailZoom(surfaceDetailFromWheel(surfaceDetailZoom, event.deltaY, { deltaMode: event.deltaMode, viewportHeight: renderer.domElement.clientHeight }));
+      return;
+    }
+    if (zoom <= 0.001 && surfaceDetailZoom > 0 && event.deltaY > 0) {
+      setSurfaceDetailZoom(surfaceDetailFromWheel(surfaceDetailZoom, event.deltaY, { deltaMode: event.deltaMode, viewportHeight: renderer.domElement.clientHeight }));
+      return;
+    }
     setZoom(zoomFromWheel(zoom * 100, event.deltaY, { deltaMode: event.deltaMode, viewportHeight: renderer.domElement.clientHeight }) / 100);
   }, { passive: false });
   listen(renderer.domElement, 'keydown', event => {
-    if (event.key === '+' || event.key === '=') { event.preventDefault(); setZoom(zoom - 0.035); }
-    else if (event.key === '-' || event.key === '_') { event.preventDefault(); setZoom(zoom + 0.035); }
+    if (event.key === '+' || event.key === '=') {
+      event.preventDefault();
+      if (zoom <= 0.001) setSurfaceDetailZoom(Math.min(100, surfaceDetailZoom + 3.5));
+      else setZoom(zoom - 0.035);
+    }
+    else if (event.key === '-' || event.key === '_') {
+      event.preventDefault();
+      if (zoom <= 0.001 && surfaceDetailZoom > 0) setSurfaceDetailZoom(Math.max(0, surfaceDetailZoom - 3.5));
+      else setZoom(zoom + 0.035);
+    }
     else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
       event.preventDefault();
       const next = neighborForKey(event.key);
@@ -2733,6 +2801,9 @@ export function createAtlasScene(container, {
     enterWorld,
     setZoom,
     getZoom,
+    setSurfaceDetailZoom,
+    getSurfaceDetailZoom: () => surfaceDetailZoom,
+    focusWorld,
     getLevel: () => stageForZoom(zoom),
     getDebugStats,
     getWorldObject: id => registry.get(id)?.object ?? null,

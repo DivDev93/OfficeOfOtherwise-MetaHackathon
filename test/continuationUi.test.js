@@ -1799,8 +1799,8 @@ test('authored present-day question attaches to the 2026 trunk without a parent 
   const app = harness({ 'present-root':root, 'new-present-question':generated }, async () => complete(generated), false, '', undefined, undefined, true);
   await tick();
   await app.ui.loadRun('present-root', { animate:false, autoConsequences:false });
-  app.ui.setAtlasAttachmentIntent({ mode:'present-day', divergenceYear:2026 });
+  app.ui.setAtlasAttachmentIntent({ mode:'present-day', divergenceYear:2026, divergencePlace:{ name:'Alexandria', lat:31.2, lon:29.9 } });
   await app.ui.runPrompt('What if river sensors arrived earlier?');
   const request = app.posts.find(item => item.url === '/api/run');
-  assert.deepEqual(request.body.attachment, { mode:'present-day', divergenceYear:2026 });
+  assert.deepEqual(request.body.attachment, { mode:'present-day', divergenceYear:2026, divergencePlace:{ name:'Alexandria', lat:31.2, lon:29.9 } });
 });

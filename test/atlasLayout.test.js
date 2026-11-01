@@ -8,6 +8,7 @@ import {
   slerpUnitVector, selectSurfaceWorldLabelIds, worldRadiusForScreenPixels, cappedTextureSize,
   fitCameraDistance, fitCenteredCameraDistance, layoutOrbitNeighborhood, zoomForAltitude,
   fitSurfaceCameraDistance,
+  surfacePanelCenterOffset,
   appendContinuousFrame, atlasPresentationState,
   clampScreenRectCenter, isSurfaceNormalVisible,
   localQuaternionForWorldFacing,
@@ -49,6 +50,22 @@ test('Surface camera fits the globe into a narrow center viewport without changi
   const horizontalHalfAngle = Math.atan(Math.tan(fov * Math.PI / 360) * 0.62);
   assert.ok(Math.asin(radius / narrow) < horizontalHalfAngle, 'the padded globe silhouette fits inside the narrow horizontal field of view');
   assert.equal(fitSurfaceCameraDistance(0.62, fov, radius, 0.9), SURFACE_CAMERA_DISTANCE, 'invalid padding safely falls back to the established distance');
+});
+
+test('Surface camera centers the globe in the open lane between visible side panels', () => {
+  const canvas = { left: 0, right: 1280, top: 0, bottom: 720 };
+  assert.equal(surfacePanelCenterOffset(canvas,
+    { left: 18, right: 338, top: 88, bottom: 704 },
+    { left: 870, right: 1258, top: 101, bottom: 700 }), 36,
+  'the full-screen Surface camera shifts toward the 338px–870px center lane');
+  assert.equal(surfacePanelCenterOffset(canvas,
+    { left: 18, right: 338, top: 88, bottom: 300 },
+    { left: 870, right: 1258, top: 400, bottom: 700 }), 0,
+  'side panels away from the vertical midpoint do not change globe framing');
+  assert.equal(surfacePanelCenterOffset(canvas,
+    { left: 18, right: 400, top: 88, bottom: 704 },
+    { left: 450, right: 1258, top: 101, bottom: 700 }), 0,
+  'overlapping panels do not collapse the available framing width');
 });
 
 test('world identity records survive repeated altitude and layout reconciliations', () => {

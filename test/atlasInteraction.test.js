@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dragModeForZoom, panDeltaForDrag, zoomFromPinch, zoomFromWheel } from '../web/atlas/interaction.js';
+import { dragModeForZoom, panDeltaForDrag, surfaceDragAngles, surfaceDetailFromPinch, surfaceDetailFromWheel, zoomFromPinch, zoomFromWheel } from '../web/atlas/interaction.js';
+
+test('surface dragging rotates in both directions and clamps at the poles', () => {
+  const moved = surfaceDragAngles(0, 0, 0, 50, 40);
+  assert.ok(moved.yaw > 0);
+  assert.ok(moved.pitch > 0);
+  const reversed = surfaceDragAngles(moved.yaw, moved.pitch, 0, -50, -40);
+  assert.ok(Math.abs(reversed.yaw) < 1e-10 && Math.abs(reversed.pitch) < 1e-10);
+  assert.equal(surfaceDragAngles(0, 0, 0, 0, 10000).pitch, Math.PI / 2);
+  assert.equal(surfaceDragAngles(0, 0, 0.4, 0, -10000).pitch, -Math.PI / 2 - 0.4);
+});
 
 test('wheel and trackpad cover the full 0–100 range with continuous outward and inward motion', () => {
   assert.ok(zoomFromWheel(40, 1) > 40, 'positive scroll moves outward');
@@ -26,6 +36,22 @@ test('wheel gently settles on surface, orbit, and Atlas resting levels', () => {
   assert.equal(zoomFromWheel(99.9, 4), 100);
   const nearOrbit = zoomFromWheel(55, 20);
   assert.ok(nearOrbit > 55 && nearOrbit < 57, 'approach to orbit is attracted without jumping');
+});
+
+test('Surface wheel detail zoom is reversible and remains separate from Orbit routing', () => {
+  assert.ok(surfaceDetailFromWheel(0, -1) > 0, 'negative wheel delta zooms closer on Surface');
+  assert.ok(surfaceDetailFromWheel(40, 1) < 40, 'positive wheel delta returns toward the fitted globe');
+  assert.equal(surfaceDetailFromWheel(1, 100), 0, 'surface detail bottoms out at the fitted view');
+  assert.equal(surfaceDetailFromWheel(99, -100), 100, 'surface detail has a bounded close zoom');
+  assert.equal(zoomFromWheel(0, 100), 8, 'the scene zoom helper still routes outward from Surface');
+});
+
+test('Surface pinch detail zoom follows the natural closer-apart gesture and reverses cleanly', () => {
+  assert.ok(surfaceDetailFromPinch(0, 100, 200) > 0, 'widening the gap zooms closer');
+  assert.ok(surfaceDetailFromPinch(40, 100, 50) < 40, 'narrowing the gap returns toward the fitted globe');
+  assert.equal(surfaceDetailFromPinch(1, 100, 50), 0, 'pinch detail bottoms out at the fitted view');
+  assert.equal(surfaceDetailFromPinch(99, 100, 1000), 100, 'pinch detail has a bounded close zoom');
+  assert.ok(zoomFromPinch(0, 100, 50) > 0, 'pinching inward from the fitted Surface continues into Orbit routing');
 });
 
 test('coarse wheel notches catch Orbit from either direction without trapping the next notch', () => {

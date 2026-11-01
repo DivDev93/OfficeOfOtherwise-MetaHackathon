@@ -9,6 +9,7 @@ import { createSamMask } from '../providers/samMask.js';
 import { createChronos3dClient } from '../providers/chronos3d.js';
 import { runHarness } from '../../harness/run.js';
 import { configuredSpendCap, configuredDailyCap, resolveLedgerPath } from './budget.js';
+import { resolveFreshEvidence } from '../evidence/fresh.js';
 
 export function createDemoEventSceneRunner({ env = process.env, dailyCapUsd, outputRoot = 'out' } = {}) {
   const runner = async ({ prompt }) => {
@@ -48,7 +49,7 @@ export function createDemoEventCutoutRunner({ env = process.env, dailyCapUsd, ou
   return runner;
 }
 
-export function createDemoRunner({ env = process.env, dailyCapUsd, outputRoot = 'out' } = {}) {
+export function createDemoRunner({ env = process.env, dailyCapUsd, outputRoot = 'out', evidenceResolver = resolveFreshEvidence } = {}) {
   const runner = async ({ divergence, continuation, divergenceYear, divergencePlace, runId, from, subjectOverride, onStep, signal }) => {
     if (signal?.aborted) throw new Error('Run aborted');
     const enable3d = env.DEMO_3D_ENABLED === 'true';
@@ -83,10 +84,11 @@ export function createDemoRunner({ env = process.env, dailyCapUsd, outputRoot = 
       classifyPrompt: createModelClassifier(agentClient, { model: promptPolicyModel, categories }),
       classifyBranches: createModelClassifier(agentClient, { model: branchPolicyModel, categories }),
     });
-    const branchAgent = createBranchAgent({ client: agentClient, policy, model });
+    const branchAgent = createBranchAgent({ client: agentClient, policy, model, evidenceResolver });
     const agent = {
       ...branchAgent,
       run: input => branchAgent.run({ ...input,
+        ...(runId ? { runId } : {}),
         ...(Number.isSafeInteger(divergenceYear) && divergenceYear !== 0 ? { divergenceYear } : {}),
         ...(divergencePlace ? { divergencePlace } : {}),
       }),

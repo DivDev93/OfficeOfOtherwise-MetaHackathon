@@ -293,6 +293,7 @@ body:not(.has-story) .geography-panel{display:none}
 .atlas-toolbar{position:absolute;z-index:5;top:105px;left:max(338px,calc(50vw - 360px));right:max(410px,calc(50vw - 310px));display:flex;align-items:flex-start;justify-content:center;gap:8px;max-width:none;padding:0;border:0;background:transparent;box-shadow:none;pointer-events:none}
 .atlas-quick-controls{display:flex;align-items:center;gap:6px;padding:4px 7px;border:1px solid rgba(236,228,212,.18);border-radius:9px;background:rgba(8,6,7,.86);box-shadow:0 10px 28px #0004;backdrop-filter:blur(15px);pointer-events:auto}
 .atlas-view-options{position:relative;margin:0;pointer-events:auto}
+body.has-story .atlas-toolbar:has(.atlas-view-options[open]){z-index:15}
 .atlas-view-options>summary,.atlas-reopen-controls button{display:grid;place-items:center;min-width:44px;min-height:52px;padding:7px 12px;border:1px solid rgba(236,228,212,.18);border-radius:9px;background:rgba(8,6,7,.88);box-shadow:0 10px 28px #0004;backdrop-filter:blur(15px);color:var(--parchment);font-size:10px;letter-spacing:.04em;list-style:none;cursor:pointer}
 .atlas-view-options>summary::-webkit-details-marker{display:none}
 .atlas-view-options>summary:after{margin-left:5px;color:var(--gold);content:'⌄'}
@@ -306,6 +307,7 @@ body:not(.has-story) .geography-panel{display:none}
 .atlas-toolbar label{display:grid;gap:3px;min-width:96px;color:var(--neutral-200);font-size:10px}
 .atlas-quick-controls label{grid-template-columns:auto minmax(82px,112px);align-items:center;gap:6px;min-width:135px;font-size:9px;letter-spacing:.04em}
 .atlas-quick-controls label input[type=range]{width:100%;min-height:44px;accent-color:var(--gold)}
+.atlas-place-context{display:block;max-width:168px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px;color:var(--neutral-200);font-size:10px;line-height:1.2}
 .atlas-view-options-panel label input[type=range]{width:100%;min-height:44px;accent-color:var(--gold)}
 .atlas-toolbar label:has(input[type=checkbox]){display:flex;align-items:center;min-height:44px}
 .atlas-toolbar input[type=checkbox]{width:20px;height:20px;accent-color:var(--gold)}
@@ -323,6 +325,7 @@ body:not(.has-story) .geography-panel{display:none}
 .atlas-focused .panel-head{top:72px}
 @media(max-width:1100px){.map-panel>#atlas-scene{inset:0}.atlas-toolbar{top:120px;left:8px;right:8px}.atlas-view-options-panel{grid-template-columns:repeat(2,minmax(120px,1fr));right:0;max-height:55dvh}}
 @media(max-width:700px){.panel-head{top:76px}.atlas-toolbar{top:116px;gap:6px}.atlas-quick-controls{gap:4px;padding:3px 5px}.atlas-quick-controls button{min-width:44px;min-height:44px}.atlas-quick-controls label{grid-template-columns:auto minmax(58px,78px);min-width:100px}.atlas-view-options>summary{min-height:50px;padding:6px 9px}.atlas-view-options-panel{grid-template-columns:minmax(0,1fr);width:min(360px,calc(100vw - 24px));max-height:50dvh}.atlas-view-options-panel fieldset{grid-column:auto}.atlas-reopen-controls{top:170px;right:9px;flex-direction:column}.map-panel>#atlas-scene canvas{touch-action:none}}
+@media(max-width:430px){.atlas-place-context{max-width:78px;padding:0 2px;font-size:9px}}
 
 /* Readable atlas controls and secondary geography details. */
 body{font-size:14px}
@@ -626,6 +629,9 @@ body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{dis
 body:not(.has-story) #exploration-tree,
 body:not(.has-story) .atlas-toolbar,
 body:not(.has-story) .map-panel>.panel-head{display:none}
+/* The Surface globe must be able to fill the viewport when zoomed in. */
+body:not(.has-story) .map-panel>#atlas-scene,
+body:has(#atlas-scene[data-atlas-level="surface"]) .map-panel>#atlas-scene{inset:0}
 .has-story .hero-panel{transition:width .24s ease,top .24s ease,right .24s ease,bottom .24s ease,left .24s ease,height .24s ease,opacity .18s ease}
 @media(max-width:700px){
   body:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail>:not(.atlas-compact-controls),
@@ -637,3 +643,17 @@ body:not(.has-story) .map-panel>.panel-head{display:none}
   body.invitation-open:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail>#invitation,
   body.invitation-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail>#invitation{top:0;right:0;left:0;width:auto;height:100%;transform:none}
 }
+/* Keep source notes readable inside the selected Atlas world details. */
+.fresh-evidence-scope{margin:6px 0 0;color:var(--neutral-400);font-size:9px;line-height:1.4}
+.evidence-toggle{margin-top:8px}
+.evidence-panel{margin-top:10px;padding:12px;border:1px solid rgba(156,236,242,.2);border-radius:8px;background:rgba(5,20,31,.68);max-height:38dvh;overflow:auto}
+.evidence-status,.evidence-note,.evidence-empty{margin:0 0 8px;color:var(--neutral-400);font-size:10px;line-height:1.5}
+.evidence-block{margin-top:10px;padding-top:8px;border-top:1px solid rgba(236,228,212,.12)}
+.evidence-block h4{margin:0 0 4px;color:var(--cyan);font:600 11px/1.35 var(--sans);letter-spacing:.03em}
+.evidence-block p,.evidence-block li,.evidence-block blockquote{color:var(--neutral-100);font-size:10px;line-height:1.5;overflow-wrap:anywhere}
+.evidence-block ul,.evidence-block ol{margin:4px 0;padding-left:20px}
+.evidence-block li+li{margin-top:6px}
+.evidence-block blockquote{margin:0 0 4px;padding-left:8px;border-left:2px solid rgba(156,236,242,.35)}
+.evidence-block a{display:inline-block;color:var(--cyan);font-size:9px;line-height:1.4;overflow-wrap:anywhere}
+@media(max-width:700px){.evidence-panel{max-height:34dvh;padding:9px}.evidence-block p,.evidence-block li,.evidence-block blockquote{font-size:9px}}
+.workspace.hero-focus .evidence-toggle,.workspace.hero-focus .evidence-panel{display:none}

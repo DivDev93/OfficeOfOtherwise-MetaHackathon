@@ -39,6 +39,20 @@ export function fitSurfaceCameraDistance(aspect, fovDegrees, radius = 1, padding
   return Math.max(SURFACE_CAMERA_DISTANCE, sphereRadius / Math.sin(horizontalHalfAngle) * margin);
 }
 
+/** Pixel shift from the canvas midpoint to the midpoint of its clear center lane. */
+export function surfacePanelCenterOffset(canvas, leftPanel, rightPanel) {
+  const left = Number(canvas?.left), right = Number(canvas?.right), top = Number(canvas?.top), bottom = Number(canvas?.bottom);
+  if (![left, right, top, bottom].every(Number.isFinite) || right <= left || bottom <= top) return 0;
+  const center = (left + right) / 2, middleY = (top + bottom) / 2;
+  const overlaps = rect => rect && [rect.left, rect.right, rect.top, rect.bottom].every(value => Number.isFinite(Number(value)))
+    && rect.right > rect.left && rect.bottom > rect.top && rect.top < middleY && rect.bottom > middleY;
+  let clearLeft = left, clearRight = right;
+  if (overlaps(leftPanel) && leftPanel.left <= center && leftPanel.right > left) clearLeft = Math.max(clearLeft, Math.min(center, leftPanel.right));
+  if (overlaps(rightPanel) && rightPanel.right >= center && rightPanel.left < right) clearRight = Math.min(clearRight, Math.max(center, rightPanel.left));
+  if (clearRight - clearLeft < (right - left) * 0.25) return 0;
+  return center - (clearLeft + clearRight) / 2;
+}
+
 /** Inverse of altitudeForZoom; callers can scrub the camera and recover exact zoom. */
 export function zoomForAltitude(value) {
   const altitude = clamp(Number(value) || SURFACE_CAMERA_DISTANCE, SURFACE_CAMERA_DISTANCE, ATLAS_CAMERA_DISTANCE);
