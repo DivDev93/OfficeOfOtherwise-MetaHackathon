@@ -419,6 +419,43 @@ test('client retry flag cannot authorize a fresh or uncertain continuation', asy
   assert.equal(f.calls, 1);
 });
 
+test('explicit retry archives a terminal stopped attempt while preserving its run record and trace', async t => {
+  const f = await setup(t);
+  const parentBranch = branch();
+  const continuation = continuationFor({ id:'root', status:'complete', divergence:parentBranch.divergence, branch:parentBranch }, 'b1');
+  const store = createContinuationStore(f.liveRunsDir);
+  const old = store.reserve('root', 'b1', continuation);
+  const tracePath = join(f.liveRunsDir, old.runId, 'trace.json');
+  await mkdir(join(f.liveRunsDir, old.runId), { recursive:true });
+  await writeFile(tracePath, JSON.stringify({ continuation, steps:[{step:'agent',error:'Meta request stopped'}] }));
+  store.save({ id:old.runId, status:'uncertain', rootDivergence:continuation.rootDivergence, continuation });
+  store.finish(old, 'uncertain');
+
+  const response = await post(f.url, {runId:'root',branchId:'b1',retryInterruptedAttempt:true});
+  const created = completion(await response.text());
+  assert.notEqual(created.runId, old.runId, 'retry reserves a new run identifier');
+  assert.equal(f.calls, 1);
+  assert.equal(store.edge('root','b1').runId, created.runId);
+  assert.equal(store.edge('root','b1').status, 'complete');
+  assert.equal(store.get(old.runId).status, 'uncertain', 'old terminal run record is preserved');
+  assert.match(await readFile(tracePath,'utf8'), /Meta request stopped/, 'old attempt trace remains unchanged');
+  const attempts = await readdir(join(f.liveRunsDir,'.continuation','attempts'));
+  assert.ok(attempts.includes(`${old.runId}.json`), 'old edge is archived as retry history');
+});
+
+test('explicit retry cannot release a live in-progress continuation', async t => {
+  const f = await setup(t);
+  const parentBranch = branch();
+  const continuation = continuationFor({ id:'root', status:'complete', divergence:parentBranch.divergence, branch:parentBranch }, 'b1');
+  const store = createContinuationStore(f.liveRunsDir), edge = store.reserve('root','b1',continuation);
+  store.save({id:edge.runId,status:'in-progress',continuation});
+  const response = await post(f.url,{runId:'root',branchId:'b1',retryInterruptedAttempt:true});
+  assert.equal(response.status,409);
+  assert.equal((await response.json()).status,'in-progress');
+  assert.equal(f.calls,0);
+  assert.equal(store.edge('root','b1').runId,edge.runId);
+});
+
 test('a runner cannot report a continuation complete without valid saved output', async t => {
   const f = await setup(t, { runner: async ({ runId }) => ({ runId, branch: branch() }) });
   const text = await (await post(f.url)).text();

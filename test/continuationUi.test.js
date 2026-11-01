@@ -68,7 +68,7 @@ function element() {
   const classes = new Set(), attributes = new Map(), listeners = new Map();
   return { children: [], value: '', hidden: false, textContent: '', dataset: {}, style: {}, classList: { add(...names) { names.forEach(name => classes.add(name)); }, remove(...names) { names.forEach(name => classes.delete(name)); }, contains(name) { return classes.has(name); }, toggle(name, enabled = !classes.has(name)) { enabled ? classes.add(name) : classes.delete(name); return enabled; } },
     append(...nodes) { this.children.push(...nodes); }, replaceChildren(...nodes) { this.children = nodes; }, add(node) { this.children.push(node); },
-    setAttribute(key, value) { attributes.set(key, value); }, getAttribute(key) { return attributes.get(key); }, addEventListener(type, callback) { listeners.set(type, callback); }, click() { return listeners.get('click')?.({target:this}); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; listeners.get('keydown')?.(event); return event; }, matches(selector) { return selector === ':popover-open' && !!this.popoverOpen; }, hidePopover() { this.popoverOpen = false; this.hidePopoverCalls = (this.hidePopoverCalls || 0) + 1; }, scrollIntoView() {}, focus() { this.focused = true; listeners.get('focus')?.({target:this}); },
+    setAttribute(key, value) { attributes.set(key, value); }, getAttribute(key) { return attributes.get(key); }, addEventListener(type, callback) { listeners.set(type, callback); }, dispatch(type) { return listeners.get(type)?.({target:this}); }, click() { return listeners.get('click')?.({target:this}); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; listeners.get('keydown')?.(event); return event; }, matches(selector) { return selector === ':popover-open' && !!this.popoverOpen; }, hidePopover() { this.popoverOpen = false; this.hidePopoverCalls = (this.hidePopoverCalls || 0) + 1; }, scrollIntoView() {}, focus() { this.focused = true; listeners.get('focus')?.({target:this}); },
     querySelector() { return this.copy ||= element(); }, querySelectorAll() { return this.children.filter(child => child.dataset?.branchId); }, removeAttribute(key) { attributes.delete(key); },
     pointerenter() { listeners.get('pointerenter')?.({target:this}); }, pointerleave() { listeners.get('pointerleave')?.({target:this}); },
     blur() { this.focused=false; listeners.get('blur')?.({target:this}); },
@@ -1306,6 +1306,26 @@ test('continuation SSE keeps a proven retryable refusal distinct from an uncerta
   assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 1, 'an SSE error is never automatically replayed');
 });
 
+test('a stopped SSE continuation can be explicitly restarted without waiting for a reload', async () => {
+  const root=run('root'); root.assets=['hero.png'];
+  const child=run('child',next,{rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
+  let attempts=0;
+  const app=harness({root,child},async(url,options)=>{
+    attempts++;
+    if(attempts===1) return new Response('event: error\ndata: {"status":"uncertain","message":"Exploration stopped. Enter this event to try again."}\n\n',{headers:{'content-type':'text/event-stream'}});
+    assert.deepEqual(JSON.parse(options.body),{runId:'root',branchId:'a',retryInterruptedAttempt:true});
+    return complete(child);
+  });
+  await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false}); app.get('access').value='fixture'; app.ui.activateBranch(choice);
+  for(let i=0;i<16;i++) await tick();
+  assert.equal(app.get('event-retry').hidden,false);
+  assert.match(app.get('event-progress').textContent,/enter this event to try again/i);
+  app.get('event-retry').click();
+  for(let i=0;i<20;i++) await tick();
+  assert.equal(attempts,2,'the user action starts one fresh attempt');
+  assert.equal(app.get('event-retry').hidden,true);
+});
+
 test('only a persisted budget-exhausted edge gets an explicit retry that carries the server revalidation flag', async () => {
   const root = run('root'); root.assets = ['hero.png'];
   root.continuation.children = [{branchId:'a',status:'failed',code:'budget_exhausted'}];
@@ -1355,18 +1375,47 @@ test('a terminal budget-exhausted SSE failure becomes retryable only after its e
   assert.equal(app.get('event-retry').hidden,true);
 });
 
-test('uncertain and generic failed continuation edges stay locked', async () => {
-  for (const edge of [
-    {branchId:'a',status:'uncertain',code:'budget_exhausted'},
-    {branchId:'a',status:'failed',code:'provider_error'},
-  ]) {
-    const root = run('root'); root.continuation.children = [edge];
-    const app = harness({root}, async () => { assert.fail('A failed or uncertain edge must not retry'); });
-    await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false}); app.ui.activateBranch(choice);
-    for (let i=0;i<12;i++) await tick();
-    assert.equal(app.get('event-retry').hidden,true,JSON.stringify(edge));
-    assert.equal(app.posts.filter(post => post.url === '/api/continue').length,0,JSON.stringify(edge));
+test('terminal failed and uncertain edges retry only after explicit action; in-progress stays locked', async () => {
+  for (const status of ['failed','uncertain']) {
+    const root=run('root'); root.continuation.children=[{branchId:'a',runId:`old-${status}`,status}];
+    const child=run(`new-${status}`,next,{rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
+    const app=harness({root,[child.id]:child},async(url,options)=>{
+      assert.equal(url,'/api/continue');
+      assert.deepEqual(JSON.parse(options.body),{runId:'root',branchId:'a',retryInterruptedAttempt:true});
+      return complete(child);
+    });
+    await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false}); app.get('access').value='fixture';
+    assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0,`${status} does not retry on restoration`);
+    app.ui.activateBranch(choice);
+    for(let i=0;i<14;i++) await tick();
+    assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,`${status} retries on explicit event entry`);
+    assert.equal(app.posts[0].body.retryInterruptedAttempt,true);
   }
+  const root=run('active'); root.continuation.children=[{branchId:'a',runId:'active-child',status:'in-progress'}];
+  const active=harness({root},async()=>{assert.fail('in-progress must never retry');});
+  await tick(); await active.ui.loadRun('active',{animate:false,autoConsequences:false}); active.ui.activateBranch(choice);
+  for(let i=0;i<12;i++) await tick();
+  assert.equal(active.get('event-retry').hidden,true);
+  assert.equal(active.posts.filter(post=>post.url==='/api/continue').length,0);
+});
+
+test('explicit entry refreshes a stale manifest before deciding whether to retry a stopped attempt', async () => {
+  const root=run('stale-root'), refreshed={...root,continuation:{...root.continuation,children:[{branchId:'a',runId:'stopped-child',status:'uncertain'}]}};
+  const child=run('replacement-child',next,{rootRunId:'stale-root',parentRunId:'stale-root',parentBranchId:'a',path:[{runId:'stale-root',branchId:'a',...choice}]});
+  let manifestReads=0;
+  const app=harness({'stale-root':root,'replacement-child':child},async(url,options)=>{
+    assert.equal(url,'/api/continue');
+    assert.deepEqual(JSON.parse(options.body),{runId:'stale-root',branchId:'a',retryInterruptedAttempt:true});
+    return complete(child);
+  },false,'',undefined,undefined,false,undefined,undefined,undefined,undefined,null,async url=>{
+    if(url==='/runs/stale-root' && ++manifestReads>1) return Response.json(refreshed);
+    return null;
+  });
+  await tick(); await app.ui.loadRun('stale-root',{animate:false,autoConsequences:false});
+  app.get('access').value='fixture'; app.ui.activateBranch(choice);
+  for(let i=0;i<20;i++) await tick();
+  assert.ok(manifestReads>1,'explicit entry refreshes the cached parent manifest');
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'one entry recovers the terminal attempt');
 });
 
 test('continuation retries only machine-marked pre-dispatch HTTP 429 responses with a bounded backoff', async () => {
@@ -1533,6 +1582,33 @@ test('a completed explicit continuation remains in the saved tree after navigati
   for (let i = 0; i < 6; i++) await tick();
   assert.ok(findNode(app.get('exploration-tree-status'), node => node?.className === 'tree-run' && node.dataset.runId === 'child'));
   assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 1, 'returning to the tree does not replay the saved continuation');
+});
+
+test('event consequence buttons preview saved child data without selection or generation until click', async () => {
+  const root=run('preview-parent'); root.continuation.children=[{branchId:'a',runId:'preview-child',status:'complete'}];
+  const child=run('preview-child',next); child.assets=['hero.png'];
+  const grandchild=run('preview-grandchild',branch('g','Mountain observatories',700),{rootRunId:'preview-parent',parentRunId:'preview-child',parentBranchId:'b',path:[{runId:'preview-parent',branchId:'a',...choice},{runId:'preview-child',branchId:'b',...next}]});
+  const app=harness({'preview-parent':root,'preview-child':child,'preview-grandchild':grandchild},async(url,options)=>{
+    assert.equal(url,'/api/continue');
+    assert.deepEqual(JSON.parse(options.body),{runId:'preview-child',branchId:'b'});
+    return complete(grandchild);
+  });
+  await tick(); await app.ui.loadRun('preview-parent',{animate:false,autoConsequences:false}); app.get('access').value='fixture'; app.ui.activateBranch(choice);
+  for(let i=0;i<16 && !app.get('event-children').children.length;i++) await tick();
+  const button=app.get('event-children').children[0];
+  assert.ok(button,`saved child event is present: ${JSON.stringify({state:app.ui.state(),work:app.ui.eventWorkFor('preview-parent','a'),gets:app.gets})}`);
+  button.dispatch('pointerenter');
+  assert.equal(app.ui.state().activePreview.title,next.title);
+  assert.equal(app.ui.state().currentRunId,'preview-parent');
+  assert.equal(app.ui.state().selectedBranchId,'a');
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0,'hover is saved-data only');
+  button.dispatch('pointerleave'); button.focus();
+  assert.equal(app.ui.state().activePreview.title,next.title,'keyboard focus previews the same saved child');
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0,'focus does not submit generation');
+  button.click();
+  for(let i=0;i<24;i++) await tick();
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'click explores only the entered child');
+  assert.equal(app.posts[0].body.runId,'preview-child');
 });
 
 

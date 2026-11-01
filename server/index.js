@@ -63,6 +63,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
   let activeJobs = 0;
   const acquireJob = () => { if (activeJobs >= maxConcurrentJobs) return false; activeJobs++; return true; };
   const releaseJob = () => { activeJobs = Math.max(0, activeJobs - 1); };
+  const activeContinuationAttempts = new Set();
   let voiceBusy = false, voiceRequests = [];
   const voiceEnabled = env.DEMO_VOICE_ENABLED === 'true' && typeof env.DEMO_ACCESS_CODE === 'string' && env.DEMO_ACCESS_CODE.length > 0;
   const requests = new Map();
@@ -217,6 +218,16 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     } else {
       store.releaseUndispatched(current);
     }
+  }
+  async function explicitRetryableAttempt(edge, parentRunId, parentBranchId) {
+    if (!edge || !['failed', 'uncertain'].includes(edge.status) || !safeId(edge.runId)
+        || edge.parentRunId !== parentRunId || edge.parentBranchId !== parentBranchId
+        || activeContinuationAttempts.has(edge.runId)) return false;
+    const record = store.get(edge.runId);
+    if (!record || record.id !== edge.runId || !['failed', 'uncertain'].includes(record.status)
+        || record.continuation?.parentRunId !== parentRunId || record.continuation?.parentBranchId !== parentBranchId) return false;
+    const saved = await manifest(edge.runId);
+    return saved?.branch?.status !== 'ok';
   }
   for (const record of store.list()) liveRoots.set(record.id, liveRoot);
   function localBrowserAccess(req) {
@@ -655,10 +666,11 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > 8192) return json(res, 413, { error: 'Request too large' }); }
         let input;
         try { input = JSON.parse(body); } catch { return json(res, 400, { error: 'Invalid JSON' }); }
-        let continuation, edge, divergence, questionAttachment;
+        let continuation, edge, divergence, questionAttachment, activeContinuationId = null;
         const retryBudgetFailure = continuing && input?.retryBudgetFailure === true;
+        const retryInterruptedAttempt = continuing && input?.retryInterruptedAttempt === true;
         if (continuing) {
-          if (!input || Object.keys(input).some(key => !['runId', 'branchId', 'retryBudgetFailure'].includes(key)) || (input.retryBudgetFailure !== undefined && typeof input.retryBudgetFailure !== 'boolean') || !safeId(input.runId ?? '') || !safeId(input.branchId ?? '')) return json(res, 400, { error: 'Choose a valid saved run and branch.' });
+          if (!input || Object.keys(input).some(key => !['runId', 'branchId', 'retryBudgetFailure', 'retryInterruptedAttempt'].includes(key)) || (input.retryBudgetFailure !== undefined && typeof input.retryBudgetFailure !== 'boolean') || (input.retryInterruptedAttempt !== undefined && typeof input.retryInterruptedAttempt !== 'boolean') || !safeId(input.runId ?? '') || !safeId(input.branchId ?? '')) return json(res, 400, { error: 'Choose a valid saved run and branch.' });
           const parent = await manifest(input.runId);
           if (!parent) return json(res, 404, { error: 'The parent run was not found.' });
           const parentSaved = await savedParentRecord(parent, input.branchId);
@@ -674,10 +686,11 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
               return res.end(`event: complete\ndata: ${JSON.stringify(clean({ ...saved.completion, continuation: saved.continuation, ...(saved.questionAttachment ? { questionAttachment: saved.questionAttachment } : {}), reused: true, step: 'complete', ...renderMetadata(saved.completion?.branch) }))}\n\n`);
             }
             const eligibleBudgetRetry = await budgetFailureEdge(edge, input.runId, input.branchId);
-            if (!retryBudgetFailure || !eligibleBudgetRetry) return json(res, 409, { error: eligibleBudgetRetry ? 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.' : 'This continuation is unfinished or uncertain. Automatic retry is disabled to avoid duplicate charges.', status: edge.status, ...(eligibleBudgetRetry ? { code: 'budget_exhausted' } : {}), ...(safeId(edge.runId ?? '') ? { runId: edge.runId } : {}) });
+            const eligibleInterruptedRetry = retryInterruptedAttempt && await explicitRetryableAttempt(edge, input.runId, input.branchId);
+            if ((!retryBudgetFailure || !eligibleBudgetRetry) && !eligibleInterruptedRetry) return json(res, 409, { error: eligibleBudgetRetry ? 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.' : 'This continuation is active, complete, or has no safely reopenable result.', status: edge.status, ...(eligibleBudgetRetry ? { code: 'budget_exhausted' } : {}), ...(safeId(edge.runId ?? '') ? { runId: edge.runId } : {}) });
           } else if (hasSavedBudgetFailure(input.runId, input.branchId)) {
             if (!retryBudgetFailure) return json(res, 409, { error: 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.', status: 'failed', code: 'budget_exhausted' });
-          } else if (retryBudgetFailure) {
+          } else if (retryBudgetFailure || retryInterruptedAttempt) {
             return json(res, 409, { error: 'No server-recorded budget refusal authorizes this retry.', status: 'failed' });
           }
         } else {
@@ -719,10 +732,11 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
               return res.end(`event: complete\ndata: ${JSON.stringify(clean({ ...saved.completion, continuation: saved.continuation, ...(saved.questionAttachment ? { questionAttachment: saved.questionAttachment } : {}), reused: true, step: 'complete', ...renderMetadata(saved.completion?.branch) }))}\n\n`);
             }
             const eligibleBudgetRetry = await budgetFailureEdge(edge, input.runId, input.branchId);
-            if (!retryBudgetFailure || !eligibleBudgetRetry) return json(res, 409, { error: eligibleBudgetRetry ? 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.' : 'This continuation is unfinished or uncertain. Automatic retry is disabled to avoid duplicate charges.', status: edge.status, ...(eligibleBudgetRetry ? { code: 'budget_exhausted' } : {}), ...(safeId(edge.runId ?? '') ? { runId: edge.runId } : {}) });
+            const eligibleInterruptedRetry = retryInterruptedAttempt && await explicitRetryableAttempt(edge, input.runId, input.branchId);
+            if ((!retryBudgetFailure || !eligibleBudgetRetry) && !eligibleInterruptedRetry) return json(res, 409, { error: eligibleBudgetRetry ? 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.' : 'This continuation is active, complete, or has no safely reopenable result.', status: edge.status, ...(eligibleBudgetRetry ? { code: 'budget_exhausted' } : {}), ...(safeId(edge.runId ?? '') ? { runId: edge.runId } : {}) });
           } else if (hasSavedBudgetFailure(input.runId, input.branchId)) {
             if (!retryBudgetFailure) return json(res, 409, { error: 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.', status: 'failed', code: 'budget_exhausted' });
-          } else if (retryBudgetFailure) {
+          } else if (retryBudgetFailure || retryInterruptedAttempt) {
             return json(res, 409, { error: 'No server-recorded budget refusal authorizes this retry.', status: 'failed' });
           }
         }
@@ -745,16 +759,20 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
             if (edge) {
               if (edge.status === 'complete') return json(res, 409, { error: 'This continuation already completed. Reopen its saved run.', status: 'complete' });
               const eligibleBudgetRetry = await budgetFailureEdge(edge, input.runId, input.branchId);
-              if (!retryBudgetFailure || !eligibleBudgetRetry) return json(res, 409, { error: eligibleBudgetRetry ? 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.' : 'This continuation is unfinished or uncertain. Automatic retry is disabled to avoid duplicate charges.', status: edge.status, ...(eligibleBudgetRetry ? { code: 'budget_exhausted' } : {}) });
-              await archiveBudgetFailureEdge(edge);
+              const eligibleInterruptedRetry = retryInterruptedAttempt && await explicitRetryableAttempt(edge, input.runId, input.branchId);
+              if ((!retryBudgetFailure || !eligibleBudgetRetry) && !eligibleInterruptedRetry) return json(res, 409, { error: eligibleBudgetRetry ? 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.' : 'This continuation is active, complete, or has no safely reopenable result.', status: edge.status, ...(eligibleBudgetRetry ? { code: 'budget_exhausted' } : {}) });
+              if (eligibleBudgetRetry) await archiveBudgetFailureEdge(edge);
+              else store.archiveFinished(edge);
               edge = null;
             } else if (hasSavedBudgetFailure(input.runId, input.branchId)) {
               if (!retryBudgetFailure) return json(res, 409, { error: 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.', status: 'failed', code: 'budget_exhausted' });
-            } else if (retryBudgetFailure) {
+            } else if (retryBudgetFailure || retryInterruptedAttempt) {
               return json(res, 409, { error: 'No server-recorded budget refusal authorizes this retry.', status: 'failed' });
             }
             edge = store.reserve(input.runId, input.branchId, continuation);
             if (!edge) return json(res, 409, { error: 'This continuation is already reserved. Reopen its saved run.' });
+            activeContinuationId = edge.runId;
+            activeContinuationAttempts.add(activeContinuationId);
           }
           previous.push(t); requests.set(ip, previous);
           if (continuing) {
@@ -804,12 +822,12 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
               : budgetFailure
                 ? `${budgetAllowanceMessage(error)} This continuation may contain partial work. Automatic retry is disabled to avoid duplicate charges.`
                 : continuing
-                  ? 'Continuation did not finish. Automatic retry is disabled to avoid duplicate charges.'
+                  ? 'Exploration stopped. Enter this event to try again.'
                   : 'Live generation failed. Check server logs and use replay mode.';
             emit('error', { step: 'error', status: retryable ? 'retryable' : controller.signal.aborted ? 'uncertain' : 'failed', ...(budgetFailure ? { code: 'budget_exhausted' } : {}), error: message });
           }
           res.end();
-        } finally { releaseJob(); }
+        } finally { if (activeContinuationId) activeContinuationAttempts.delete(activeContinuationId); releaseJob(); }
         return;
       }
       if (req.method === 'GET' || req.method === 'HEAD') {

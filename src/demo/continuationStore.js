@@ -53,6 +53,15 @@ export function createContinuationStore(root, now = Date.now) {
       if (existsSync(archived)) throw new Error('Attempt already archived');
       renameSync(path, archived);
     },
+    archiveFinished(edge, statuses = ['failed', 'uncertain']) {
+      if (!validRunId(edge?.parentRunId) || !validRunId(edge?.parentBranchId) || !validRunId(edge?.runId) || !Array.isArray(statuses) || !statuses.length) throw new Error('Invalid finished attempt');
+      prepare();
+      const path = edgePath(edge.parentRunId, edge.parentBranchId), current = read(path);
+      if (!current || current.runId !== edge.runId || !statuses.includes(current.status)) throw new Error('Attempt changed');
+      const archived = join(attempts, `${edge.runId}.json`);
+      if (existsSync(archived)) throw new Error('Attempt already archived');
+      renameSync(path, archived);
+    },
     children(parent) {
       try { return readdirSync(edges).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).map(name => read(join(edges, name))).filter(item => item?.parentRunId === parent && validRunId(item.runId)).map(item => ({ branchId: item.parentBranchId, runId: item.runId, status: item.status })); }
       catch { return []; }
