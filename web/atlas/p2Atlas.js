@@ -15,6 +15,9 @@ export const FUTURE_EXTENSION_WIDTH = 1;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const idOf = world => world?.id == null ? null : String(world.id);
 const safeYear = value => Number.isSafeInteger(Number(value)) && Number(value) !== 0 ? Number(value) : null;
+export function questionStemPathKey(path) {
+  return `${String(path?.questionId ?? '')}\u0000${path?.foldedChip ? 'chip' : 'root'}`;
+}
 function proposedOrder(world) {
   const explicit = Number(world?.proposedOrder ?? world?.order);
   if (Number.isFinite(explicit)) return explicit;
@@ -568,6 +571,14 @@ export function routeAtlasEdgePaths(edges = [], {
     path.unresolvedCrossings = [];
     path.unresolvedNodes = [];
   }
+  // Later routes may replace an earlier bus with a cleaner direct cubic. Rebuild
+  // diagnostics from the final exact paths so warnings describe what is rendered.
+  for (const path of routed) {
+    const endpointIds = new Set([String(path.parentId), String(path.childId)]);
+    path.unresolvedCrossings = routed.filter(other => other !== path && pathsCross(path.points, other.points))
+      .map(other => `${other.parentId}->${other.childId}`);
+    path.unresolvedNodes = nodesHitByPath(path.points, visibleNodes, endpointIds, nodeClearance);
+  }
   return routed.sort((a, b) => String(a.parentId).localeCompare(String(b.parentId))
     || String(a.childId).localeCompare(String(b.childId)));
 }
@@ -705,6 +716,16 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
       active: questionId === currentQuestionId,
     };
   });
+  const chipPlacements = [];
+  const chips = lod.chips.map((chip, index) => {
+    const x = chip.divergenceYear == null ? layoutLeft + index * 0.9 * horizontalScale : yearToX(chip.divergenceYear);
+    let stack = 0;
+    const width = Math.min(2.2, Math.max(0.82, chip.label.length * 0.035));
+    while (chipPlacements.some(other => Math.abs(other.x - x) < (other.width + width) / 2 + 0.12 && other.stack === stack)) stack++;
+    const placement = { ...chip, x, y: stack * 0.38, trunkY: 0, stack, width };
+    chipPlacements.push(placement);
+    return { ...placement, color: 'parchment' };
+  });
   const parentChildEdges = visibleWorlds.flatMap(child => {
     const parent = child.world.parentId == null ? null : visibleWorldById.get(String(child.world.parentId));
     if (!parent) return [];
@@ -720,15 +741,42 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
       worldId: world.id, color: world.lineage ? 'lineage' : 'proposed', questionRoot: true,
     }));
   });
-  const allPaths = routeAtlasEdgePaths([...parentChildEdges, ...questionRootEdges], {
+  const rootStemEdges = questionBranches.flatMap(branch => {
+    const hasRootConnection = questionRootEdges.some(edge => edge.questionId === branch.questionId);
+    if (!hasRootConnection || (branch.attachmentMode === 'current-world' && branch.attachment)) return [];
+    return [{
+      parentId: '\u0000question-trunk', childId: `\u0000question-root:${branch.questionId}`,
+      from: { x: branch.x, y: 0, z: -0.05 }, to: { x: branch.x, y: branch.y, z: -0.05 },
+      questionId: branch.questionId, questionStem: true,
+    }];
+  });
+  const chipStemEdges = chips.map(chip => {
+    const hasVisibleRoot = questionRootEdges.some(edge => edge.questionId === chip.questionId);
+    // If a lineage root remains visible beside the folded chip, end the chip
+    // stem at the label edge so the two virtual anchors have marker clearance.
+    const chipStemX = chip.x + (hasVisibleRoot ? 0.22 : 0);
+    return {
+      parentId: '\u0000question-trunk', childId: `\u0000question-chip:${chip.questionId}`,
+      from: { x: chip.x, y: 0, z: 0.04 }, to: { x: chipStemX, y: chip.y + 0.22, z: 0.04 },
+      questionId: chip.questionId, questionStem: true, foldedChip: true,
+    };
+  });
+  const questionStemEdges = [...rootStemEdges, ...chipStemEdges];
+  const allPaths = routeAtlasEdgePaths([...parentChildEdges, ...questionRootEdges, ...questionStemEdges], {
     nodes: [
       ...visibleWorlds.map(world => ({ id: world.id, x: world.x, y: world.y })),
       ...questionRootEdges.map(edge => ({ id: edge.parentId, x: edge.from.x, y: edge.from.y })),
+      ...chipStemEdges.map(edge => ({ id: edge.childId, x: edge.to.x, y: edge.to.y })),
     ],
   });
-  const parentChildPaths = allPaths.filter(path => !path.questionRoot);
+  const parentChildPaths = allPaths.filter(path => !path.questionRoot && !path.questionStem);
   const questionRootPaths = allPaths.filter(path => path.questionRoot).map(path => ({
     parentId: path.parentId, childId: path.childId, questionId: path.questionId, worldId: path.worldId, color: path.color,
+    from: path.from, to: path.to, points: path.points, routeShape: path.routeShape, routeBounds: path.routeBounds,
+    unresolvedCrossings: path.unresolvedCrossings, unresolvedNodes: path.unresolvedNodes,
+  }));
+  const questionStemPaths = allPaths.filter(path => path.questionStem).map(path => ({
+    parentId: path.parentId, childId: path.childId, questionId: path.questionId, foldedChip: Boolean(path.foldedChip),
     from: path.from, to: path.to, points: path.points, routeShape: path.routeShape, routeBounds: path.routeBounds,
     unresolvedCrossings: path.unresolvedCrossings, unresolvedNodes: path.unresolvedNodes,
   }));
@@ -752,16 +800,6 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
     worldLabels.set(entry.id, visible);
   }
 
-  const chipPlacements = [];
-  const chips = lod.chips.map((chip, index) => {
-    const x = chip.divergenceYear == null ? layoutLeft + index * 0.9 * horizontalScale : yearToX(chip.divergenceYear);
-    let stack = 0;
-    const width = Math.min(2.2, Math.max(0.82, chip.label.length * 0.035));
-    while (chipPlacements.some(other => Math.abs(other.x - x) < (other.width + width) / 2 + 0.12 && other.stack === stack)) stack++;
-    const placement = { ...chip, x, y: stack * 0.38, trunkY: 0, stack, width };
-    chipPlacements.push(placement);
-    return { ...placement, color: 'parchment' };
-  });
   const presentEarth = { x: layoutRight, y: 0, year: presentYear, label: 'PRESENT-DAY EARTH · 2026' };
   return {
     ...lod,
@@ -789,6 +827,7 @@ export function buildAtlasTimeline(graph, currentId, axisMode = 'history-distanc
     positions,
     parentChildPaths,
     questionRootPaths,
+    questionStemPaths,
     routeBounds,
     questionBranches,
     questionAttachments,

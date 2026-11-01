@@ -13,7 +13,7 @@ import {
 } from './p3Travel.js';
 import {
   ATLAS_REAL_SPHERE_LIMIT, AXIS_ANIMATION_MS, AXIS_MODES, PRESENT_DAY_REFERENCE,
-  axisTransitionProgress, buildAtlasTimeline, interpolateAtlasPoint, sampleAtlasEdgePath, transformAtlasEdgeShape,
+  axisTransitionProgress, buildAtlasTimeline, interpolateAtlasPoint, questionStemPathKey, sampleAtlasEdgePath, transformAtlasEdgeShape,
 } from './p2Atlas.js';
 import {
   ATLAS_LEVEL_MAX, ORBIT_UNFOLDED_LEVEL, SURFACE_LABEL_LEVEL,
@@ -516,7 +516,7 @@ export function createAtlasScene(container, {
   }
   function refreshAtlasTimeline() {
     atlasTimeline = buildAtlasTimeline(graphSnapshot(), currentId, axisMode, { expandedQuestionIds: [...expandedQuestionIds], frameAspect: camera.aspect });
-    container.dataset.atlasRouteWarnings = String([...(atlasTimeline.parentChildPaths || []), ...(atlasTimeline.questionRootPaths || [])]
+    container.dataset.atlasRouteWarnings = String([...(atlasTimeline.parentChildPaths || []), ...(atlasTimeline.questionRootPaths || []), ...(atlasTimeline.questionStemPaths || [])]
       .filter(path => path.unresolvedCrossings.length || path.unresolvedNodes.length).length);
     const byId = new Map(atlasTimeline.worlds.map(item => [item.id, item]));
     const realSphereIds = new Set(atlasTimeline.realSphereIds);
@@ -648,6 +648,20 @@ export function createAtlasScene(container, {
       .map(path => [`${path.questionId}\u0000${path.worldId}`, path]));
     for (const path of rootPaths) {
       const prior = previousRootPaths.get(`${path.questionId}\u0000${path.worldId}`);
+      if (path.routeShape?.length > 1) includeRouteShapeBounds(transformAtlasEdgeShape(path.from, path.to, path.routeShape), xs, ys);
+      if (prior?.routeShape?.length > 1) {
+        includeRouteShapeBounds(transformAtlasEdgeShape(prior.from, prior.to, prior.routeShape), xs, ys);
+        if (path.routeShape?.length > 1) {
+          includeRouteShapeBounds(transformAtlasEdgeShape(path.from, path.to, prior.routeShape), xs, ys);
+          includeRouteShapeBounds(transformAtlasEdgeShape(prior.from, prior.to, path.routeShape), xs, ys);
+        }
+      }
+    }
+    const stemPaths = atlasTimeline?.questionStemPaths || [];
+    const previousStemPaths = new Map((axisTransition?.fromTimeline?.questionStemPaths || [])
+      .map(path => [questionStemPathKey(path), path]));
+    for (const path of stemPaths) {
+      const prior = previousStemPaths.get(questionStemPathKey(path));
       if (path.routeShape?.length > 1) includeRouteShapeBounds(transformAtlasEdgeShape(path.from, path.to, path.routeShape), xs, ys);
       if (prior?.routeShape?.length > 1) {
         includeRouteShapeBounds(transformAtlasEdgeShape(prior.from, prior.to, prior.routeShape), xs, ys);
@@ -1391,9 +1405,9 @@ export function createAtlasScene(container, {
       const branch = atlasTimeline?.questionBranches?.find(item => item.questionId === connection.questionId);
       if (!root || !branch) continue;
       let tokenX = branch.x, tokenY = branch.y;
+      const progress = axisTransition ? axisTransitionProgress(timestamp - axisTransition.startedAt, AXIS_ANIMATION_MS) : 1;
       const prior = axisTransition?.fromTimeline?.questionBranches?.find(item => item.questionId === connection.questionId);
       if (prior) {
-        const progress = axisTransitionProgress(timestamp - axisTransition.startedAt, AXIS_ANIMATION_MS);
         tokenX = prior.x + (branch.x - prior.x) * progress;
         tokenY = prior.y + (branch.y - prior.y) * progress;
       }
@@ -1473,6 +1487,7 @@ export function createAtlasScene(container, {
       axisMode,
       branchProgress: axisTransition ? axisTransitionProgress(timestamp - axisTransition.startedAt, AXIS_ANIMATION_MS) : 1,
       fromBranches: axisTransition?.fromTimeline.questionBranches,
+      fromStems: axisTransition?.fromTimeline.questionStemPaths,
     });
     p2Renderer.setQuestionBranchOpacity(suppressAtlasThreads ? 0 : 1);
     p2Renderer.group.traverse(object => {

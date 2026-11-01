@@ -5,7 +5,7 @@ import {
   ATLAS_REAL_SPHERE_LIMIT, AXIS_ANIMATION_MS, AXIS_MODES, ATLAS_TIME_SCALE_LABEL, FUTURE_EXTENSION_WIDTH, PRESENT_DAY_REFERENCE,
   atlasLOD, axisTransitionProgress, buildAtlasTimeline, formatHistoricalYear,
   focusContextTimeX, interpolateAtlasPoint, layoutLogTimeTicks, logDistanceX, planQuestionRootConnections, routeAtlasEdgePaths,
-  sampleAtlasEdgePath, transformAtlasEdgeShape, worldDistanceMap,
+  questionStemPathKey, sampleAtlasEdgePath, transformAtlasEdgeShape, worldDistanceMap,
 } from '../web/atlas/p2Atlas.js';
 
 function sampleGraph() {
@@ -74,11 +74,13 @@ function unexpectedRouteOverlaps(paths) {
 }
 
 function assertPlanarAtlasRoutes(layout) {
-  const paths = [...layout.parentChildPaths, ...(layout.questionRootPaths || [])];
+  const paths = [...layout.parentChildPaths, ...(layout.questionRootPaths || []), ...(layout.questionStemPaths || [])];
   const nodes = [
     ...layout.worlds.filter(world => !layout.foldedIds.includes(world.id)).map(world => ({ id: world.id, x: world.x, y: world.y })),
     ...new Map((layout.questionRootPaths || []).map(path => [path.parentId,
       { id: path.parentId, x: path.from.x, y: path.from.y }])).values(),
+    ...new Map((layout.questionStemPaths || []).map(path => [path.childId,
+      { id: path.childId, x: path.to.x, y: path.to.y }])).values(),
   ];
   assert.deepEqual(edgeCrossings(paths, { includeIncident: true }), []);
   assert.deepEqual(unexpectedRouteOverlaps(paths), [], 'only sibling routes may share their parent stem');
@@ -118,6 +120,59 @@ test('same-year question roots route from virtual parents outside each subtree w
   }
   assert.ok(layout.questionRootPaths.some(path => path.color === 'lineage'));
   assert.ok(layout.questionRootPaths.some(path => path.color === 'proposed'));
+});
+
+test('question stems route around other question lineage while staying anchored to divergence time', () => {
+  const worlds = [
+    { id: 'a0', parentId: null, questionId: 'qa', year: 1000 },
+    { id: 'a1', parentId: 'a0', questionId: 'qa', year: 1300 },
+    { id: 'a2', parentId: 'a1', questionId: 'qa', year: 1800 },
+    { id: 'b0', parentId: null, questionId: 'qb', year: 1050 },
+    { id: 'b1', parentId: 'b0', questionId: 'qb', year: 1700 },
+  ];
+  const layout = buildAtlasTimeline({ worlds, questions: [
+    { id: 'qa', divergenceYear: 1000 }, { id: 'qb', divergenceYear: 1050 },
+  ] }, 'a2', 'history-distance', { expandedQuestionIds: ['qb'] });
+  const stem = layout.questionStemPaths.find(path => path.questionId === 'qb');
+  const branch = layout.questionBranches.find(item => item.questionId === 'qb');
+  assert.ok(stem);
+  assert.equal(stem.from.x, branch.x, 'stem remains anchored to its divergence-time point on the trunk');
+  assert.equal(stem.from.y, layout.trunk.y);
+  assert.equal(stem.to.x, branch.x);
+  assert.equal(stem.to.y, branch.y);
+  assert.ok(stem.routeBounds.right > Math.max(...layout.worlds.map(world => world.x)),
+    'the crossing stem takes an outer gutter around the earlier gold lineage');
+  assertPlanarAtlasRoutes(layout);
+
+  const folded = buildAtlasTimeline({ worlds, questions: [
+    { id: 'qa', divergenceYear: 1000 }, { id: 'qb', divergenceYear: 1050 },
+  ] }, 'a2');
+  assert.deepEqual(folded.questionStemPaths.map(path => [path.questionId, path.foldedChip]), [['qb', true], ['qa', false]],
+    'folded questions keep a routed chip stem while omitting hidden root connectors');
+  assert.ok(!folded.questionRootPaths.some(path => path.questionId === 'qb'));
+  assertPlanarAtlasRoutes(folded);
+});
+
+test('partially folded question keeps distinct lineage-root and folded-chip stems', () => {
+  const worlds = [
+    { id: 'old-root', parentId: null, questionId: 'q-old', year: 1000 },
+    { id: 'old-sibling', parentId: null, questionId: 'q-old', year: 1100 },
+    { id: 'current', parentId: 'old-root', questionId: 'q-active', year: 1200 },
+  ];
+  const layout = buildAtlasTimeline({ worlds, questions: [
+    { id: 'q-old', divergenceYear: 1000 }, { id: 'q-active', divergenceYear: 1200 },
+  ] }, 'current');
+  assert.ok(layout.lineageIds.includes('old-root'));
+  assert.ok(layout.foldedIds.includes('old-sibling'));
+  assert.ok(layout.questionRootPaths.some(path => path.questionId === 'q-old' && path.worldId === 'old-root'));
+  assert.deepEqual(layout.questionStemPaths.filter(path => path.questionId === 'q-old')
+    .map(path => [path.foldedChip, path.childId]).sort((a, b) => Number(a[0]) - Number(b[0])), [
+    [false, '\u0000question-root:q-old'], [true, '\u0000question-chip:q-old'],
+  ]);
+  assert.notEqual(questionStemPathKey({ questionId: 'q-old' }),
+    questionStemPathKey({ questionId: 'q-old', foldedChip: true }),
+    'renderer and axis-bounds maps retain both route identities for the same question');
+  assertPlanarAtlasRoutes(layout);
 });
 
 function pointSegmentDistanceForTest(point, a, b) {

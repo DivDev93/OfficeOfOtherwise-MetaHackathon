@@ -99,4 +99,32 @@ test('question-root attachments render and morph their routed paths with existin
     'root links retain gold lineage and hover highlighting');
   assert.match(scene, /previousRootPaths = new Map\(\(axisTransition\?\.fromTimeline\?\.questionRootPaths \|\| \[\]\)/,
     'camera bounds include old and target question-root routes during axis changes');
+  const rootLoop = scene.slice(scene.indexOf('for (const connection of rootConnections)'), scene.indexOf('writeEdgeBuffer(threads,', scene.indexOf('for (const connection of rootConnections)')));
+  assert.match(rootLoop, /const progress = axisTransition \? axisTransitionProgress\([\s\S]*?\) : 1;\s*const prior =/,
+    'one block-scoped transition progress value is available to both token and route interpolation');
+  assert.match(rootLoop, /priorConnection\.routeShape, connection\.routeShape, progress/,
+    'the root route morph uses that same in-scope progress value');
+});
+
+test('root-question and folded-chip stems consume routed geometry and transition metadata', () => {
+  assert.match(scene, /atlasTimeline\.questionStemPaths \|\| \[\]/,
+    'route warnings include stems alongside parent-child and root connectors');
+  assert.match(scene, /fromStems: axisTransition\?\.fromTimeline\.questionStemPaths/,
+    'the previous axis layout supplies stem paths for the same transition');
+  assert.match(p2Renderer, /layout\.questionStemPaths \|\| \[\]/);
+  assert.match(p2Renderer, /if \(!stem\?\.routeShape\?\.length \|\| stem\.foldedChip\) continue/,
+    'visible root-question stems use their routes while folded chips keep separate stem styling');
+  assert.match(p2Renderer, /retainsLineageRoot = \(layout\.questionRootPaths \|\| \[\]\)\.some[\s\S]*foldedQuestionIds\.has\(String\(branch\.questionId\)\) && !retainsLineageRoot/,
+    'a retained gold root keeps its question stem when sibling possibilities fold into a chip');
+  assert.match(p2Renderer, /if \(!stem\?\.foldedChip \|\| !stem\.routeShape\?\.length\) continue/,
+    'folded chip stems use their own routed paths');
+  assert.match(p2Renderer, /questionStemPathKey\(path\)/);
+  assert.match(p2Renderer, /stems\.get\(stemKey\)[\s\S]*oldStems\.get\(stemKey\)/,
+    'root and folded-chip routes for one question do not overwrite each other');
+  assert.match(scene, /previousStemPaths = new Map[\s\S]*questionStemPathKey\(path\)[\s\S]*previousStemPaths\.get\(questionStemPathKey\(path\)\)/,
+    'axis bounds match previous stems by kind as well as question ID');
+  assert.match(p2Renderer, /function setQuestionBranchOpacity\(value\)[\s\S]*chipStems\.material\.opacity = 0\.78 \* currentOpacity \* questionBranchOpacity;[\s\S]*chipStems\.visible = questionBranchOpacity > 0/,
+    'axis-route suppression hides the folded chip stems along with the other question branches');
+  assert.match(p2Renderer, /interpolateRoute\(from, to, previousStem\.routeShape, stem\.routeShape, progress/,
+    'stem geometry follows the existing axis transition instead of snapping');
 });

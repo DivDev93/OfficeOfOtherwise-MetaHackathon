@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { questionStemPathKey, transformAtlasEdgeShape } from './p2Atlas.js';
 
 const PARCHMENT = '#eadfca';
 const TRUNK = '#91acb5';
@@ -37,6 +38,37 @@ function lineObject(color, opacity = 0.8) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
   return new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false }));
+}
+
+function routeFractions(points) {
+  const cumulative = [0];
+  for (let index = 1; index < points.length; index++) cumulative.push(cumulative.at(-1)
+    + Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y));
+  const total = cumulative.at(-1) || 1;
+  return cumulative.map(distance => distance / total);
+}
+
+function sampleRoute(points, fractions, amount) {
+  let segment = 1;
+  while (segment < fractions.length - 1 && fractions[segment] < amount - 1e-10) segment++;
+  const span = fractions[segment] - fractions[segment - 1] || 1;
+  const t = Math.max(0, Math.min(1, (amount - fractions[segment - 1]) / span));
+  const a = points[segment - 1], b = points[segment];
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t };
+}
+
+function interpolateRoute(from, to, fromShape, toShape, progress, oldEndpoints, newEndpoints) {
+  const oldPath = transformAtlasEdgeShape(from, to, fromShape);
+  const newPath = transformAtlasEdgeShape(from, to, toShape);
+  if (oldPath.length < 2 || newPath.length < 2) return newPath.length >= 2 ? newPath : oldPath;
+  const oldBasis = transformAtlasEdgeShape(oldEndpoints?.from || from, oldEndpoints?.to || to, fromShape);
+  const newBasis = transformAtlasEdgeShape(newEndpoints?.from || from, newEndpoints?.to || to, toShape);
+  const oldFractions = routeFractions(oldPath), newFractions = routeFractions(newPath);
+  const fractions = [...new Set([...routeFractions(oldBasis), ...routeFractions(newBasis)])].sort((a, b) => a - b);
+  return fractions.map(fraction => {
+    const a = sampleRoute(oldPath, oldFractions, fraction), b = sampleRoute(newPath, newFractions, fraction);
+    return { x: a.x + (b.x - a.x) * progress, y: a.y + (b.y - a.y) * progress, z: a.z + (b.z - a.z) * progress };
+  });
 }
 
 /** Add the P2 trunk and controls visuals to the caller's only scene. */
@@ -100,6 +132,7 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     axisMode: nextMode = 'history-distance',
     branchProgress = 1,
     fromBranches = null,
+    fromStems = null,
   } = {}) {
     if (disposed || !nextLayout) return;
     layout = nextLayout; axisMode = nextMode;
@@ -111,7 +144,8 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     branches.visible = questionBranchOpacity > 0;
     ticks.material.opacity = 0.64 * alpha;
     focusBreaks.material.opacity = 0.92 * alpha;
-    chipStems.material.opacity = 0.78 * alpha;
+    chipStems.material.opacity = 0.78 * alpha * questionBranchOpacity;
+    chipStems.visible = questionBranchOpacity > 0;
     presentEarth.visible = alpha > 0;
     presentEarth.position.set(layout.presentEarth.x, layout.presentEarth.y, -0.15);
     presentEarth.scale.setScalar(0.36 * alpha);
@@ -143,14 +177,30 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     const branchValues = [];
     const foldedQuestionIds = new Set(layout.chips.map(chip => String(chip.questionId)));
     const oldById = new Map((fromBranches || []).map(branch => [branch.questionId, branch]));
+    const oldStems = new Map((fromStems || []).map(path => [questionStemPathKey(path), path]));
+    const stems = new Map((layout.questionStemPaths || []).map(path => [questionStemPathKey(path), path]));
     const progress = Math.max(0, Math.min(1, branchProgress));
     for (const branch of layout.questionBranches) {
-      if (!branch.active && foldedQuestionIds.has(String(branch.questionId))) continue;
+      const retainsLineageRoot = (layout.questionRootPaths || []).some(path => path.questionId === branch.questionId && path.color === 'lineage');
+      if (!branch.active && foldedQuestionIds.has(String(branch.questionId)) && !retainsLineageRoot) continue;
       if (branch.attachmentMode === 'current-world' && branch.attachment) continue;
+      const stemKey = questionStemPathKey({ questionId: branch.questionId });
+      const stem = stems.get(stemKey);
+      if (!stem?.routeShape?.length || stem.foldedChip) continue;
       const prior = oldById.get(branch.questionId);
       const startY = prior ? prior.y : 0;
       const y = startY + (branch.y - startY) * progress;
-      branchValues.push(branch.x, layout.trunk.y, -0.05, branch.x, y, -0.05);
+      const from = { x: branch.x, y: layout.trunk.y, z: -0.05 };
+      const to = { x: branch.x, y, z: -0.05 };
+      const previousStem = oldStems.get(stemKey);
+      const points = previousStem?.routeShape?.length > 1 && progress < 1
+        ? interpolateRoute(from, to, previousStem.routeShape, stem.routeShape, progress,
+          { from: previousStem.from, to: previousStem.to }, { from: stem.from, to: stem.to })
+        : transformAtlasEdgeShape(from, to, stem.routeShape);
+      for (let index = 1; index < points.length; index++) {
+        branchValues.push(points[index - 1].x, points[index - 1].y, points[index - 1].z,
+          points[index].x, points[index].y, points[index].z);
+      }
     }
     setLinePositions(branches, branchValues);
 
@@ -182,7 +232,22 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     for (const tick of layout.visibleTicks) tickValues.push(tick.x, layout.trunk.y - 0.04, -0.04, tick.x, layout.trunk.y - 0.19, -0.04);
     setLinePositions(ticks, tickValues);
     const stemValues = [];
-    for (const chip of layout.chips) stemValues.push(chip.x, layout.trunk.y, 0.04, chip.x, chip.y + 0.22, 0.04);
+    for (const chip of layout.chips) {
+      const stemKey = questionStemPathKey({ questionId: chip.questionId, foldedChip: true });
+      const stem = stems.get(stemKey);
+      if (!stem?.foldedChip || !stem.routeShape?.length) continue;
+      const from = { x: stem.from.x, y: layout.trunk.y, z: 0.04 };
+      const to = { x: stem.to.x, y: chip.y + 0.22, z: 0.04 };
+      const previousStem = oldStems.get(stemKey);
+      const points = previousStem?.foldedChip && previousStem.routeShape?.length > 1 && progress < 1
+        ? interpolateRoute(from, to, previousStem.routeShape, stem.routeShape, progress,
+          { from: previousStem.from, to: previousStem.to }, { from: stem.from, to: stem.to })
+        : transformAtlasEdgeShape(from, to, stem.routeShape);
+      for (let index = 1; index < points.length; index++) {
+        stemValues.push(points[index - 1].x, points[index - 1].y, points[index - 1].z,
+          points[index].x, points[index].y, points[index].z);
+      }
+    }
     setLinePositions(chipStems, stemValues);
     ensureSprites(tickSprites, layout.visibleTicks.length, 'Time tick');
     layout.visibleTicks.forEach((tick, index) => {
@@ -255,8 +320,10 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     questionBranchOpacity = Math.max(0, Math.min(1, Number(value) || 0));
     branches.material.opacity = 0.82 * currentOpacity * questionBranchOpacity;
     questionAttachments.material.opacity = 0.86 * currentOpacity * questionBranchOpacity;
+    chipStems.material.opacity = 0.78 * currentOpacity * questionBranchOpacity;
     branches.visible = questionBranchOpacity > 0;
     questionAttachments.visible = questionBranchOpacity > 0;
+    chipStems.visible = questionBranchOpacity > 0;
   }
 
   function dispose() {
