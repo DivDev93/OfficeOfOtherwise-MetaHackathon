@@ -468,7 +468,9 @@ function syncAtlasOtherQuestionToggle(mapNodes = atlasNodes) {
   if (!toggle) return;
   const hasOtherQuestions = mapNodes.some(node => node.otherTree && node.questionId && node.questionId !== atlasActiveQuestionId);
   const atlasOnlyView = isAtlasPhone() && atlasController?.scene?.getLevel?.() === 'atlas';
-  toggle.hidden = !atlasOnlyView || !hasOtherQuestions;
+  const shouldShow = atlasOnlyView && hasOtherQuestions;
+  if (!shouldShow && !toggle.hidden && document.activeElement === toggle) $('atlas-scene')?.focus({ preventScroll:true });
+  toggle.hidden = !shouldShow;
   toggle.setAttribute('aria-pressed', String(atlasOtherQuestionsOpen));
   if (atlasController) {
     const { worlds, questions, currentWorldId } = atlasController.getData();

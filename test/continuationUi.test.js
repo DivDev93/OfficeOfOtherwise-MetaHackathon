@@ -101,10 +101,10 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     createAtlasController(options) {
       const controller = {
         graph:options.graph || {}, nodes:options.graph?.mapNodes || [], selectedId:options.graph?.currentWorldId || null,
-        scene:{ currentId:options.graph?.currentWorldId || null, enterWorld(id, settings = {}) { this.currentId = id; this.lastEntry = { id, settings }; atlasEntryHistory.push(id); }, setGeography(geography, mode, renderState) { this.geographyPreview = { geography, mode, renderState }; }, setZoom(value) { this.zoom = value; }, getZoom() { return this.zoom || 0; } },
+        scene:{ currentId:options.graph?.currentWorldId || null, level:'surface', enterWorld(id, settings = {}) { this.currentId = id; this.lastEntry = { id, settings }; atlasEntryHistory.push(id); }, setGeography(geography, mode, renderState) { this.geographyPreview = { geography, mode, renderState }; }, setZoom(value) { this.zoom = value; }, getZoom() { return this.zoom || 0; }, getLevel() { return this.level; } },
         setGraph(next) { this.graph = next; this.nodes = next.mapNodes || []; this.selectedId = next.currentWorldId || null; this.scene.currentId = this.selectedId; atlasWorldHistory.push(this.selectedId); },
         setGeography(geography, mode, renderState) { this.scene.setGeography(geography, mode, renderState); },
-        getData() { return { worlds:this.nodes.map(node => ({...node, eventRef:node.eventRef || (node.runId && node.branchId ? {runId:node.runId,branchId:node.branchId} : undefined)})), currentWorldId:this.selectedId }; },
+        getData() { return { worlds:this.nodes.map(node => ({...node, eventRef:node.eventRef || (node.runId && node.branchId ? {runId:node.runId,branchId:node.branchId} : undefined)})), questions:this.graph.questions || [], currentWorldId:this.selectedId }; },
         getAttachmentIntent() { return {...(this.attachment || {mode:'current-world'}), currentWorldId:this.selectedId}; },
         getViewOptions() { return {}; },
         select(id) { const world = this.nodes.find(node => node.id === id); if (world) { this.selectedId = id; this.scene.enterWorld(id); options.onEnter?.(world, {source:'atlas-explicit-entry'}); } },
@@ -121,7 +121,7 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) }, Option: function(text, value) { return { text, value }; },
   });
   const source = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/import\('\.\/visuals\.js'\)\.then\(async \(\{createModelViewer\}\) => \{[\s\S]*?\}\)\.catch\(\(\) => \{ modelApi = null; setView\(activeView\); \}\);/, '');
-  vm.runInContext(`${source}\n globalThis.ui = {loadRun,selectBranch,activateBranch,selectStarMapNode,expandBranch,runPrompt,setView,setSurfaceMode,setAtlasLevel:applyAtlasGeographyLevel,toggleAtlasGeographyPanel,refreshHistory,toggleArchiveHistory,setCurrentRunContextForTest:id=>{currentRunId=id;currentManifest=knownRunManifests.get(id)||currentManifest;continuation=currentManifest?.continuation||continuation;renderExplorationTree();},setAtlasAttachmentIntent:value=>{atlasController.attachment=value;},setGlobe:api=>{Object.assign(atlasController.scene,api);renderGeography();},setModelApi:api=>{modelApi=api;},previewGlobe:(branch,anchor)=>showAtlasPreview(branch,anchor),eventWorkFor:(runId,branchId)=>{const work=eventWork.get(eventKey(runId,branchId));return work?{...work}:null;},state:()=>({currentRunId,atlasCurrentWorldRunId,continuation,streamBusy,selectedContext,hasImage,activeView,continuationViewSelection,surfaceGeography,surfaceMode,hasStory:document.body.classList.contains('has-story'),invitationOpen:document.body.classList.contains('invitation-open'),starMapNodes:atlasNodes,atlasAttachmentIntent,serverExpansionUsed,expansionLimit,enteredNodesCount:enteredNodes.size,pendingExpansionCount:pendingExpansionNodes.size,selectedBranchId,selectedWork:{...eventWork.get(eventKey(currentRunId,selectedBranchId))},activePreview:savedPreview.activePreview,previewHidden:savedPreview.element.hidden})};`, context);
+  vm.runInContext(`${source}\n globalThis.ui = {loadRun,selectBranch,activateBranch,selectStarMapNode,expandBranch,runPrompt,setView,setSurfaceMode,setAtlasLevel:applyAtlasGeographyLevel,toggleAtlasGeographyPanel,refreshHistory,toggleArchiveHistory,setCurrentRunContextForTest:id=>{currentRunId=id;currentManifest=knownRunManifests.get(id)||currentManifest;continuation=currentManifest?.continuation||continuation;renderExplorationTree();},setAtlasAttachmentIntent:value=>{atlasController.attachment=value;},setGlobe:api=>{Object.assign(atlasController.scene,api);renderGeography();},setModelApi:api=>{modelApi=api;},syncOtherQuestionsForTest:(level,mapNodes)=>{window.matchMedia=()=>({matches:true});atlasController.scene.level=level;syncAtlasOtherQuestionToggle(mapNodes);},previewGlobe:(branch,anchor)=>showAtlasPreview(branch,anchor),eventWorkFor:(runId,branchId)=>{const work=eventWork.get(eventKey(runId,branchId));return work?{...work}:null;},state:()=>({currentRunId,atlasCurrentWorldRunId,continuation,streamBusy,selectedContext,hasImage,activeView,continuationViewSelection,surfaceGeography,surfaceMode,hasStory:document.body.classList.contains('has-story'),invitationOpen:document.body.classList.contains('invitation-open'),starMapNodes:atlasNodes,atlasAttachmentIntent,serverExpansionUsed,expansionLimit,enteredNodesCount:enteredNodes.size,pendingExpansionCount:pendingExpansionNodes.size,selectedBranchId,selectedWork:{...eventWork.get(eventKey(currentRunId,selectedBranchId))},activePreview:savedPreview.activePreview,previewHidden:savedPreview.element.hidden})};`, context);
   return { ui: context.ui, get, posts, gets, heads, atlasWorldHistory, atlasEntryHistory, storage, location, starMap: context.starMap, document, window, navigate(hash, ...events) { location.hash = hash; for (const event of events) window.dispatch(event); } };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -640,6 +640,28 @@ test('leaving compact details restores focus to the visible Atlas scene at Surfa
   assert.equal(app.document.body.classList.contains('atlas-details-open'), false);
   assert.equal(app.get('atlas-close-details').hidden, true);
   assert.equal(app.get('atlas-scene').focused, true, 'Lift transition moves focus to the persistent, visible scene');
+});
+
+test('hiding the phone Other questions control restores focus only when it owned focus', async () => {
+  const root = run('other-question-focus', choice);
+  const app = harness({ 'other-question-focus':root }); await tick();
+  await app.ui.loadRun('other-question-focus', { animate:false, autoConsequences:false });
+  const otherQuestion = { otherTree:true, questionId:'another-question' };
+  const toggle = app.get('atlas-other-questions'), scene = app.get('atlas-scene');
+  app.ui.syncOtherQuestionsForTest('atlas', [otherQuestion]);
+  assert.equal(toggle.hidden, false, 'phone Atlas exposes the control when another saved question exists');
+
+  app.document.activeElement = toggle;
+  app.ui.syncOtherQuestionsForTest('orbit', [otherQuestion]);
+  assert.equal(toggle.hidden, true, 'leaving Atlas hides the phone-only control');
+  assert.equal(scene.focused, true, 'focus moves to the persistent Atlas scene before its control hides');
+
+  scene.focused = false;
+  app.ui.syncOtherQuestionsForTest('atlas', [otherQuestion]);
+  assert.equal(toggle.hidden, false);
+  app.document.activeElement = scene;
+  app.ui.syncOtherQuestionsForTest('orbit', [otherQuestion]);
+  assert.equal(scene.focused, false, 'a control that did not own focus does not steal it during hide');
 });
 
 test('explicit Present-day Earth entry opens a blank attached-question form without dispatching generation', async () => {

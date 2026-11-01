@@ -174,3 +174,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: interpolate Orbit chords directly to Atlas routes while keeping endpoints attached; sampled parent-child crossings decreased, but intermediate crossings remain. | |
 | 2026-11-01 | Atlas round 3: prevent phone labels from covering the Other questions control during zoom. | |
 | 2026-11-01 | Atlas round 3: refresh the wheel recording after route and phone-label adjustments. | |
+| 2026-11-01 | Atlas round 3: return keyboard focus to the scene when the phone question toggle hides. | |
