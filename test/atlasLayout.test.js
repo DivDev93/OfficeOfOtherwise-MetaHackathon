@@ -9,6 +9,7 @@ import {
   fitCameraDistance, layoutOrbitNeighborhood, zoomForAltitude,
   appendContinuousFrame, atlasPresentationState,
   clampScreenRectCenter, isSurfaceNormalVisible,
+  localQuaternionForWorldFacing,
   ATLAS_PIN_GEOMETRY_RADIUS, ATLAS_PIN_SCALE_GAIN, LIFTED_PIN_SCALE, SURFACE_PIN_SCALE,
   atlasPinScale, pinAnchorRadiusAtPresentation, pinScaleAtPresentation,
   surfacePinAnchorRadius, surfacePinScale,
@@ -96,6 +97,21 @@ test('Orbit neighborhood centers the selected world and places parent left and c
   assert.equal(positions.has('unrelated'), false);
 });
 
+test('root Orbit neighborhood uses its question as a virtual parent and limits siblings to that question', () => {
+  const worlds = [
+    { id: 'root-a', parentId: null, questionId: 'q-a' },
+    { id: 'root-a-sibling', parentId: null, questionId: 'q-a' },
+    { id: 'root-b', parentId: null, questionId: 'q-b' },
+  ];
+  const entries = layoutAtlasWorlds(worlds, 'root-a');
+  const positions = layoutOrbitNeighborhood(entries, 'root-a');
+  assert.equal(positions.get('question:q-a').kind, 'question-parent');
+  assert.equal(positions.get('question:q-a').questionId, 'q-a');
+  assert.ok(positions.get('question:q-a').x < positions.get('root-a').x);
+  assert.ok(positions.get('root-a-sibling').x < positions.get('root-a').x);
+  assert.equal(positions.has('root-b'), false, 'another question tree is not a sibling');
+});
+
 test('current geographic normal rotates onto the camera axis and remains shared by surface markers', () => {
   const current = layoutAtlasWorlds([{ id: 'sundaland', parentId: null, lat: 2.3, lon: 113.9 }], 'sundaland')[0];
   const angle = surfaceFacingRotation(current.globe);
@@ -118,6 +134,25 @@ test('surface orientation centers high-latitude and dateline event normals, then
     assert.ok(Math.abs(surfaceFacingOrientation(current.globe, 0, .5).pitch) > 0.1 || Math.abs(lat) < 10, `${id} retains a smooth partial tilt during Lift`);
     assert.deepEqual(surfaceFacingOrientation(current.globe, 0, 0), { yaw: 0, pitch: 0 }, 'the geographic tilt disappears at full Lift');
   }
+});
+
+test('local globe orientation cancels the fractional parent rotation while preserving the intended world facing', () => {
+  const multiply = (a, b) => ({
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+  });
+  const yaw = { x: 0, y: Math.sin(.31), z: 0, w: Math.cos(.31) };
+  const pitch = { x: Math.sin(-.22), y: 0, z: 0, w: Math.cos(-.22) };
+  const parent = multiply(pitch, yaw);
+  const drag = { x: 0, y: Math.sin(.12), z: 0, w: Math.cos(.12) };
+  const desiredWorld = multiply(parent, drag);
+  const local = localQuaternionForWorldFacing(parent, desiredWorld);
+  const actualWorld = multiply(parent, local);
+  for (const key of ['x', 'y', 'z', 'w']) assert.ok(Math.abs(actualWorld[key] - desiredWorld[key]) < 1e-12, `${key} component retains the intended world-facing quaternion`);
+  const identityParent = localQuaternionForWorldFacing({ x: 0, y: 0, z: 0, w: 1 }, desiredWorld);
+  for (const key of ['x', 'y', 'z', 'w']) assert.ok(Math.abs(identityParent[key] - desiredWorld[key]) < 1e-12);
 });
 
 test('44 CSS-pixel pin targets and arrow navigation use projected screen coordinates', () => {
@@ -302,4 +337,12 @@ test('terrain transforms stay render-only and align Atlas pins, anchors, routes 
   assert.match(scene, /atlasGroup\.quaternion\.copy\(surfacePitchQuaternion\)\.multiply\(surfaceYawQuaternion\)/, 'latitude and longitude alignment rotate the full Atlas surface together');
   assert.match(scene, /surfacePoint\(parent, fromRadius\).*surfacePoint\(child, markerRadius\)/s, 'causal route arcs use transformed anchors');
   assert.match(scene, /projectGeographyLocation\(\{ lat: rawLat, lon: rawLon \}, geographyTexture\.geography, geographyTexture\.terrain\)/, 'the selected marker is painted at its transformed coordinate');
+  assert.match(scene, /surfaceFacingOrientation\(projectedGlobe\(entry\)\)/, 'each snapshot globe faces its transformed event coordinate');
+  assert.match(scene, /localQuaternionForWorldFacing\(atlasGroup\.quaternion, earthDesiredWorldQuaternion\)/, 'current Earth keeps full event-facing orientation while the shared rig rotates less');
+  assert.match(scene, /facing\.yaw \+ rotation/, 'manual surface rotation stays in the intended world facing');
+  assert.match(scene, /key\.position\.copy\(camera\.position\)/, 'the globe key light follows the camera side');
+  assert.match(scene, /key\.target\.position\.copy\(cameraFocus\)/, 'the moving key light aims at the viewed scene');
+  assert.match(scene, /Root question parent anchored to present-day Earth/);
+  assert.match(scene, /getOrbitQuestionTargets:/, 'the virtual question parent is available to screen-space labels');
+  assert.match(scene, /animateQuestionRefocus && !motionReduced/, 'active question time focus transitions respect reduced motion');
 });

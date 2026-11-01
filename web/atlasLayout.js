@@ -104,6 +104,26 @@ export function transformSurfaceNormal(normal, { yaw = 0, pitch = 0 } = {}) {
   return { x: xYaw, y: yPitch, z: zPitch };
 }
 
+/** Local rotation that makes a child object's world rotation equal the requested orientation. */
+export function localQuaternionForWorldFacing(parentQuaternion, desiredWorldQuaternion) {
+  const normalizeQuaternion = value => {
+    const x = Number(value?.x), y = Number(value?.y), z = Number(value?.z), w = Number(value?.w);
+    const length = Math.hypot(x, y, z, w);
+    return length > 1e-10 && Number.isFinite(length)
+      ? { x: x / length, y: y / length, z: z / length, w: w / length }
+      : { x: 0, y: 0, z: 0, w: 1 };
+  };
+  const parent = normalizeQuaternion(parentQuaternion);
+  const desired = normalizeQuaternion(desiredWorldQuaternion);
+  const inverse = { x: -parent.x, y: -parent.y, z: -parent.z, w: parent.w };
+  return normalizeQuaternion({
+    x: inverse.w * desired.x + inverse.x * desired.w + inverse.y * desired.z - inverse.z * desired.y,
+    y: inverse.w * desired.y - inverse.x * desired.z + inverse.y * desired.w + inverse.z * desired.x,
+    z: inverse.w * desired.z + inverse.x * desired.y - inverse.y * desired.x + inverse.z * desired.w,
+    w: inverse.w * desired.w - inverse.x * desired.x - inverse.y * desired.y - inverse.z * desired.z,
+  });
+}
+
 /** World-space radius that projects to a requested CSS-pixel diameter. */
 export function worldRadiusForScreenPixels(distance, fovDegrees, viewportHeight, pixels = 44) {
   const d = Number(distance), fov = Number(fovDegrees), height = Number(viewportHeight), size = Number(pixels);
@@ -301,13 +321,20 @@ export function layoutAtlasWorlds(worlds = [], currentId = null) {
 export function layoutOrbitNeighborhood(entries = [], currentId) {
   const current = entries.find(entry => entry.id === String(currentId ?? ''));
   if (!current) return new Map();
-  const siblings = entries.filter(entry => entry.id !== current.id && entry.parentId === current.parentId);
+  const isRoot = current.parentId == null;
+  const siblings = entries.filter(entry => entry.id !== current.id && (isRoot
+    ? entry.parentId == null && String(entry.world?.questionId ?? '') === String(current.world?.questionId ?? '')
+    : entry.parentId === current.parentId));
   const children = entries.filter(entry => entry.parentId === current.id).sort((a, b) => {
     const score = entry => Number(entry.world?.provenance?.reviewScore ?? entry.world?.reviewScore ?? entry.world?.score ?? 0);
     return score(b) - score(a) || a.id.localeCompare(b.id);
   });
   const positions = new Map([[current.id, { x: 0, y: 0, z: 0 }]]);
   if (current.parentId != null) positions.set(String(current.parentId), { x: -2.1, y: 0, z: 0 });
+  else if (current.world?.questionId != null) {
+    // Synthetic orbit key; the scene renders this as the active question anchored at present-day Earth.
+    positions.set(`question:${String(current.world.questionId)}`, { x: -2.1, y: 0, z: 0, kind: 'question-parent', questionId: String(current.world.questionId) });
+  }
   const spread = (items, x, spacing) => items.forEach((entry, index) => {
     positions.set(entry.id, { x, y: (index - (items.length - 1) / 2) * spacing, z: 0 });
   });
