@@ -52,7 +52,7 @@ test('Atlas keeps quick zoom visible, moves real view controls into a disclosure
 });
 
 test('Orbit compact panels expose a selected-world card and accessible controls', () => {
-  for (const id of ['atlas-compact-controls', 'atlas-compact-tree', 'atlas-compact-new', 'atlas-world-card', 'atlas-world-title', 'atlas-world-year', 'atlas-world-thumbnail', 'atlas-open-details']) {
+  for (const id of ['atlas-compact-controls', 'atlas-compact-tree', 'atlas-compact-new', 'atlas-world-card', 'atlas-world-title', 'atlas-world-year', 'atlas-world-thumbnail', 'atlas-open-details', 'atlas-close-details']) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(app, /function syncAtlasWorldCard\(/);
@@ -70,6 +70,9 @@ test('Orbit compact panels expose a selected-world card and accessible controls'
   assert.match(css, /width:238px;height:142px;min-height:142px;max-height:none/, 'the compact panel fits its selected-world card without a full-height details area');
   assert.match(css, /body:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel>:not\(\.atlas-world-card\),\s*body:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel>:not\(\.atlas-world-card\)\{display:block;position:absolute;inset:0;overflow:hidden;opacity:0;visibility:hidden/, 'the compact card removes full details from layout while keeping them transitionable');
   assert.match(css, /body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.hero-panel>:not\(\.atlas-world-card\):not\(\[hidden\]\),\s*body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.hero-panel>:not\(\.atlas-world-card\):not\(\[hidden\]\)\{display:block;position:relative;inset:auto;max-height:none;overflow:visible;opacity:1;visibility:visible/, 'Open details restores nonhidden chronicle content for a reverse transition');
+  assert.match(css, /body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.atlas-world-card,\s*body\.atlas-details-open:has\(#atlas-scene\[data-atlas-level="atlas"\]\) \.atlas-world-card\{display:grid;position:absolute;[\s\S]*?opacity:0;visibility:hidden;pointer-events:none/, 'the compact card leaves the visible layout when details open');
+  assert.match(css, /\.atlas-details-close\[hidden\]\{display:none!important\}/, 'the separate details close control only appears while details are open');
+  assert.match(app, /const cardHidden = !compact \|\| detailsOpen \|\| card\.hidden;[\s\S]*card\.inert = cardHidden;[\s\S]*card\.setAttribute\('aria-hidden', String\(cardHidden\)\)/, 'the hidden compact card leaves keyboard and accessibility navigation');
   assert.match(css, /\.atlas-world-card\{display:grid;position:absolute;[\s\S]*?opacity:0;visibility:hidden/, 'the card stays renderable so Orbit can fade it in');
   assert.match(css, /\.atlas-world-card\{display:grid;position:absolute;[\s\S]*?transition:opacity \.12s ease \.12s,transform \.16s ease \.08s,visibility 0s linear \.08s/, 'the card appears after the full details fade away');
   assert.match(css, /width:min\(320px,max\(270px,calc\(34vw - 12px\)\)\)/, 'the clipped rail content matches the rail minimum width and does not reflow at its boundary');

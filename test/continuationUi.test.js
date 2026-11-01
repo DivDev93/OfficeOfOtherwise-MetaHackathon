@@ -551,6 +551,8 @@ test('compact Atlas card follows the selected world and its quick controls updat
   assert.equal(app.get('atlas-world-year').textContent, '500 CE');
   assert.equal(app.get('atlas-world-thumbnail').hidden, false);
   assert.equal(app.get('atlas-world-thumbnail').src, '/runs/compact/hero.png');
+  app.ui.setAtlasLevel('orbit');
+  app.get('atlas-scene').dataset.atlasLevel = 'orbit';
   app.get('atlas-compact-tree').click();
   assert.equal(app.document.body.classList.contains('atlas-panels-open'), true);
   assert.equal(app.get('atlas-compact-tree').getAttribute('aria-expanded'), 'true');
@@ -558,10 +560,21 @@ test('compact Atlas card follows the selected world and its quick controls updat
   assert.equal(app.document.body.classList.contains('atlas-panels-open'), false, 'opening details closes the story-tree sheet');
   assert.equal(app.document.body.classList.contains('atlas-details-open'), true);
   assert.equal(app.get('atlas-open-details').getAttribute('aria-expanded'), 'true');
+  assert.equal(app.get('atlas-world-card').inert, true, 'the compact card leaves the keyboard order while full details are open');
+  assert.equal(app.get('atlas-world-card').getAttribute('aria-hidden'), 'true');
+  assert.equal(app.get('atlas-close-details').hidden, false, 'a separate close action remains in the full-details heading');
+  assert.equal(app.get('atlas-close-details').getAttribute('aria-expanded'), 'true');
+  await new Promise(resolve => setTimeout(resolve, 160));
+  assert.equal(app.get('atlas-close-details').focused, true, 'opening details moves focus to the available close action');
+  app.get('atlas-close-details').click();
+  assert.equal(app.document.body.classList.contains('atlas-details-open'), false, 'the full-details close action returns to compact Orbit');
+  assert.equal(app.get('atlas-close-details').hidden, true);
+  assert.equal(app.get('atlas-open-details').focused, true, 'closing details returns focus to its opener');
+  assert.equal(app.get('atlas-world-card').inert, false, 'the compact card becomes keyboard accessible again');
   app.ui.setAtlasLevel('orbit');
   assert.equal(app.get('atlas-compact-controls').inert, false, 'Orbit exposes the native quick-action buttons to keyboard navigation');
   assert.equal(app.get('atlas-compact-controls').getAttribute('aria-hidden'), 'false');
-  assert.equal(app.get('atlas-world-card').inert, false, 'Orbit exposes the compact card and close-details button');
+  assert.equal(app.get('atlas-world-card').inert, false, 'Orbit exposes the compact card and open-details button');
   app.ui.setAtlasLevel('surface');
   assert.equal(app.document.body.classList.contains('atlas-details-open'), false, 'Surface restores the full panels');
   assert.equal(app.get('atlas-compact-controls').inert, true, 'the hidden compact strip leaves the keyboard tab order at Surface');
@@ -578,6 +591,55 @@ test('compact Atlas card follows the selected world and its quick controls updat
   assert.equal(app.get('atlas-compact-new').getAttribute('aria-expanded'), 'false');
   app.ui.setAtlasLevel('orbit');
   assert.equal(app.get('atlas-compact-controls').inert, false, 'closing the prompt restores compact keyboard controls');
+});
+
+test('details-close focus delay is cancelled on a fast close and rescheduled on reopen', async () => {
+  const fixture = run('compact-focus-reopen', choice);
+  const app = harness({ 'compact-focus-reopen':fixture }); await tick();
+  await app.ui.loadRun('compact-focus-reopen', { animate:false, autoConsequences:false });
+  app.ui.setAtlasLevel('orbit'); app.get('atlas-scene').dataset.atlasLevel = 'orbit';
+  const close = app.get('atlas-close-details');
+  app.get('atlas-open-details').click();
+  close.click();
+  assert.notEqual(close.focused, true, 'a fast close cancels pending focus into the hidden heading');
+  app.get('atlas-open-details').click();
+  await new Promise(resolve => setTimeout(resolve, 160));
+  assert.equal(app.document.body.classList.contains('atlas-details-open'), true);
+  assert.equal(close.focused, true, 'reopening schedules focus after the details heading becomes visible');
+});
+
+test('delayed details focus does not steal focus after the user moves elsewhere', async () => {
+  const fixture = run('compact-focus-respect', choice);
+  const app = harness({ 'compact-focus-respect':fixture }); await tick();
+  await app.ui.loadRun('compact-focus-respect', { animate:false, autoConsequences:false });
+  app.ui.setAtlasLevel('orbit'); app.get('atlas-scene').dataset.atlasLevel = 'orbit';
+  app.document.activeElement = app.get('atlas-open-details');
+  app.get('atlas-open-details').click();
+  app.document.activeElement = app.get('atlas-compact-tree');
+  await new Promise(resolve => setTimeout(resolve, 160));
+  assert.notEqual(app.get('atlas-close-details').focused, true, 'the reveal callback preserves a deliberate move to another control');
+});
+
+test('leaving compact details restores focus to the visible Atlas scene at Surface and Lift', async () => {
+  const fixture = run('compact-focus', choice);
+  const app = harness({ 'compact-focus':fixture }); await tick();
+  await app.ui.loadRun('compact-focus', { animate:false, autoConsequences:false });
+  app.ui.setAtlasLevel('orbit'); app.get('atlas-scene').dataset.atlasLevel = 'orbit';
+
+  app.get('atlas-open-details').click();
+  app.document.activeElement = app.get('atlas-close-details');
+  app.ui.setAtlasLevel('surface'); app.get('atlas-scene').dataset.atlasLevel = 'surface';
+  assert.equal(app.document.body.classList.contains('atlas-details-open'), false);
+  assert.equal(app.get('atlas-close-details').hidden, true);
+  assert.equal(app.get('atlas-scene').focused, true, 'Surface transition moves focus to the persistent, visible scene');
+
+  app.ui.setAtlasLevel('orbit'); app.get('atlas-scene').dataset.atlasLevel = 'orbit';
+  app.get('atlas-open-details').click();
+  app.document.activeElement = app.get('atlas-close-details');
+  app.ui.setAtlasLevel('lift'); app.get('atlas-scene').dataset.atlasLevel = 'lift';
+  assert.equal(app.document.body.classList.contains('atlas-details-open'), false);
+  assert.equal(app.get('atlas-close-details').hidden, true);
+  assert.equal(app.get('atlas-scene').focused, true, 'Lift transition moves focus to the persistent, visible scene');
 });
 
 test('explicit Present-day Earth entry opens a blank attached-question form without dispatching generation', async () => {

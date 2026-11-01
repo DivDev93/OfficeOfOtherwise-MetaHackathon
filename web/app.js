@@ -18,6 +18,7 @@ let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = '
 let atlasActiveQuestionId = '', atlasOtherQuestionsOpen = false, atlasVisibleGraphSignature = '', atlasSourceGraphSignature = '';
 let expansionLimit = 20, serverExpansionUsed = 0, activeExpansion = null, preserveGraphUntilReady = false;
 let atlasGeographyOverride = null;
+let atlasDetailsFocusTimer = null;
 const enteredNodes = new Set();
 const pendingExpansionNodes = new Set();
 function enterNode(runId, branchId) {
@@ -650,7 +651,12 @@ function applyAtlasGeographyLevel(level = 'surface') {
   if (!panel) return;
   const compact = level === 'orbit' || level === 'atlas';
   if (!compact) {
+    if (atlasDetailsFocusTimer !== null) clearTimeout(atlasDetailsFocusTimer);
+    atlasDetailsFocusTimer = null;
+    const detailsClose = $('atlas-close-details');
+    const restoreDetailsFocus = detailsClose && document.activeElement === detailsClose;
     document.body.classList.remove('atlas-details-open', 'atlas-panels-open');
+    if (restoreDetailsFocus) $('atlas-scene')?.focus({ preventScroll:true });
   }
   syncAtlasCompactButtons(level);
   const automatic = level === 'surface' || level === 'lift' || level === 'unknown';
@@ -663,7 +669,8 @@ function applyAtlasGeographyLevel(level = 'surface') {
   syncAtlasWorldCard(level);
 }
 function syncAtlasCompactButtons(level = '') {
-  const tree = $('atlas-compact-tree'), details = $('atlas-open-details'), newExploration = $('atlas-compact-new'), nav = $('atlas-compact-controls');
+  const tree = $('atlas-compact-tree'), details = $('atlas-open-details'), detailsClose = $('atlas-close-details');
+  const newExploration = $('atlas-compact-new'), nav = $('atlas-compact-controls'), card = $('atlas-world-card');
   const currentLevel = level || $('atlas-scene')?.dataset.atlasLevel || '';
   const compact = currentLevel === 'orbit' || currentLevel === 'atlas';
   const panelsOpen = document.body.classList.contains('atlas-panels-open');
@@ -682,6 +689,15 @@ function syncAtlasCompactButtons(level = '') {
   if (details) {
     details.setAttribute('aria-expanded', String(detailsOpen));
     details.textContent = detailsOpen ? 'Close details' : 'Open details';
+  }
+  if (detailsClose) {
+    detailsClose.hidden = !compact || !detailsOpen;
+    detailsClose.setAttribute('aria-expanded', String(detailsOpen));
+  }
+  if (card) {
+    const cardHidden = !compact || detailsOpen || card.hidden;
+    card.inert = cardHidden;
+    card.setAttribute('aria-hidden', String(cardHidden));
   }
   if (newExploration) newExploration.setAttribute('aria-expanded', String(invitationOpen));
 }
@@ -704,9 +720,6 @@ function syncAtlasWorldCard(level = '') {
   thumbnail.alt = sceneUrl ? `Scene thumbnail for ${title}` : '';
   if (sceneUrl) thumbnail.src = sceneUrl;
   card.hidden = !document.body.classList.contains('has-story') || !world;
-  const compact = ['orbit', 'atlas'].includes(level || $('atlas-scene')?.dataset.atlasLevel || '');
-  card.inert = !compact || card.hidden;
-  card.setAttribute('aria-hidden', String(!compact || card.hidden));
   syncAtlasCompactButtons(level);
 }
 function toggleAtlasGeographyPanel() {
@@ -1990,6 +2003,8 @@ $('atlas-show-tree')?.addEventListener('click', () => { setAtlasFocused(false); 
 $('atlas-show-selected')?.addEventListener('click', () => { setAtlasFocused(false); $('chronicle')?.scrollIntoView({ behavior:'smooth', block:'nearest' }); });
 $('atlas-compact-tree')?.addEventListener('click', () => {
   const open = !document.body.classList.contains('atlas-panels-open');
+  if (atlasDetailsFocusTimer !== null) clearTimeout(atlasDetailsFocusTimer);
+  atlasDetailsFocusTimer = null;
   document.body.classList.toggle('atlas-panels-open', open);
   document.body.classList.remove('atlas-details-open');
   syncAtlasCompactButtons();
@@ -2003,9 +2018,28 @@ $('atlas-other-questions')?.addEventListener('click', () => {
 });
 $('atlas-open-details')?.addEventListener('click', () => {
   const open = !document.body.classList.contains('atlas-details-open');
+  if (atlasDetailsFocusTimer !== null) clearTimeout(atlasDetailsFocusTimer);
+  atlasDetailsFocusTimer = null;
   document.body.classList.toggle('atlas-details-open', open);
   if (open) document.body.classList.remove('atlas-panels-open');
-  syncAtlasCompactButtons();
+  syncAtlasWorldCard();
+  if (open) {
+    const opener = $('atlas-open-details');
+    const close = $('atlas-close-details');
+    atlasDetailsFocusTimer = setTimeout(() => {
+      atlasDetailsFocusTimer = null;
+      const active = document.activeElement;
+      const focusStillOnOpener = active === opener || active == null || active === document.body || active === document.documentElement;
+      if (document.body.classList.contains('atlas-details-open') && close && !close.hidden && focusStillOnOpener) close.focus({ preventScroll:true });
+    }, reducedMotion.matches ? 0 : 140);
+  }
+});
+$('atlas-close-details')?.addEventListener('click', () => {
+  if (atlasDetailsFocusTimer !== null) clearTimeout(atlasDetailsFocusTimer);
+  atlasDetailsFocusTimer = null;
+  document.body.classList.remove('atlas-details-open');
+  syncAtlasWorldCard();
+  $('atlas-open-details')?.focus({ preventScroll:true });
 });
 $('show-invitation').addEventListener('click', openNewExploration);
 document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { voice.cancel(); $('prompt').value = b.dataset.prompt; if (b.dataset.run) loadRun(b.dataset.run); else $('prompt').focus(); }));
