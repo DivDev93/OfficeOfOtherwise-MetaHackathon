@@ -472,7 +472,7 @@ export function createWorldLabelCandidates(entries, { currentId, focusedId, proj
       width: size.width, height: size.height,
       priority: Math.max(included ? 85 : 0, labelPriority({ id: entry.id, lineage: entry.lineage }, currentId, focusedId)),
       kind: 'world', fullText,
-      edgeFallback: Boolean(edgeMarkerIncluded && included),
+      edgeFallback: Boolean((edgeMarkerIncluded && included) || entry.id === currentId || entry.lineage),
     });
   }
   return candidates;

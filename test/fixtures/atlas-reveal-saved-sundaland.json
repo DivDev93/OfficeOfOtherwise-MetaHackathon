@@ -1,0 +1,17 @@
+{
+  "questions": [
+    { "id": "q-sunda", "question": "What if lower seas exposed Sundaland?", "divergenceYear": 1650 },
+    { "id": "q-folded", "question": "What if the Sahara remained green?", "divergenceYear": -5000 }
+  ],
+  "worlds": [
+    { "id": "sunda-doggerland", "parentId": null, "questionId": "q-sunda", "year": 1650, "title": "Doggerland Plain Links Britain Europe" },
+    { "id": "sunda-root", "parentId": null, "questionId": "q-sunda", "year": 1800, "title": "Sundaland River Plain Unites Islands", "lat": 3, "lon": 108 },
+    { "id": "sunda-beringia", "parentId": null, "questionId": "q-sunda", "year": 1850, "title": "Beringia Steppe Corridor Stays Open" },
+    { "id": "sunda-naturalists", "parentId": "sunda-root", "questionId": "q-sunda", "year": 1847, "title": "River Naturalists Chart the Plain" },
+    { "id": "sunda-kuching", "parentId": "sunda-root", "questionId": "q-sunda", "year": 1902, "title": "Forest Pharmacy Catalogued in Kuching" },
+    { "id": "sunda-surveys", "parentId": "sunda-root", "questionId": "q-sunda", "year": 1976, "title": "Aerial Canopy Surveys Begin" },
+    { "id": "sunda-canopy", "parentId": "sunda-kuching", "questionId": "q-sunda", "year": 1935, "title": "Canopy Field Notes" },
+    { "id": "folded-sahara", "parentId": null, "questionId": "q-folded", "year": -5000, "title": "Sahara Green Corridor" },
+    { "id": "folded-river", "parentId": "folded-sahara", "questionId": "q-folded", "year": -3000, "title": "River Gardens" }
+  ]
+}

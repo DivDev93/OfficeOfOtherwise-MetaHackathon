@@ -13,6 +13,12 @@ export const ATLAS_TIME_SCALE_LABEL = 'Log distance back from present (2026)';
 export const FUTURE_EXTENSION_WIDTH = 1;
 export const UNDATED_LANE_GAP = 1.25;
 
+/** Center the horizontal axis title under the trunk instead of beside its latest tick. */
+export function timeAxisTitleX(trunk = {}) {
+  const left = Number(trunk.left), right = Number(trunk.right);
+  return Number.isFinite(left) && Number.isFinite(right) ? (left + right) / 2 : 0;
+}
+
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const idOf = world => world?.id == null ? null : String(world.id);
 const safeYear = value => Number.isSafeInteger(Number(value)) && Number(value) !== 0 ? Number(value) : null;

@@ -199,8 +199,12 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: verify crowded Orbit child labels use a visible host when controls block every fallback dock slot. | |
 | 2026-11-01 | Atlas round 3: try broader safe corner radii on settled Atlas routes while retaining crossing and node-clearance checks. | |
 | 2026-11-01 | Atlas round 3: apply axis changes immediately under reduced motion without blanking the canvas; preserve normal animated transitions. | |
+| 2026-11-01 | Atlas round 3: stage connected Atlas route reveals and preserve the prior renderer when transition ancestry or anchors are unavailable. | |
+| 2026-11-01 | Atlas round 3: center the time-axis title and test its separation from nearby date labels. | |
 | 2026-11-01 | Atlas: require visible world anchors before accepting hits from the 44px selection target, preventing clicks through Earth. | |
 | 2026-11-01 | Atlas: reject question-chip hits when Earth is nearer along the actual pointer ray, while keeping Orbit/Atlas chips selectable. Added off-center ray-depth coverage. | |
 | 2026-11-01 | Atlas: add browser-free 64-direction 44px boundary-ray and overlapping-anchor helper math across Orbit/Atlas depths; this does not verify runtime occlusion or ownership. | |
 | 2026-11-01 | Improve concurrent spend-ledger test diagnostics while preserving its reservation assertions. | |
 | 2026-10-31 | Consolidated offline summaries of the captured trace/task cohort and separate single-session fresh-run timing evidence. Public aggregates omit paths, IDs, prompts, hashes, costs and assets; stage spans are application-measured, cache state is unknown, and the observations do not establish provider latency or global reliability. The fresh video candidate and continuous original remain local review artifacts; no publication or submission. | |
+| 2026-11-01 | Atlas: keep unresolved reveal candidates diagnostic-only and leave continuous scene positioning and saved event paths with the legacy renderer; cover missing Orbit anchors and renderer handoff offline. | |
+| 2026-11-01 | Atlas: preserve selected and ancestry labels on narrow settled views by using collision-checked edge slots when local placements are blocked; cover 390px and 375px layouts offline. | |

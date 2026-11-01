@@ -136,6 +136,7 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
     branchProgress = 1,
     fromBranches = null,
     fromStems = null,
+    revealPlan = null,
   } = {}) {
     if (disposed || !nextLayout) return;
     layout = nextLayout; axisMode = nextMode;
@@ -191,14 +192,19 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
       const retainsLineageRoot = (layout.questionRootPaths || []).some(path => path.questionId === branch.questionId && path.color === 'lineage');
       if (!branch.active && foldedQuestionIds.has(String(branch.questionId)) && !retainsLineageRoot) continue;
       if (branch.attachmentMode === 'current-world' && branch.attachment) continue;
+      const questionRootId = `${String.fromCharCode(0)}question-root:${branch.questionId}`;
+      const revealAnchor = revealPlan?.positions.get(questionRootId);
+      if (revealPlan && !revealAnchor) continue;
       const stemKey = questionStemPathKey({ questionId: branch.questionId });
       const stem = stems.get(stemKey);
       if (!stem?.routeShape?.length || stem.foldedChip) continue;
       const prior = oldById.get(branch.questionId);
       const startY = prior ? prior.y : 0;
-      const y = startY + (branch.y - startY) * progress;
-      const from = { x: branch.x, y: layout.trunk.y, z: -0.05 };
-      const to = { x: branch.x, y, z: -0.05 };
+      const y = revealAnchor?.y ?? (startY + (branch.y - startY) * progress);
+      const x = revealAnchor?.x ?? branch.x;
+      const revealAmount = revealPlan ? Math.max(0, Math.min(1, revealPlan.opacity.get(questionRootId) ?? 0)) : 1;
+      const from = { x, y: layout.trunk.y, z: -0.05 };
+      const to = { x, y: layout.trunk.y + (y - layout.trunk.y) * revealAmount, z: -0.05 };
       const previousStem = oldStems.get(stemKey);
       const points = previousStem?.routeShape?.length > 1 && progress < 1
         ? interpolateRoute(from, to, previousStem.routeShape, stem.routeShape, progress,
@@ -230,9 +236,13 @@ export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = 
       const text = `${prefix}${branch.label || branch.questionId}`;
       if (sprite.userData.labelText !== text) replaceLabel(sprite, text, PARCHMENT, { x: 2.45, y: 0.28 });
       setLabelPixels(sprite, branch.active ? 220 : 190, 30, branch.active ? 85 : 35);
+      const rootId = `${String.fromCharCode(0)}question-root:${branch.questionId}`;
+      const planned = revealPlan?.positions.get(rootId);
       const chip = branch.attachmentMode === 'current-world' && !branch.active ? layout.chips.find(item => item.questionId === branch.questionId) : null;
-      sprite.position.set(chip?.x ?? branch.labelX ?? branch.x, chip ? chip.y + 0.36 : branch.labelY ?? (branch.y + 0.34), 0.03);
-      sprite.material.opacity = !branch.active && foldedQuestionIds.has(String(branch.questionId)) ? 0 : alpha;
+      sprite.position.set(chip?.x ?? planned?.x ?? branch.labelX ?? branch.x,
+        chip ? chip.y + 0.36 : planned ? planned.y + 0.34 : branch.labelY ?? (branch.y + 0.34), 0.03);
+      sprite.material.opacity = !branch.active && foldedQuestionIds.has(String(branch.questionId)) ? 0
+        : alpha * (revealPlan ? revealPlan.opacity.get(rootId) ?? 0 : 1);
     });
 
     const tickValues = [];

@@ -119,8 +119,8 @@ test('fading story-sheet bounds join the screen-label collision obstacles', () =
     'only the currently visible sheet rectangle blocks labels, with its computed fade opacity gating the obstacle');
 });
 
-test('Orbit direct-child labels use accessible scroll lanes only in the Orbit neighborhood', () => {
-  assert.match(scene, /const orbitChildEntries = state\.orbit > 0\.3 && state\.atlas < 0\.6[\s\S]*entries\.filter\(entry => entry\.orbitVisible && String\(entry\.parentId\) === String\(currentId\)\)/,
+test('Orbit direct-child labels use accessible scroll lanes only outside the planned reveal', () => {
+  assert.match(scene, /const orbitChildEntries = !revealPlan && state\.orbit > 0\.3 && state\.atlas < 0\.6[\s\S]*entries\.filter\(entry => entry\.orbitVisible && String\(entry\.parentId\) === String\(currentId\)\)/,
     'only currently visible direct children of the selected world enter the lane layout');
   assert.match(scene, /layoutOrbitChildLabels\(orbitLabelCandidates, safeBounds, nodeRects,[\s\S]*placements\.filter\(placement => Number\.isFinite\(placement\.x\)/,
     'visible children first use collision-free positions around their projected nodes; only remaining labels enter lanes');
@@ -167,6 +167,25 @@ test('Orbit direct-child labels use accessible scroll lanes only in the Orbit ne
     'direct children do not get duplicate opportunistic labels while their dedicated lane is active');
   assert.match(scene, /const resize = \(\) => \{[\s\S]*camera\.aspect = width \/ height; camera\.updateProjectionMatrix\(\);\s*updateLayout\(\);\s*applyZoom\(zoom, false\);[\s\S]*new ResizeObserver\(resize\)[\s\S]*observer\?\.observe\(container\)/,
     'every observed container resize recomputes graph layout and projected child-label placement');
+});
+
+test('the live reveal plan coordinates positions, visibility, edges, labels, and pointer targets', () => {
+  assert.match(scene, /planAtlasReveal\(\{ timeline:atlasTimeline, entries, orbitPositions:orbitPositionsById, currentId, zoom \}\)/,
+    'the zoom frame derives one plan from the current timeline and Orbit positions');
+  assert.match(scene, /revealPlan = renderableAtlasRevealPlan\(revealCandidate\);[\s\S]*container\.dataset\.atlasRevealPhase = revealCandidate\?\.phase \|\| 'inactive'[\s\S]*container\.dataset\.atlasRevealStatus = revealCandidate\?\.connectivity\.status \|\| 'inactive'/,
+    'only connected plans take over rendering while unresolved candidates retain accurate diagnostics');
+  assert.match(scene, /plannedCurrent = revealPlan\?\.positions\.get\(currentId\)[\s\S]*earthPosition\.set\(plannedCurrent\.x/,
+    'the selected Earth follows the planned position and remains the active selection');
+  assert.match(scene, /if \(revealPlan\) \{[\s\S]*for \(const route of revealPlan\.activeRoutes\)/,
+    'planned routes replace the legacy full-graph routes during connected reveal');
+  assert.match(scene, /revealPlan\.hitIds[\s\S]*candidates\.delete\(id\)/,
+    'pointer hit candidates follow the same visibility threshold as the drawing');
+  assert.match(scene, /p2Renderer\.update\(atlasTimeline, \{[\s\S]*revealPlan,/,
+    'question-root anchors and labels receive the shared plan');
+  assert.match(p2Renderer, /revealAnchor = revealPlan\?\.positions\.get\(questionRootId\)[\s\S]*if \(revealPlan && !revealAnchor\) continue/,
+    'unrevealed question anchors stay hidden while question stems and folded chips retain their own paths');
+  assert.match(p2Renderer, /ensureSprites\(chipSprites, layout\.chips\.length[\s\S]*sprite\.position\.set\(chip\.x, chip\.y \+ 0\.36, 0\.08\)/,
+    'folded question chips keep their established anchors during the reveal');
 });
 
 test('transition edge opacity is stored per rendered edge while retaining gold and dashed styles', () => {

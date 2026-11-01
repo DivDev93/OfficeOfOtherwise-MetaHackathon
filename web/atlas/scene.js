@@ -6,6 +6,7 @@ import { clusterOpacityAtPresentation, orbitClusteredIdsForPresentation, planWor
 import { containsFanRegion, createFanHitRegion, fanMemberOffsets } from './screenLayout.js';
 import { createLargeClusterPicker, needsPagedClusterPicker, visibleKeyboardNeighborEntries } from './largeClusterPicker.js';
 import { createAtlasP2Renderer } from './p2Renderer.js';
+import { planAtlasReveal, renderableAtlasRevealPlan } from './revealPlanner.js';
 import { interpolateAttachedAtlasEdgeRoute } from './routeMorph.js';
 import { dragModeForZoom, panDeltaForDrag, zoomFromPinch, zoomFromWheel } from './interaction.js';
 import { createOrbitChildLabelLeader, createWorldLabelCandidates, edgeMarker, layoutOrbitChildLabels, placeOrbitFallbackDock, placeOrbitFallbackPanel, placeScreenLabels, projectedSphereDiameterPixels, resolveOrbitFallbackMount, shortQuestionTitle, visibleViewportObstacleRects, viewportObstacleRectsFromCenters, worldLabelText } from './labels.js';
@@ -15,7 +16,7 @@ import {
 } from './p3Travel.js';
 import {
   ATLAS_REAL_SPHERE_LIMIT, AXIS_ANIMATION_MS, AXIS_MODES, PRESENT_DAY_REFERENCE,
-  axisTransitionProgress, buildAtlasTimeline, interpolateAtlasPoint, questionStemPathKey, sampleAtlasEdgePath, transformAtlasEdgeShape,
+  axisTransitionProgress, buildAtlasTimeline, interpolateAtlasPoint, questionStemPathKey, sampleAtlasEdgePath, timeAxisTitleX, transformAtlasEdgeShape,
 } from './p2Atlas.js';
 import {
   ATLAS_LEVEL_MAX, ORBIT_UNFOLDED_LEVEL, SURFACE_LABEL_LEVEL,
@@ -470,7 +471,8 @@ export function createAtlasScene(container, {
   let liveCameraDistance = altitudeForZoom(zoom);
   let clusterPlan = { surface: { visibleIds: [], clusters: [] }, orbit: { visibleIds: [], clusters: [] } };
   const clusterSprites = new Map();
-  let axisMode = 'history-distance', atlasTimeline = null, axisTransition = null;
+  let axisMode = 'history-distance', atlasTimeline = null, axisTransition = null, revealPlan = null;
+  let orbitPositionsById = new Map();
   let travelMode = motionReduced ? 'cut' : 'threads', travelState = null, ghostTrail = GHOST_TRAIL_DEFAULT;
   let travelOpacity = 1, axisFadeOpacity = 1, reducedMotionOpacity = 1;
   let surfaceLabelsLevel = clampAtlasLevel(surfaceLabelLevel), orbitUnfoldLevel = clampAtlasLevel(orbitLevel, ORBIT_UNFOLDED_LEVEL);
@@ -533,6 +535,8 @@ export function createAtlasScene(container, {
   function renderedPinScale(state) { return pinScaleAtPresentation(state.lift, state.atlas); }
   function renderedPinAnchorRadius(state) { return pinAnchorRadiusAtPresentation(surfaceEarthRadius(state), state.lift, state.atlas); }
   function atlasPosition(entry, timestamp = performance.now()) {
+    const planned = revealPlan?.positions.get(entry.id);
+    if (planned) return new THREE.Vector3(planned.x, planned.y, planned.z || 0);
     const target = atlasTimeline?.positions.get(entry.id) || entry.atlas;
     if (!axisTransition) return new THREE.Vector3(target.x, target.y, target.z || 0);
     const start = axisTransition.from.get(entry.id) || target;
@@ -592,6 +596,8 @@ export function createAtlasScene(container, {
     return worldPoint.applyMatrix4(inverse);
   }
   function geographicWorldPosition(entry, state, timestamp = performance.now(), radius = surfaceEarthRadius(state)) {
+    const planned = revealPlan?.positions.get(entry.id);
+    if (planned) return withScreenOffset(new THREE.Vector3(planned.x, planned.y, planned.z || 0), fanOffsets.get(entry.id));
     const surface = surfacePoint(entry, radius).add(earthMesh.position);
     const orbitPosition = entry.orbit || entry.atlas;
     const orbit = new THREE.Vector3(orbitPosition.x, orbitPosition.y, orbitPosition.z);
@@ -599,6 +605,8 @@ export function createAtlasScene(container, {
     return withScreenOffset(point, fanOffsets.get(entry.id));
   }
   function worldPosition(entry, state, timestamp = performance.now(), radius = renderedPinAnchorRadius(state)) {
+    const planned = revealPlan?.positions.get(entry.id);
+    if (planned) return withScreenOffset(new THREE.Vector3(planned.x, planned.y, planned.z || 0), fanOffsets.get(entry.id));
     if (entry.id !== arrivalFromId) return geographicWorldPosition(entry, state, timestamp, radius);
     const orbitPosition = entry.orbit || entry.atlas;
     const orbit = new THREE.Vector3(orbitPosition.x, orbitPosition.y, orbitPosition.z);
@@ -800,6 +808,7 @@ export function createAtlasScene(container, {
       })) : null;
     entries = layoutAtlasWorlds(worlds, currentId);
     const orbitPositions = layoutOrbitNeighborhood(entries, currentId);
+    orbitPositionsById = orbitPositions;
     for (const entry of entries) entry.orbit = orbitPositions.get(entry.id) || entry.atlas;
     const parentIds = new Set(worlds.filter(world => world.parentId != null).map(world => String(world.parentId)));
     for (const entry of entries) entry.explored = entry.world.explored === true || entry.world.hasChildren === true || parentIds.has(entry.id) || entry.world.mapState === 'explored' || entry.world.status === 'explored';
@@ -972,6 +981,14 @@ export function createAtlasScene(container, {
     if (announce) onZoomChange(zoom);
     const presentation = atlasPresentationState(zoom, motionReduced);
     const state = presentation.state;
+    const revealCandidate = zoom >= 0.84 && !travelState && !axisTransition && atlasTimeline && entries.length
+      ? planAtlasReveal({ timeline:atlasTimeline, entries, orbitPositions:orbitPositionsById, currentId, zoom })
+      : null;
+    revealPlan = renderableAtlasRevealPlan(revealCandidate);
+    container.dataset.atlasRevealPhase = revealCandidate?.phase || 'inactive';
+    container.dataset.atlasRevealStatus = revealCandidate?.connectivity.status || 'inactive';
+    renderer.domElement.dataset.atlasRevealPhase = container.dataset.atlasRevealPhase;
+    renderer.domElement.dataset.atlasRevealStatus = container.dataset.atlasRevealStatus;
     const suppressAtlasThreads = Boolean(axisTransition && state.atlas > 0.015);
     document.documentElement.style.setProperty('--atlas-lift', String(state.lift));
     document.documentElement.style.setProperty('--atlas-rail-width', `${320 - 266 * state.lift}px`);
@@ -981,6 +998,8 @@ export function createAtlasScene(container, {
     const currentAtlas = current ? atlasPosition(current, timestamp) : new THREE.Vector3(-1.9, 0, 0);
     const currentOrbit = current ? new THREE.Vector3(current.orbit.x, current.orbit.y, current.orbit.z) : currentAtlas;
     let earthPosition = new THREE.Vector3(0, 0, 0).lerp(currentOrbit, state.lift).lerp(currentAtlas, state.atlas);
+    const plannedCurrent = revealPlan?.positions.get(currentId);
+    if (plannedCurrent) earthPosition.set(plannedCurrent.x, plannedCurrent.y, plannedCurrent.z || 0);
     if (travelState && !travelState.cut) {
       earthPosition = travelEarthPosition(timestamp, state) || earthPosition;
     }
@@ -992,10 +1011,23 @@ export function createAtlasScene(container, {
     currentRing.visible = currentRing.material.opacity > 0.01;
     atmosphere.position.copy(earthMesh.position);
     atmosphere.scale.setScalar(state.earthScale * (1 - 0.12 * state.atlas) * 1.025);
+    const currentQuestionId = String(current?.world?.questionId ?? '');
+    const questionRootRevealId = `${String.fromCharCode(0)}question-root:${currentQuestionId}`;
+    const plannedQuestionAnchor = revealPlan?.positions.get(questionRootRevealId);
     const questionOrbit = orbitQuestionParentPosition
       ? new THREE.Vector3(orbitQuestionParentPosition.x, orbitQuestionParentPosition.y, orbitQuestionParentPosition.z || 0)
       : null;
-    if (questionOrbit) {
+    if (plannedQuestionAnchor) {
+      const alpha = revealPlan.opacity.get(questionRootRevealId) ?? 0;
+      orbitQuestionParent.position.set(plannedQuestionAnchor.x, plannedQuestionAnchor.y, plannedQuestionAnchor.z || 0);
+      orbitQuestionParent.scale.setScalar(0.34 * Math.sqrt(alpha));
+      orbitQuestionParent.visible = alpha > 0.01;
+      orbitQuestionParent.material.opacity = alpha;
+      orbitQuestionHalo.position.copy(orbitQuestionParent.position);
+      orbitQuestionHalo.scale.setScalar(0.34 * Math.sqrt(alpha));
+      orbitQuestionHalo.material.opacity = 0.9 * alpha;
+      orbitQuestionHalo.visible = orbitQuestionParent.visible;
+    } else if (questionOrbit && !revealPlan) {
       orbitQuestionParent.position.set(0, 0, 0).lerp(questionOrbit, state.lift);
       orbitQuestionParent.scale.setScalar(0.34);
       orbitQuestionParent.visible = state.orbit > 0.04;
@@ -1004,6 +1036,8 @@ export function createAtlasScene(container, {
       orbitQuestionHalo.scale.setScalar(0.34);
       orbitQuestionHalo.material.opacity = 0.9 * state.orbit;
       orbitQuestionHalo.visible = orbitQuestionParent.visible;
+    } else if (revealPlan) {
+      orbitQuestionParent.visible = false; orbitQuestionHalo.visible = false;
     }
     applySurfaceOrientation(1 - state.lift, timestamp);
     atlasGroup.updateMatrixWorld(true);
@@ -1043,14 +1077,19 @@ export function createAtlasScene(container, {
     const travellingIds = new Set(travelState?.pathIds || []);
     const atlasSettled = state.atlas >= 0.98;
     const clusteredIds = new Set(orbitClusteredIdsForPresentation(clusterPlan, { atlas: state.atlas, zoom, orbitNeighborhoodIds }));
+    const revealAlpha = id => revealPlan ? (revealPlan.opacity.get(String(id)) ?? 0) : 1;
+    const revealWorldIds = revealPlan ? new Set(revealPlan.visibleIds.filter(id => !String(id).startsWith('\u0000'))) : null;
     const visibleEntries = entries.filter(entry => {
-      if (travellingIds.has(entry.id) || (atlasSettled && folded.has(entry.id)) || clusteredIds.has(entry.id)) return false;
+      if (revealPlan && (!revealWorldIds.has(entry.id) || revealAlpha(entry.id) <= 0.005)) return false;
+      if (travellingIds.has(entry.id) || (atlasSettled && folded.has(entry.id)) || (!revealPlan && clusteredIds.has(entry.id))) return false;
       if (state.surface > 0.15 && zoom < 0.57) return entry.surfaceVisible;
       if (state.orbit > 0.15 && zoom < 0.84) return entry.orbitVisible;
       return true;
     });
     visibleKeyboardWorldIds.clear();
-    for (const entry of visibleEntries) visibleKeyboardWorldIds.add(entry.id);
+    for (const entry of visibleEntries) {
+      if (!revealPlan || revealPlan.hitIds.includes(entry.id)) visibleKeyboardWorldIds.add(entry.id);
+    }
     const sphereLimit = Math.max(0, MAX_SPHERE_INSTANCES - 1); // Reserve one of 24 world spheres for the single current Earth mesh.
     const instanceEntries = visibleEntries.filter(entry => entry.id !== currentId
       && !isGenerationPlaceholderWorld(entry.world)
@@ -1096,7 +1135,7 @@ export function createAtlasScene(container, {
         surfaceYawQuaternion.setFromAxisAngle(surfaceYawAxis, facing.yaw);
         surfacePitchQuaternion.setFromAxisAngle(surfacePitchAxis, facing.pitch);
         dummy.quaternion.copy(surfacePitchQuaternion).multiply(surfaceYawQuaternion);
-        dummy.scale.setScalar(scale);
+        dummy.scale.setScalar(scale * Math.sqrt(revealAlpha(entry.id)));
         dummy.updateMatrix(); mesh.setMatrixAt(index, dummy.matrix);
         mesh.setColorAt(index, instanceColor.copy(worldColor(entry, currentId)).lerp(LIT_TINT, state.atlas * (entry.explored ? 0.58 : 0.06)));
       });
@@ -1110,7 +1149,7 @@ export function createAtlasScene(container, {
     }
 
     const ancestors = ghostTrail ? ancestorIds(currentId).map(id => entries.find(entry => entry.id === id)).filter(Boolean).slice(0, MAX_SPHERE_INSTANCES) : [];
-    ghostPins.visible = ghostTrail && ancestors.length > 0;
+    ghostPins.visible = !revealPlan && ghostTrail && ancestors.length > 0;
     ghostPins.count = ancestors.length;
     ancestors.forEach((entry, index) => {
       const ghostScale = pinScaleAtPresentation(state.lift, state.atlas);
@@ -1131,7 +1170,7 @@ export function createAtlasScene(container, {
       lodIds[index] = entry.id;
       lodIdSet.add(entry.id);
       worldPosition(entry, state, timestamp, surfaceEarthRadius(state) + 0.003).toArray(pointPositions, index * 3);
-      worldColor(entry, currentId).toArray(pointColors, index * 3);
+      worldColor(entry, currentId).lerp(scene.background || MUTED, 1 - revealAlpha(entry.id)).toArray(pointColors, index * 3);
     });
     const pointPositionAttribute = lodPoints.geometry.attributes.position;
     if (!pointPositionAttribute || pointPositionAttribute.array.length !== pointPositions.length) {
@@ -1149,8 +1188,8 @@ export function createAtlasScene(container, {
       const disc = registry.get(entry.id)?.disc;
       if (disc) {
         disc.position.copy(worldPosition(entry, state, timestamp, markerRadius));
-        disc.material.opacity = entry.orbitVisible ? Math.max(state.lift * (1 - state.atlas) * 0.85, state.atlas * (entry.atlasRealSphere ? 0.9 : 0)) : 0;
-        disc.scale.setScalar(0.44 * Math.max(state.lift * (1 - state.atlas), state.atlas * (entry.atlasRealSphere ? 1 : 0)));
+        disc.material.opacity = (entry.orbitVisible ? Math.max(state.lift * (1 - state.atlas) * 0.85, state.atlas * (entry.atlasRealSphere ? 0.9 : 0)) : 0) * revealAlpha(entry.id);
+        disc.scale.setScalar(0.44 * Math.max(state.lift * (1 - state.atlas), state.atlas * (entry.atlasRealSphere ? 1 : 0)) * Math.sqrt(revealAlpha(entry.id)));
       }
       const outline = registry.get(entry.id)?.unenteredOutline;
       if (outline) {
@@ -1161,7 +1200,7 @@ export function createAtlasScene(container, {
           !entry.explored && entry.orbitVisible ? state.orbit : 0,
           atlasPossibility,
         );
-        outline.material.opacity = visibleOutline * 0.92;
+        outline.material.opacity = visibleOutline * 0.92 * revealAlpha(entry.id);
         const distance = outline.position.distanceTo(camera.position);
         // Keep distant Atlas nodes visually distinct without changing their 44px hit targets.
         const diameter = 30 - 16 * state.atlas;
@@ -1184,7 +1223,7 @@ export function createAtlasScene(container, {
         ? memberEntries.reduce((point, entry) => point.add(new THREE.Vector3(entry.orbit.x, entry.orbit.y, entry.orbit.z)), new THREE.Vector3()).multiplyScalar(1 / memberEntries.length)
         : anchor ? new THREE.Vector3(anchor.orbit.x, anchor.orbit.y, anchor.orbit.z) : atlasPoint;
       sprite.position.copy(surfacePoint.lerp(orbitPoint, state.lift).lerp(atlasPoint, state.atlas));
-      const visibleAlpha = clusterOpacityAtPresentation(cluster, cluster.level, state, currentId);
+      const visibleAlpha = revealPlan ? 0 : clusterOpacityAtPresentation(cluster, cluster.level, state, currentId);
       sprite.material.opacity = visibleAlpha;
       const worldCenter = sprite.getWorldPosition(new THREE.Vector3());
       const viewDepth = -worldCenter.applyMatrix4(camera.matrixWorldInverse).z;
@@ -1263,7 +1302,7 @@ export function createAtlasScene(container, {
       lineageBounds,
       reservedRects,
       include: entry => state.orbit > 0.3 && state.atlas < 0.6 && entry.orbitVisible && String(entry.parentId) === String(currentId),
-    });
+    }).filter(candidate => !revealPlan || revealPlan.labelIds.includes(candidate.id));
     const undatedWorldIds = new Set(entries.filter(entry => {
       const year = Number(entry.world?.year);
       return !Number.isSafeInteger(year) || year === 0;
@@ -1366,7 +1405,7 @@ export function createAtlasScene(container, {
       const verticalTitle = axisMode === 'history-distance' ? 'HISTORY DEPTH' : axisMode === 'branch-order' ? 'BRANCH ORDER' : 'THEME';
       const axisGutter = mobileLabels ? 18 : Math.min(138, Math.max(88, labelBounds.height * 0.15));
       candidates.push({ id: 'axis:vertical', text: verticalTitle, x: safeBounds.left + 78, y: safeBounds.top + axisGutter + 10, width: 116, height: 18, priority: 110, kind: 'axis' });
-      const timeAxisPoint = projectPoint(p2Renderer.group.localToWorld(new THREE.Vector3(atlasTimeline?.trunk?.right || 0, (atlasTimeline?.trunk?.y || 0) - 0.5, 0)));
+      const timeAxisPoint = projectPoint(p2Renderer.group.localToWorld(new THREE.Vector3(timeAxisTitleX(atlasTimeline?.trunk), (atlasTimeline?.trunk?.y || 0) - 0.5, 0)));
       candidates.push({ id: 'axis:time', text: 'YEAR', x: timeAxisPoint.x, y: timeAxisPoint.y, width: 46, height: 18, priority: 110, kind: 'axis' });
       if (atlasTimeline?.undatedLane) {
         const undatedPoint = mobileLabels ? {
@@ -1393,7 +1432,7 @@ export function createAtlasScene(container, {
       const point = projectPoint(p2Renderer.presentEarth.getWorldPosition(new THREE.Vector3()));
       if (point.visible) candidates.push({ id: 'present-earth', text: 'Present-day Earth · 2026', ...point, width: Math.min(200, safeBounds.right - safeBounds.left), height: 18, priority: 95, kind: 'world' });
     }
-    const orbitChildEntries = state.orbit > 0.3 && state.atlas < 0.6
+    const orbitChildEntries = !revealPlan && state.orbit > 0.3 && state.atlas < 0.6
       ? entries.filter(entry => entry.orbitVisible && String(entry.parentId) === String(currentId))
       : [];
     const orbitChildIds = new Set(orbitChildEntries.map(entry => entry.id));
@@ -1441,6 +1480,7 @@ export function createAtlasScene(container, {
       element.style.width = `${placement.width}px`;
       element.style.textAlign = 'center';
       element.style.display = 'block';
+      element.style.opacity = revealPlan?.positions.has(placement.id) ? String(revealAlpha(placement.id)) : '1';
       element.style.color = '#ece4d4';
       element.style.fontSize = placement.kind === 'axis' ? '12px' : '12.5px';
       activeLabelIds.add(placement.id);
@@ -1794,12 +1834,29 @@ export function createAtlasScene(container, {
     const edgeVertexOpacity = { lineage: [], proposed: [], question: [], hover: [] };
     const edgeSegmentOpacity = { lineage: [], proposed: [], question: [], hover: [] };
     const allClusteredIds = new Set(orbitClusteredIdsForPresentation(clusterPlan, { atlas: state.atlas, zoom, orbitNeighborhoodIds }));
-    const visibleAtlasIds = new Set(entries.filter(entry => !folded.has(entry.id) && !allClusteredIds.has(entry.id)).map(entry => entry.id));
+    const visibleAtlasIds = new Set(entries.filter(entry => !folded.has(entry.id) && (revealPlan || !allClusteredIds.has(entry.id))
+      && (!revealPlan || revealWorldIds.has(entry.id))).map(entry => entry.id));
     const lineageIds = new Set(atlasTimeline?.lineageIds || []);
     const hoverPathIds = new Set(hoveredId ? [String(hoveredId), ...ancestorIds(hoveredId)] : []);
     const entryById = new Map(entries.map(entry => [entry.id, entry]));
     const questionById = new Map(questions.map(question => [String(question.id), question]));
     const currentParentId = current?.parentId ?? null;
+    if (revealPlan) {
+      for (const route of revealPlan.activeRoutes) {
+        const kind = (lineageIds.has(route.parentId) && lineageIds.has(route.childId))
+          || (route.kind === 'question-root' && route.color === 'lineage') ? 'lineage'
+          : route.kind === 'question-root' ? 'question'
+            : hoverPathIds.has(route.parentId) && hoverPathIds.has(route.childId) ? 'hover' : 'proposed';
+        const alpha = Math.max(0, Math.min(1, Number(route.alpha) || 0));
+        const values = edgePositions[kind];
+        for (let index = 1; index < route.points.length; index++) {
+          const from = route.points[index - 1], to = route.points[index];
+          values.push(from.x, from.y, from.z || 0, to.x, to.y, to.z || 0);
+          edgeVertexOpacity[kind].push(alpha, alpha);
+          edgeSegmentOpacity[kind].push(alpha);
+        }
+      }
+    } else {
     for (const child of entries) {
       if (child.parentId == null) continue;
       const parent = entryById.get(String(child.parentId));
@@ -1929,6 +1986,7 @@ export function createAtlasScene(container, {
         edgeSegmentOpacity[kind].push(alpha);
       }
     }
+    }
     writeEdgeBuffer(threads, new Float32Array(edgePositions.proposed), edgeVertexOpacity.proposed);
     writeEdgeBuffer(hoverThreads, new Float32Array(edgePositions.hover), edgeVertexOpacity.hover);
     writeEdgeBuffer(lineageThreads, new Float32Array(edgePositions.lineage), edgeVertexOpacity.lineage);
@@ -1981,6 +2039,7 @@ export function createAtlasScene(container, {
     p2Renderer.update(atlasTimeline, {
       opacity: state.atlas,
       axisMode,
+      revealPlan,
       branchProgress: axisTransition ? axisTransitionProgress(timestamp - axisTransition.startedAt, AXIS_ANIMATION_MS) : 1,
       fromBranches: axisTransition?.fromTimeline.questionBranches,
       fromStems: axisTransition?.fromTimeline.questionStemPaths,
@@ -2215,6 +2274,10 @@ export function createAtlasScene(container, {
     const currentEarthHit = raycaster.intersectObject(earthMesh, false)[0];
     const occlusionDistance = currentEarthHit?.distance ?? Number.POSITIVE_INFINITY;
     const candidates = new Set([...instanceIds, ...lodIds]);
+    if (revealPlan) {
+      const selectable = new Set(revealPlan.hitIds);
+      for (const id of candidates) if (!selectable.has(id)) candidates.delete(id);
+    }
     if (currentId && !allowEarthBodySelection(zoom)) candidates.add(currentId);
     const byId = new Map(worlds.map(world => [stableWorldId(world), world]));
     const cameraPosition = camera.getWorldPosition(new THREE.Vector3());
@@ -2327,6 +2390,7 @@ export function createAtlasScene(container, {
   }
 
   function hitPagedClusterCandidate(event) {
+    if (revealPlan) return null;
     const containerBounds = container.getBoundingClientRect();
     const hit = largeClusterPicker?.hitTestCandidate(event.clientX - containerBounds.left, event.clientY - containerBounds.top) || null;
     if (!hit?.cluster) return null;
@@ -2340,6 +2404,7 @@ export function createAtlasScene(container, {
   }
 
   function hitClusterTarget(event, { excludePaged = false } = {}) {
+    if (revealPlan) return null;
     const bounds = eventPoint(event);
     const active = [...clusterSprites.values()].filter(sprite => sprite.visible && sprite.material.opacity > 0.05);
     const earthDistance = raycaster.intersectObject(earthMesh, false)[0]?.distance ?? Number.POSITIVE_INFINITY;

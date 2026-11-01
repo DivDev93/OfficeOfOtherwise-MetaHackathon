@@ -536,6 +536,41 @@ test('current world label clears the projected globe radius and prefers an open 
   assert.ok(label.y + label.height / 2 < globe.y - globe.height / 2, 'the label sits above the globe silhouette');
 });
 
+test('selected and ancestry labels reach safe phone edge slots when settled Atlas obstacles block local placement', () => {
+  for (const width of [390, 375]) {
+    const safe = { left:10, top:8, right:width - 10, bottom:560 };
+    const controls = [
+      { x:width / 2, y:48, width:width - 30, height:80 },
+      { x:width / 2, y:290, width:160, height:300 },
+    ];
+    const nodes = [
+      { x:width / 2, y:300, width:64, height:64 },
+      { x:width / 2 + 62, y:264, width:44, height:44 },
+    ];
+    const candidates = createWorldLabelCandidates([
+      { id:'selected', world:{ title:'Leaf possibility', year:1900 } },
+      { id:'parent', world:{ title:'Parent possibility', year:1880 }, lineage:true },
+    ], {
+      currentId:'selected',
+      project:entry => ({ x:entry.id === 'selected' ? width / 2 : width / 2 + 62,
+        y:entry.id === 'selected' ? 300 : 264, visible:true }),
+      measure:text => ({ width:190, height:18 }),
+      bounds:safe,
+    });
+    assert.ok(candidates.every(candidate => candidate.edgeFallback), `${width}px marks the selected ancestry for fallback`);
+    const placed = placeScreenLabels(candidates, safe, nodes, controls);
+    assert.deepEqual(new Set(placed.map(label => label.id)), new Set(['selected', 'parent']), `${width}px keeps both selected lineage labels`);
+    assert.ok(placed.every(label => label.edgeFallbackPlacement), `${width}px moves the blocked labels to a visible edge slot`);
+    assert.ok(placed.every(label => label.x - label.width / 2 >= safe.left && label.x + label.width / 2 <= safe.right
+      && label.y - label.height / 2 >= safe.top && label.y + label.height / 2 <= safe.bottom));
+    for (const label of placed) {
+      assert.ok(![...nodes, ...controls, ...placed.filter(other => other !== label)].some(other =>
+        Math.abs(other.x - label.x) < (other.width + label.width) / 2 + 3
+        && Math.abs(other.y - label.y) < (other.height + label.height) / 2 + 3), `${width}px label ${label.id} clears nodes, controls, and peer labels`);
+    }
+  }
+});
+
 test('390x844 labels stay inside the mobile safe viewport above a bottom sheet and axis controls', () => {
   const safeBounds = { left: 10, top: 8, right: 380, bottom: 560 };
   const bottomSheet = { x: 195, y: 707, width: 390, height: 274 };
