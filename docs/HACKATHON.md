@@ -133,3 +133,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-10-31 | Atlas polish: changed the arrival thread to a direct, stretching path to avoid a globe-sized halo. | |
 | 2026-10-31 | Atlas polish: expanded the active timeline in context, placed question chips on the trunk, and added miniature Earth sprites with focus transition tests. | |
 | 2026-10-31 | Atlas polish: oriented world snapshots toward their event coordinates and added the root question and sibling branches to Orbit. | |
+| 2026-10-31 | Atlas polish: integrated responsive camera framing, accessible controls and screen-space labels, preserved lineage colours, and culled far-side labels on Surface. | |

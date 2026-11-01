@@ -2,9 +2,11 @@ import * as THREE from 'three';
 import { defaultWorldImageUrl } from './imageRefs.js';
 import { createWorldTextureFactory } from './worldTextures.js';
 import { projectGeographyLocation } from '../terrainRaster.js';
-import { planWorldClusters } from './clusters.js';
+import { clusterOpacityAtPresentation, orbitClusteredIdsForPresentation, planWorldClusters } from './clusters.js';
 import { containsFanRegion, createFanHitRegion, fanMemberOffsets } from './screenLayout.js';
 import { createAtlasP2Renderer } from './p2Renderer.js';
+import { dragModeForZoom, panDeltaForDrag, zoomFromPinch, zoomFromWheel } from './interaction.js';
+import { createWorldLabelCandidates, placeScreenLabels, projectedSphereDiameterPixels, worldLabelText } from './labels.js';
 import {
   GHOST_TRAIL_DEFAULT, arrivalParentWorldId, cutTravelOpacity, interpolateTravelPoint, preservesTravelSource, smoothTravelProgress, travelZoomAt,
   lineageTravelPath, sampleLineagePath, travelDuration,
@@ -21,7 +23,7 @@ import {
   layoutAtlasWorlds, layoutOrbitNeighborhood, measuredFps, surfaceFacingOrientation,
   worldRadiusForScreenPixels, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds, slerpUnitVector,
   cappedTextureSize, allowEarthBodySelection, fitCameraDistance,
-  appendContinuousFrame, stableWorldId, clampScreenRectCenter, isSurfaceNormalVisible,
+  appendContinuousFrame, stableWorldId, localQuaternionForWorldFacing, isSurfaceNormalVisible,
 } from '../atlasLayout.js';
 
 const GOLD = new THREE.Color('#d5a85c');
@@ -34,6 +36,64 @@ const MAX_GOLD_EDGE_SEGMENTS = 256;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const DIM_UNENTERED = new THREE.Color('#4d6870');
 const LIT_EARTH = new THREE.Color('#e6e0ce');
+
+/** Map a point in an orthographic globe disk to the local equirectangular Earth texture. */
+export function orthographicEarthTextureUv(x, y) {
+  const screenX = Number(x), screenY = Number(y);
+  if (![screenX, screenY].every(Number.isFinite)) return null;
+  const radiusSquared = screenX * screenX + screenY * screenY;
+  if (radiusSquared > 1) return null;
+  const forward = Math.sqrt(Math.max(0, 1 - radiusSquared));
+  const latitude = Math.asin(Math.max(-1, Math.min(1, screenY)));
+  // The Atlas globe's +Z camera view is centered on longitude -90 degrees.
+  const longitude = -Math.PI / 2 + Math.atan2(screenX, forward);
+  return {
+    u: ((longitude + Math.PI) / (2 * Math.PI) + 1) % 1,
+    v: 0.5 - latitude / Math.PI,
+  };
+}
+
+export function isGenerationPlaceholderWorld(world = {}) {
+  return world?.isExpansionPlaceholder === true || world?.role === 'generation-placeholder'
+    || (world?.mapState === 'generating' && world?.selectable === false);
+}
+
+function createOrthographicEarthPointTexture(image, edge = 128) {
+  const width = Number(image?.naturalWidth || image?.width), height = Number(image?.naturalHeight || image?.height);
+  if (!image || !(width > 0 && height > 0)) return null;
+  try {
+    const source = document.createElement('canvas'); source.width = width; source.height = height;
+    const sourceContext = source.getContext('2d', { willReadFrequently: true });
+    sourceContext.drawImage(image, 0, 0, width, height);
+    const pixels = sourceContext.getImageData(0, 0, width, height).data;
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = edge;
+    const context = canvas.getContext('2d');
+    const projected = context.createImageData(edge, edge);
+    const radius = edge / 2 - 1;
+    for (let y = 0; y < edge; y++) for (let x = 0; x < edge; x++) {
+      const nx = ((x + 0.5) / edge) * 2 - 1, ny = 1 - ((y + 0.5) / edge) * 2;
+      const uv = orthographicEarthTextureUv(nx, ny);
+      if (!uv) continue;
+      const sourceX = Math.min(width - 1, Math.floor(uv.u * width));
+      const sourceY = Math.min(height - 1, Math.floor(uv.v * height));
+      const from = (sourceY * width + sourceX) * 4, to = (y * edge + x) * 4;
+      const radial = Math.hypot(nx, ny);
+      const coverage = Math.max(0, Math.min(1, (1 - radial) * radius + 0.5));
+      const rim = radial > 0.92 ? 0.74 : 1;
+      projected.data[to] = pixels[from] * rim * 0.82;
+      projected.data[to + 1] = pixels[from + 1] * rim * 0.82;
+      projected.data[to + 2] = pixels[from + 2] * rim * 0.82;
+      projected.data[to + 3] = pixels[from + 3] * coverage;
+    }
+    context.putImageData(projected, 0, 0);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    return texture;
+  } catch {
+    return null;
+  }
+}
 
 function worldColor(entry, currentId) {
   const world = entry.world || {};
@@ -85,20 +145,21 @@ function imageForWorld(world, selected = false, resolver = defaultWorldImageUrl)
   return resolver?.(world, { selected }) || null;
 }
 
-function createWorldLabel(world, isCurrent = false, isArrivedFrom = false) {
-  const canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 128;
-  const context = canvas.getContext('2d');
-  context.fillStyle = 'rgba(4, 14, 19, 0.88)';
-  context.beginPath(); context.roundRect(2, 2, 636, 124, 20); context.fill();
-  context.strokeStyle = isCurrent ? 'rgba(213, 168, 92, 0.88)' : 'rgba(155, 208, 221, 0.44)'; context.lineWidth = 3; context.stroke();
-  context.fillStyle = '#f2ead9'; context.font = '600 40px "Cormorant Garamond", Georgia, serif';
-  const title = String(world.title || 'Untitled possibility').slice(0, 38);
-  context.fillText(title, 20, 57, 598);
-  context.fillStyle = isCurrent ? '#efce8b' : '#9cc7d5'; context.font = '22px Inter, system-ui, sans-serif';
-  const year = world.year == null ? 'Undated possibility' : String(world.year);
-  context.fillText(isCurrent ? `YOU ARE HERE · ${year}` : isArrivedFrom ? `ARRIVED FROM · ${year}` : year, 20, 99, 598);
-  const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
+function createWorldLabel(world) {
+  const element = document.createElement('span');
+  element.className = 'atlas-screen-label atlas-world-label';
+  element.textContent = worldLabelText(world);
+  element.setAttribute('role', 'note');
+  element.setAttribute('aria-label', worldLabelText(world));
+  element.title = worldLabelText(world);
+  Object.assign(element.style, {
+    position: 'absolute', display: 'none', transform: 'translate(-50%, -50%)',
+    pointerEvents: 'none', whiteSpace: 'nowrap', maxWidth: 'min(320px, 70vw, 100%)', boxSizing: 'border-box',
+    overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'Inter, system-ui, sans-serif',
+    fontSize: '12.5px', fontWeight: '500', lineHeight: '16px', letterSpacing: '0.01em',
+    color: '#ece4d4', textShadow: '0 1px 4px #07121a, 0 0 8px #07121a',
+  });
+  return element;
 }
 
 function createDashedOutlineTexture() {
@@ -123,6 +184,7 @@ export function createAtlasScene(container, {
   onQuestionPreview = () => {},
   onQuestionEnter = () => {},
   onMetrics = () => {},
+  onZoomChange = () => {},
   onLevelChange = () => {},
   resolveWorldImageUrl = defaultWorldImageUrl,
   basemapUrl = '/assets/earth-blue-marble.jpg',
@@ -152,10 +214,20 @@ export function createAtlasScene(container, {
   renderer.domElement.style.width = '100%';
   renderer.domElement.style.height = '100%';
   container.append(renderer.domElement);
+  const labelOverlay = document.createElement('div');
+  labelOverlay.className = 'atlas-screen-label-overlay';
+  labelOverlay.setAttribute('role', 'group');
+  labelOverlay.setAttribute('aria-label', 'Atlas labels');
+  Object.assign(labelOverlay.style, {
+    position: 'absolute', inset: '0', overflow: 'hidden', pointerEvents: 'none',
+    zIndex: '2', fontFamily: 'Inter, system-ui, sans-serif',
+  });
+  container.append(labelOverlay);
+  const auxiliaryLabels = new Map();
 
   scene.add(new THREE.HemisphereLight(0xc5e7ed, 0x102027, 1.55));
   const key = new THREE.DirectionalLight(0xfff1d2, 2.1);
-  key.position.set(-3, 5, 7); scene.add(key);
+  key.position.set(-3, 5, 7); scene.add(key); scene.add(key.target);
   const fill = new THREE.DirectionalLight(0x75c8e5, 0.72);
   fill.position.set(5, -2, -4); scene.add(fill);
 
@@ -168,6 +240,8 @@ export function createAtlasScene(container, {
   currentEarthTexture.colorSpace = THREE.SRGBColorSpace;
   const miniTextureByWorldId = new Map();
   const texturePinMeshes = new Map();
+  let atlasPointTexture = null;
+  let lodPointMaterial = null;
   const worldTextureFactory = createWorldTextureFactory({
     onReady: result => {
       if (disposed) return;
@@ -190,6 +264,12 @@ export function createAtlasScene(container, {
     basemapImage = cappedTextureImage(image.image, 2048);
     earthTexture.image = basemapImage; earthTexture.needsUpdate = true;
     miniEarthTexture.image = cappedTextureImage(basemapImage, 512); miniEarthTexture.needsUpdate = true;
+    atlasPointTexture?.dispose();
+    atlasPointTexture = createOrthographicEarthPointTexture(basemapImage);
+    if (lodPointMaterial) {
+      lodPointMaterial.map = atlasPointTexture;
+      lodPointMaterial.needsUpdate = true;
+    }
     p2Renderer.setBaseTexture(earthTexture);
     updateLayout(); drawCurrentMarker(); applyZoom(zoom, false);
   });
@@ -204,6 +284,15 @@ export function createAtlasScene(container, {
   );
   currentRing.name = 'Current world gold ring'; currentRing.visible = false; atlasGroup.add(currentRing);
   const p2Renderer = createAtlasP2Renderer(scene, { earthGeometry, earthMaterial });
+  const orbitQuestionParent = new THREE.Mesh(earthGeometry, new THREE.MeshStandardMaterial({ map: miniEarthTexture, color: '#ffffff', roughness: 0.9, metalness: 0.02, transparent: true, depthWrite: false }));
+  orbitQuestionParent.name = 'Root question parent anchored to present-day Earth';
+  orbitQuestionParent.userData.atlasQuestionParent = true;
+  orbitQuestionParent.visible = false; atlasGroup.add(orbitQuestionParent);
+  const orbitQuestionHalo = new THREE.Mesh(
+    new THREE.TorusGeometry(1.12, 0.045, 10, 48),
+    new THREE.MeshBasicMaterial({ color: '#eadfca', transparent: true, opacity: 0.9, depthWrite: false }),
+  );
+  orbitQuestionHalo.name = 'Root question parent parchment halo'; orbitQuestionHalo.visible = false; atlasGroup.add(orbitQuestionHalo);
   const atmosphere = new THREE.Mesh(new THREE.SphereGeometry(1.025, 48, 32), new THREE.MeshBasicMaterial({ color: '#69cde2', transparent: true, opacity: 0.085, side: THREE.BackSide, depthWrite: false }));
   atlasGroup.add(atmosphere);
 
@@ -237,8 +326,8 @@ export function createAtlasScene(container, {
   const pointPositions = new Float32Array(0), pointColors = new Float32Array(0);
   pointGeometry.setAttribute('position', new THREE.BufferAttribute(pointPositions, 3));
   pointGeometry.setAttribute('color', new THREE.BufferAttribute(pointColors, 3));
-  const pointMaterial = new THREE.PointsMaterial({ size: 4.2, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.92, depthWrite: false });
-  const lodPoints = new THREE.Points(pointGeometry, pointMaterial);
+  lodPointMaterial = new THREE.PointsMaterial({ size: 4.2, sizeAttenuation: false, map: atlasPointTexture, alphaTest: 0.08, vertexColors: true, transparent: true, opacity: 0.92, depthWrite: false });
+  const lodPoints = new THREE.Points(pointGeometry, lodPointMaterial);
   lodPoints.frustumCulled = false; atlasGroup.add(lodPoints);
 
   const threadGeometry = new THREE.BufferGeometry();
@@ -264,6 +353,8 @@ export function createAtlasScene(container, {
   const dummy = new THREE.Object3D();
   const surfaceYawAxis = new THREE.Vector3(0, 1, 0), surfacePitchAxis = new THREE.Vector3(1, 0, 0);
   const surfaceYawQuaternion = new THREE.Quaternion(), surfacePitchQuaternion = new THREE.Quaternion();
+  const earthFacingYawQuaternion = new THREE.Quaternion(), earthFacingPitchQuaternion = new THREE.Quaternion();
+  const earthDesiredWorldQuaternion = new THREE.Quaternion();
   const goldCylinderUp = new THREE.Vector3(0, 1, 0);
   const goldSegmentStart = new THREE.Vector3(), goldSegmentEnd = new THREE.Vector3(), goldSegmentDirection = new THREE.Vector3();
   const goldSegmentWorldMidpoint = new THREE.Vector3(), goldCameraWorldPosition = new THREE.Vector3();
@@ -284,8 +375,11 @@ export function createAtlasScene(container, {
   let hoveredId = null, hoveredQuestionId = null, hoveredReference = false, hoveredClusterId = null, disposed = false, lastMetricAt = 0, lastLevel = '', raf = 0;
   const expandedQuestionIds = new Set();
   let fanOffsets = new Map(), fanRegion = null;
+  let orbitQuestionParentPosition = null, orbitQuestionParentQuestion = null;
   let stageFrameLevel = '', stageFrameWindow = [];
-  let drag = null;
+  let drag = null, pinchGesture = null;
+  const activePointers = new Map();
+  const panOffset = new THREE.Vector2();
 
   camera.position.set(0, 0, altitudeForZoom(zoom));
   camera.lookAt(0, 0, 0);
@@ -449,6 +543,11 @@ export function createAtlasScene(container, {
     surfaceYawQuaternion.setFromAxisAngle(surfaceYawAxis, yaw);
     surfacePitchQuaternion.setFromAxisAngle(surfacePitchAxis, pitch);
     atlasGroup.quaternion.copy(surfacePitchQuaternion).multiply(surfaceYawQuaternion);
+    earthFacingYawQuaternion.setFromAxisAngle(surfaceYawAxis, facing.yaw + rotation);
+    earthFacingPitchQuaternion.setFromAxisAngle(surfacePitchAxis, facing.pitch);
+    earthDesiredWorldQuaternion.copy(earthFacingPitchQuaternion).multiply(earthFacingYawQuaternion);
+    const earthLocalFacing = localQuaternionForWorldFacing(atlasGroup.quaternion, earthDesiredWorldQuaternion);
+    earthMesh.quaternion.set(earthLocalFacing.x, earthLocalFacing.y, earthLocalFacing.z, earthLocalFacing.w);
   }
 
   function atlasFrameBounds() {
@@ -529,10 +628,7 @@ export function createAtlasScene(container, {
 
   function disposeWorldRecord(record) {
     if (!record) return;
-    if (record.label) {
-      atlasGroup.remove(record.label);
-      record.label.material.map?.dispose(); record.label.material.dispose();
-    }
+    record.label?.remove?.();
     if (record.disc) {
       atlasGroup.remove(record.disc);
       record.disc.material.map?.dispose(); record.disc.material.dispose();
@@ -540,13 +636,28 @@ export function createAtlasScene(container, {
     if (record.unenteredOutline) { atlasGroup.remove(record.unenteredOutline); record.unenteredOutline.material.dispose(); }
   }
 
-  function updateLayout() {
+  function updateLayout({ animateQuestionRefocus = false, timestamp = performance.now() } = {}) {
+    const fromTimeline = atlasTimeline;
+    const priorQuestionId = fromTimeline?.activeQuestionId || null;
+    const from = animateQuestionRefocus && priorQuestionId
+      ? new Map(entries.map(entry => {
+        const point = atlasPosition(entry, timestamp);
+        return [entry.id, { x: point.x, y: point.y, z: point.z }];
+      })) : null;
     entries = layoutAtlasWorlds(worlds, currentId);
     const orbitPositions = layoutOrbitNeighborhood(entries, currentId);
     for (const entry of entries) entry.orbit = orbitPositions.get(entry.id) || entry.atlas;
     const parentIds = new Set(worlds.filter(world => world.parentId != null).map(world => String(world.parentId)));
     for (const entry of entries) entry.explored = entry.world.explored === true || entry.world.hasChildren === true || parentIds.has(entry.id) || entry.world.mapState === 'explored' || entry.world.status === 'explored';
     const current = currentEntry();
+    const questionId = current?.parentId == null ? String(current?.world?.questionId ?? '') : '';
+    orbitQuestionParentQuestion = questionId ? questions.find(question => String(question.id) === questionId)
+      || { id: questionId, question: questionId } : null;
+    orbitQuestionParentPosition = questionId ? orbitPositions.get(`question:${questionId}`) || null : null;
+    orbitQuestionParent.userData.questionId = questionId || '';
+    orbitQuestionParent.userData.question = orbitQuestionParentQuestion;
+    orbitQuestionParent.visible = Boolean(orbitQuestionParentPosition && orbitQuestionParentQuestion);
+    orbitQuestionHalo.visible = orbitQuestionParent.visible;
     const currentFacing = current ? surfaceFacingOrientation(projectedGlobe(current)) : { yaw: 0, pitch: 0 };
     surfaceFacingAngle = currentFacing.yaw;
     surfaceFacingPitch = currentFacing.pitch;
@@ -555,10 +666,15 @@ export function createAtlasScene(container, {
     if (record) record.object = earthMesh;
     const surfaceLabels = selectSurfaceWorldLabelIds(worlds, currentId, surfaceLabelsLevel, arrivalFromId, ghostTrail ? ancestorIds(currentId) : []);
     clusterPlan = planWorldClusters(worlds, currentId, { surfaceLabelLevel: surfaceLabelsLevel, orbitLevel: orbitUnfoldLevel, hoveredClusterId });
+    const rootSiblings = current?.parentId == null && current?.world?.questionId != null
+      ? entries.filter(entry => entry.parentId == null && entry.id !== currentId
+        && String(entry.world?.questionId ?? '') === String(current.world.questionId)
+        && orbitPositions.has(entry.id)).map(entry => entry.id)
+      : [];
     const neighborhoodIds = new Set([
       currentId,
       ...(current?.parentId != null ? [current.parentId] : []),
-      ...entries.filter(entry => entry.id !== currentId && entry.parentId === current?.parentId).map(entry => entry.id),
+      ...(current?.parentId == null ? rootSiblings : entries.filter(entry => entry.id !== currentId && entry.parentId === current?.parentId).map(entry => entry.id)),
       ...entries.filter(entry => entry.parentId === currentId).map(entry => entry.id),
     ].filter(Boolean));
     orbitNeighborhoodIds = neighborhoodIds;
@@ -566,27 +682,18 @@ export function createAtlasScene(container, {
     const visibleOrbit = new Set([...plannedOrbit].filter(id => neighborhoodIds.has(id)));
     if (currentId) visibleOrbit.add(currentId);
     if (current?.parentId != null) visibleOrbit.add(String(current.parentId));
+    for (const id of rootSiblings) visibleOrbit.add(id);
     const visibleSurface = new Set(clusterPlan.surface.visibleIds);
     for (const entry of entries) {
       const worldRecord = registry.get(entry.id);
       if (worldRecord) {
         worldRecord.object = entry.id === currentId ? earthMesh : null;
-        const isCurrent = entry.id === currentId, isArrival = entry.id === arrivalFromId;
-        const labelKey = `${entry.id}|${entry.world.title || ''}|${entry.world.year ?? ''}|${isCurrent ? 'current' : isArrival ? 'arrival' : 'world'}`;
+        const labelText = worldLabelText(entry.world);
         if (!worldRecord.label) {
-          const texture = createWorldLabel(entry.world, isCurrent, isArrival);
-          // Horizon visibility is handled at the geographic anchor; the billboard must
-          // stay readable rather than intersecting the curved surface while panning.
-          const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false, opacity: 0 });
-          worldRecord.label = new THREE.Sprite(material);
-          worldRecord.label.scale.set(0.3, 0.05, 1);
-          worldRecord.label.userData.labelKey = labelKey;
-          atlasGroup.add(worldRecord.label);
-        } else if (worldRecord.label.material.map && worldRecord.label.userData.labelKey !== labelKey) {
-          worldRecord.label.material.map.dispose();
-          worldRecord.label.material.map = createWorldLabel(entry.world, isCurrent, isArrival);
-          worldRecord.label.material.needsUpdate = true;
-          worldRecord.label.userData.labelKey = labelKey;
+          worldRecord.label = createWorldLabel(entry.world);
+          labelOverlay.append(worldRecord.label);
+        } else if (worldRecord.label.textContent !== labelText) {
+          worldRecord.label.textContent = labelText;
         }
         const sceneSource = imageForWorld(entry.world, entry.id === currentId, resolveWorldImageUrl);
         if (entry.id !== currentId && sceneSource) {
@@ -613,10 +720,10 @@ export function createAtlasScene(container, {
       entry.surfaceLabel = surfaceLabels.has(entry.id) || Boolean(clusterPlan.surface.fannedClusterId && visibleSurface.has(entry.id));
       entry.surfaceVisible = entry.current || visibleSurface.has(entry.id) || entry.id === arrivalFromId;
       entry.orbitVisible = visibleOrbit.has(entry.id) || entry.current;
-      if (!entry.explored && entry.world.selectable !== false) {
+      if (entry.id !== currentId && entry.world.selectable !== false) {
         if (!worldRecord.unenteredOutline) {
           const material = new THREE.SpriteMaterial({ map: unenteredOutlineTexture, color: '#87d9ed', transparent: true, depthWrite: false, opacity: 0 });
-          worldRecord.unenteredOutline = new THREE.Sprite(material); worldRecord.unenteredOutline.name = 'Dim unentered world dashed outline';
+          worldRecord.unenteredOutline = new THREE.Sprite(material); worldRecord.unenteredOutline.name = 'Dim Atlas possibility dashed outline';
           atlasGroup.add(worldRecord.unenteredOutline);
         }
       } else if (worldRecord.unenteredOutline) {
@@ -668,6 +775,10 @@ export function createAtlasScene(container, {
     nextThreadGeometry.computeBoundingSphere();
     threads.geometry = nextThreadGeometry; threads.computeLineDistances();
     refreshAtlasTimeline();
+    if (animateQuestionRefocus && !motionReduced && priorQuestionId
+      && atlasTimeline?.activeQuestionId && atlasTimeline.activeQuestionId !== priorQuestionId) {
+      axisTransition = { from: from || new Map(), to: atlasTimeline, fromTimeline, startedAt: timestamp };
+    }
   }
 
   function writePositionBuffer(line, positions) {
@@ -684,8 +795,14 @@ export function createAtlasScene(container, {
 
   function applyZoom(value, announce = true, timestamp = performance.now()) {
     zoom = clamp(Number(value) || 0, 0, 1);
+    const zoomStage = stageForZoom(zoom);
+    container.dataset.atlasLevel = zoomStage;
+    renderer.domElement.dataset.atlasLevel = zoomStage;
+    if (announce) onZoomChange(zoom);
     const presentation = atlasPresentationState(zoom, motionReduced);
     const state = presentation.state;
+    document.documentElement.style.setProperty('--atlas-lift', String(state.lift));
+    document.documentElement.style.setProperty('--atlas-rail-width', `${320 - 266 * state.lift}px`);
     reducedMotionOpacity = presentation.opacity;
     updateCanvasOpacity();
     const current = currentEntry();
@@ -703,20 +820,48 @@ export function createAtlasScene(container, {
     currentRing.visible = currentRing.material.opacity > 0.01;
     atmosphere.position.copy(earthMesh.position);
     atmosphere.scale.setScalar(state.earthScale * (1 - 0.12 * state.atlas) * 1.025);
+    const questionOrbit = orbitQuestionParentPosition
+      ? new THREE.Vector3(orbitQuestionParentPosition.x, orbitQuestionParentPosition.y, orbitQuestionParentPosition.z || 0)
+      : null;
+    if (questionOrbit) {
+      orbitQuestionParent.position.set(0, 0, 0).lerp(questionOrbit, state.lift);
+      orbitQuestionParent.scale.setScalar(0.34);
+      orbitQuestionParent.visible = state.orbit > 0.04;
+      orbitQuestionParent.material.opacity = state.orbit;
+      orbitQuestionHalo.position.copy(orbitQuestionParent.position);
+      orbitQuestionHalo.scale.setScalar(0.34);
+      orbitQuestionHalo.material.opacity = 0.9 * state.orbit;
+      orbitQuestionHalo.visible = orbitQuestionParent.visible;
+    }
     applySurfaceOrientation(1 - state.lift, timestamp);
     atlasGroup.updateMatrixWorld(true);
     const frame = atlasFrameBounds();
     const atlasCenter = new THREE.Vector3((frame.left + frame.right) / 2, (frame.bottom + frame.top) / 2, 0);
     const cameraFocus = travelState && !travelState.cut ? earthMesh.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3().lerp(atlasCenter, state.atlas);
+    cameraFocus.x += panOffset.x; cameraFocus.y += panOffset.y;
     liveCameraDistance = state.cameraDistance + (fittedAtlasDistance() - state.cameraDistance) * state.atlas;
+    // Desktop canvas insets already follow the panels. On narrow screens the
+    // bottom sheet overlaps the full-width canvas, so frame the remaining area.
+    const canvasBounds = renderer.domElement.getBoundingClientRect();
+    const sheet = document.getElementById('chronicle');
+    const sheetBounds = sheet?.getBoundingClientRect();
+    const bottomOverlap = state.lift > 0 && canvasBounds.width <= 700 && sheetBounds && sheetBounds.width > canvasBounds.width * 0.7
+      ? Math.max(0, canvasBounds.bottom - Math.max(canvasBounds.top, sheetBounds.top)) : 0;
+    if (canvasBounds.width > 0 && canvasBounds.height > 0 && bottomOverlap > 0 && bottomOverlap < canvasBounds.height * 0.65) {
+      const availableHeight = canvasBounds.height - bottomOverlap;
+      liveCameraDistance *= canvasBounds.height / availableHeight;
+      camera.setViewOffset(canvasBounds.width, canvasBounds.height, 0, bottomOverlap / 2, canvasBounds.width, canvasBounds.height);
+    } else camera.clearViewOffset();
     camera.position.set(cameraFocus.x, cameraFocus.y, cameraFocus.z + liveCameraDistance);
     camera.lookAt(cameraFocus);
+    key.position.copy(camera.position);
+    key.target.position.copy(cameraFocus);
 
     const folded = new Set(atlasTimeline?.foldedIds || []);
     const realSphereIds = new Set(atlasTimeline?.realSphereIds || []);
     const travellingIds = new Set(travelState?.pathIds || []);
     const atlasSettled = state.atlas >= 0.98;
-    const clusteredIds = new Set((clusterPlan.orbit.clusteredIds || []).filter(id => zoom >= 0.84 || orbitNeighborhoodIds.has(id)));
+    const clusteredIds = new Set(orbitClusteredIdsForPresentation(clusterPlan, { atlas: state.atlas, zoom, orbitNeighborhoodIds }));
     const visibleEntries = entries.filter(entry => {
       if (travellingIds.has(entry.id) || (atlasSettled && folded.has(entry.id)) || clusteredIds.has(entry.id)) return false;
       if (state.surface > 0.15 && zoom < 0.57) return entry.surfaceVisible;
@@ -724,7 +869,9 @@ export function createAtlasScene(container, {
       return true;
     });
     const sphereLimit = Math.max(0, MAX_SPHERE_INSTANCES - 1); // Reserve one of 24 world spheres for the single current Earth mesh.
-    const instanceEntries = visibleEntries.filter(entry => entry.id !== currentId && (state.atlas < 0.45 || realSphereIds.has(entry.id)))
+    const instanceEntries = visibleEntries.filter(entry => entry.id !== currentId
+      && !isGenerationPlaceholderWorld(entry.world)
+      && (state.atlas < 0.45 || realSphereIds.has(entry.id)))
       .slice(0, sphereLimit);
     instanceIds.length = 0;
     const instanceColor = new THREE.Color();
@@ -762,6 +909,10 @@ export function createAtlasScene(container, {
         const scale = markerScale;
         const point = worldPosition(entry, state, timestamp, markerRadius);
         dummy.position.copy(point);
+        const facing = surfaceFacingOrientation(projectedGlobe(entry));
+        surfaceYawQuaternion.setFromAxisAngle(surfaceYawAxis, facing.yaw);
+        surfacePitchQuaternion.setFromAxisAngle(surfacePitchAxis, facing.pitch);
+        dummy.quaternion.copy(surfacePitchQuaternion).multiply(surfaceYawQuaternion);
         dummy.scale.setScalar(scale);
         dummy.updateMatrix(); mesh.setMatrixAt(index, dummy.matrix);
         mesh.setColorAt(index, instanceColor.copy(worldColor(entry, currentId)).lerp(LIT_TINT, state.atlas * (entry.explored ? 0.58 : 0.06)));
@@ -787,7 +938,7 @@ export function createAtlasScene(container, {
     });
     ghostPins.instanceMatrix.needsUpdate = true;
 
-    const lodEntries = visibleEntries.filter(entry => entry.id !== currentId && !instanceIds.includes(entry.id)
+    const lodEntries = visibleEntries.filter(entry => entry.id !== currentId && !isGenerationPlaceholderWorld(entry.world) && !instanceIds.includes(entry.id)
       && (entry.id !== arrivalFromId || state.lift > 0));
     lodIds.length = 0;
     lodIdSet.clear();
@@ -811,11 +962,6 @@ export function createAtlasScene(container, {
     }
 
     atlasGroup.updateMatrixWorld(true); camera.updateMatrixWorld(true);
-    const earthCenterWorld = earthMesh.getWorldPosition(new THREE.Vector3());
-    const towardCamera = camera.getWorldPosition(new THREE.Vector3()).sub(earthCenterWorld);
-    const surfaceHorizonThreshold = surfaceEarthRadius(state) / Math.max(surfaceEarthRadius(state), towardCamera.length()) + 0.005;
-    towardCamera.normalize();
-    const labelCandidates = [];
     for (const entry of entries) {
       const disc = registry.get(entry.id)?.disc;
       if (disc) {
@@ -826,69 +972,17 @@ export function createAtlasScene(container, {
       const outline = registry.get(entry.id)?.unenteredOutline;
       if (outline) {
         outline.position.copy(worldPosition(entry, state, timestamp, surfaceEarthRadius(state) + 0.003));
-        const visibleOutline = Math.max(entry.surfaceVisible ? state.surface : 0, entry.orbitVisible ? Math.max(state.orbit, state.atlas) : 0);
+        const atlasPossibility = state.atlas > 0.02 && entry.id !== currentId && !entry.folded && !clusteredIds.has(entry.id) ? state.atlas : 0;
+        const visibleOutline = Math.max(
+          !entry.explored && entry.surfaceVisible ? state.surface : 0,
+          !entry.explored && entry.orbitVisible ? state.orbit : 0,
+          atlasPossibility,
+        );
         outline.material.opacity = visibleOutline * 0.92;
         const distance = outline.position.distanceTo(camera.position);
         const size = 2 * worldRadiusForScreenPixels(distance, camera.fov, Math.max(1, renderer.domElement.clientHeight), 30);
         outline.scale.set(size, size, 1);
       }
-      const label = registry.get(entry.id)?.label;
-      if (!label) continue;
-      const surfacePosition = entry.id === arrivalFromId ? arrivalSurfacePoint()
-        : surfacePoint(entry, surfaceEarthRadius(state)).add(earthMesh.position);
-      const atlasPoint = atlasPosition(entry, timestamp);
-      atlasPoint.x += 0.22; atlasPoint.y += 0.23;
-      const orbitPoint = new THREE.Vector3(entry.orbit.x + 0.22, entry.orbit.y + 0.23, entry.orbit.z);
-      const fanOffset = fanOffsets.get(entry.id);
-      const labelOffset = { x: fanOffset?.x || 0, y: (fanOffset?.y || 0) - 22 };
-      label.position.copy(withScreenOffset(surfacePosition.lerp(orbitPoint, state.lift).lerp(atlasPoint, state.atlas), labelOffset));
-      const surfaceNormal = surfacePoint(entry).transformDirection(atlasGroup.matrixWorld);
-      const surfaceHorizonVisible = entry.id === arrivalFromId || isSurfaceNormalVisible(surfaceNormal, towardCamera, surfaceHorizonThreshold);
-      const surfaceOpacity = entry.surfaceLabel && surfaceHorizonVisible ? state.surface : 0;
-      const orbitOpacity = entry.orbitVisible ? state.lift * (1 - state.atlas) * 0.9 : 0;
-      const atlasOpacity = entry.atlasLabelVisible && !entry.folded ? state.atlas * 0.9 : 0;
-      const opacity = Math.max(surfaceOpacity, orbitOpacity, atlasOpacity);
-      label.material.opacity = opacity;
-      if (opacity > 0.04) labelCandidates.push({ entry, label, opacity });
-    }
-    const labelBounds = renderer.domElement.getBoundingClientRect();
-    const acceptedLabels = [];
-    const labelPriority = entry => entry.id === currentId ? 100 : entry.id === arrivalFromId ? 90 : entry.lineage ? 70 : entry.child ? 60 : entry.sibling ? 50 : 0;
-    labelCandidates.sort((a, b) => labelPriority(b.entry) - labelPriority(a.entry) || a.entry.id.localeCompare(b.entry.id));
-    for (const { entry, label, opacity } of labelCandidates) {
-      const basePosition = label.position.clone();
-      const worldPosition = label.getWorldPosition(new THREE.Vector3());
-      const distance = worldPosition.distanceTo(camera.getWorldPosition(new THREE.Vector3()));
-      const width = 220, height = 36;
-      label.scale.set(
-        2 * worldRadiusForScreenPixels(distance, camera.fov, Math.max(1, labelBounds.height), width),
-        2 * worldRadiusForScreenPixels(distance, camera.fov, Math.max(1, labelBounds.height), height),
-        1,
-      );
-      const alternatives = entry.id === arrivalFromId
-        ? [{ x: 0, y: 0 }, { x: 0, y: -44 }, { x: 52, y: 0 }, { x: -52, y: 0 }, { x: 0, y: 48 }]
-        : [{ x: 0, y: 0 }];
-      let placement = null;
-      for (const offset of alternatives) {
-        label.position.copy(withScreenOffset(basePosition.clone(), offset));
-        const screen = label.getWorldPosition(new THREE.Vector3()).project(camera);
-        const rawX = labelBounds.left + ((screen.x + 1) * 0.5) * labelBounds.width;
-        const rawY = labelBounds.top + ((1 - screen.y) * 0.5) * labelBounds.height;
-        const clamped = clampScreenRectCenter({ x: rawX, y: rawY }, labelBounds, width, height, 4);
-        const shift = { x: clamped.x - rawX, y: clamped.y - rawY };
-        if (shift.x || shift.y) label.position.copy(withScreenOffset(basePosition.clone(), { x: offset.x + shift.x, y: offset.y + shift.y }));
-        const placedScreen = label.getWorldPosition(new THREE.Vector3()).project(camera);
-        const x = labelBounds.left + ((placedScreen.x + 1) * 0.5) * labelBounds.width;
-        const y = labelBounds.top + ((1 - placedScreen.y) * 0.5) * labelBounds.height;
-        const candidate = { x, y, width, height };
-        const inView = placedScreen.z >= -1 && placedScreen.z <= 1
-          && x - width / 2 >= labelBounds.left + 3 && x + width / 2 <= labelBounds.right - 3
-          && y - height / 2 >= labelBounds.top + 3 && y + height / 2 <= labelBounds.bottom - 3;
-        const overlaps = acceptedLabels.some(other => Math.abs(other.x - x) < (other.width + width) / 2 && Math.abs(other.y - y) < (other.height + height) / 2);
-        if (inView && !overlaps) { placement = candidate; break; }
-      }
-      label.material.opacity = placement ? opacity : 0;
-      if (placement) acceptedLabels.push(placement);
     }
     for (const sprite of clusterSprites.values()) {
       const cluster = sprite.userData.cluster;
@@ -905,18 +999,165 @@ export function createAtlasScene(container, {
         ? memberEntries.reduce((point, entry) => point.add(new THREE.Vector3(entry.orbit.x, entry.orbit.y, entry.orbit.z)), new THREE.Vector3()).multiplyScalar(1 / memberEntries.length)
         : anchor ? new THREE.Vector3(anchor.orbit.x, anchor.orbit.y, anchor.orbit.z) : atlasPoint;
       sprite.position.copy(surfacePoint.lerp(orbitPoint, state.lift).lerp(atlasPoint, state.atlas));
-      const visibleAlpha = cluster.level === 'surface'
-        ? state.surface
-        : Math.max(cluster.parentId === currentId ? state.orbit : 0, state.atlas * (cluster.kind === 'generation-pending' ? 0.85 : 1));
+      const visibleAlpha = clusterOpacityAtPresentation(cluster, cluster.level, state, currentId);
       sprite.material.opacity = visibleAlpha;
       const distance = sprite.position.distanceTo(camera.position);
       const diameter = cluster.level === 'surface' ? 48 : 58;
       const size = 2 * worldRadiusForScreenPixels(distance, camera.fov, Math.max(1, renderer.domElement.clientHeight), diameter);
       sprite.scale.set(size, size, 1);
     }
+    const labelBounds = renderer.domElement.getBoundingClientRect();
+    const mobileLabels = labelBounds.width <= 480;
+    const safeBounds = {
+      left: labelBounds.left + (mobileLabels ? 10 : 4),
+      right: labelBounds.right - (mobileLabels ? 10 : 4),
+      top: labelBounds.top + (mobileLabels ? 8 : 4),
+      bottom: labelBounds.bottom - (bottomOverlap || 0) - (mobileLabels ? 10 : 4),
+    };
+    const projectPoint = point => {
+      const projected = point.clone().project(camera);
+      return {
+        x: labelBounds.left + (projected.x + 1) * 0.5 * labelBounds.width,
+        y: labelBounds.top + (1 - projected.y) * 0.5 * labelBounds.height,
+        visible: projected.z >= -1 && projected.z <= 1 && projected.x >= -1.2 && projected.x <= 1.2 && projected.y >= -1.2 && projected.y <= 1.2,
+      };
+    };
+    const labelEarthCenter = earthMesh.getWorldPosition(new THREE.Vector3());
+    const towardCameraForLabels = camera.getWorldPosition(new THREE.Vector3()).sub(labelEarthCenter);
+    const horizonThreshold = surfaceEarthRadius(state) / Math.max(surfaceEarthRadius(state), towardCameraForLabels.length()) + 0.005;
+    towardCameraForLabels.normalize();
+    const worldCandidates = createWorldLabelCandidates(entries, {
+      currentId, focusedId: hoveredId,
+      project: entry => {
+        if (state.surface > 0.7 && state.lift < 0.3) {
+          const normal = surfacePoint(entry).transformDirection(atlasGroup.matrixWorld);
+          if (!isSurfaceNormalVisible(normal, towardCameraForLabels, horizonThreshold)) return { visible: false };
+        }
+        return projectPoint(worldPosition(entry, state, timestamp, markerRadius).applyMatrix4(atlasGroup.matrixWorld));
+      },
+      measure: text => ({ width: Math.min(mobileLabels ? 220 : 320, labelBounds.width * (mobileLabels ? 0.64 : 0.7), safeBounds.right - safeBounds.left, Math.max(52, text.length * 7.5 + 8)), height: 18 }),
+      yearFirst: mobileLabels,
+    });
+    const candidates = [...worldCandidates];
+    const visibleWorldIds = new Set([...instanceIds, ...lodIds, ...(currentId ? [currentId] : [])]);
+    const nodeRects = [];
+    for (const id of visibleWorldIds) {
+      const entry = entries.find(item => item.id === id);
+      if (!entry) continue;
+      if (id === currentId) {
+        const center = earthMesh.getWorldPosition(new THREE.Vector3());
+        const point = projectPoint(center);
+        const radius = currentRing.visible ? Math.max(earthMesh.scale.x, currentRing.scale.x * 1.055) : earthMesh.scale.x;
+        const diameter = Math.max(44, projectedSphereDiameterPixels(
+          center.distanceTo(camera.getWorldPosition(new THREE.Vector3())), camera.fov, labelBounds.height, radius,
+        ));
+        if (point.visible) nodeRects.push({ x: point.x, y: point.y, width: diameter, height: diameter });
+        const pin = projectPoint(worldPosition(entry, state, timestamp, markerRadius).applyMatrix4(atlasGroup.matrixWorld));
+        if (pin.visible) nodeRects.push({ x: pin.x, y: pin.y, width: 44, height: 44 });
+        continue;
+      }
+      const record = registry.get(id);
+      const worldPoint = worldPosition(entry, state, timestamp, markerRadius).applyMatrix4(atlasGroup.matrixWorld);
+      const point = projectPoint(record?.disc?.getWorldPosition(new THREE.Vector3()) || worldPoint);
+      const renderedRadius = Math.max(
+        record?.disc?.scale?.x ? record.disc.scale.x / 2 : 0,
+        instanceIds.includes(id) ? ATLAS_PIN_GEOMETRY_RADIUS * markerScale : 0,
+      );
+      const diameter = Math.max(44, projectedSphereDiameterPixels(
+        worldPoint.distanceTo(camera.getWorldPosition(new THREE.Vector3())), camera.fov, labelBounds.height, renderedRadius,
+      ));
+      if (point.visible) nodeRects.push({ x: point.x, y: point.y, width: diameter, height: diameter });
+    }
+    for (const sprite of clusterSprites.values()) {
+      if (sprite.material.opacity <= 0.04) continue;
+      const point = projectPoint(sprite.getWorldPosition(new THREE.Vector3()));
+      const diameter = sprite.userData.cluster?.level === 'orbit' ? 58 : 48;
+      if (point.visible) nodeRects.push({ x: point.x, y: point.y, width: diameter, height: diameter });
+    }
+    if (p2Renderer.presentEarth.visible) {
+      const point = projectPoint(p2Renderer.presentEarth.getWorldPosition(new THREE.Vector3()));
+      const center = p2Renderer.presentEarth.getWorldPosition(new THREE.Vector3());
+      const diameter = Math.max(44, projectedSphereDiameterPixels(center.distanceTo(camera.getWorldPosition(new THREE.Vector3())), camera.fov, labelBounds.height, p2Renderer.presentEarth.scale.x));
+      if (point.visible) nodeRects.push({ x: point.x, y: point.y, width: diameter, height: diameter });
+    }
+    if (orbitQuestionParent.visible) {
+      const point = projectPoint(orbitQuestionParent.getWorldPosition(new THREE.Vector3()));
+      const center = orbitQuestionParent.getWorldPosition(new THREE.Vector3());
+      const diameter = Math.max(44, projectedSphereDiameterPixels(center.distanceTo(camera.getWorldPosition(new THREE.Vector3())), camera.fov, labelBounds.height, orbitQuestionParent.scale.x));
+      if (point.visible) nodeRects.push({ x: point.x, y: point.y, width: diameter, height: diameter });
+    }
+    if (state.atlas > 0.04) {
+      for (const { chip, sprite } of p2Renderer.getQuestionChipTargets()) {
+        if (!chip || !sprite.visible) continue;
+        const point = projectPoint(sprite.getWorldPosition(new THREE.Vector3()));
+        if (point.visible) candidates.push({ id: `chip:${chip.questionId}`, text: chip.label, ...point, width: Math.min(mobileLabels ? 220 : 240, safeBounds.right - safeBounds.left, Math.max(100, String(chip.label || '').length * 7.5 + 8)), height: 20, priority: 80, kind: 'chip' });
+      }
+      for (const tick of atlasTimeline?.visibleTicks || []) {
+        const point = projectPoint(p2Renderer.group.localToWorld(new THREE.Vector3(tick.x, -0.5, 0)));
+        if (point.visible) candidates.push({ id: `tick:${tick.year}`, text: tick.label, ...point, width: Math.max(46, String(tick.label).length * 7.5 + 8), height: 18, priority: 30, kind: 'tick' });
+      }
+      const verticalTitle = axisMode === 'history-distance' ? 'HISTORY DEPTH' : axisMode === 'branch-order' ? 'BRANCH ORDER' : 'THEME';
+      const axisGutter = mobileLabels ? 18 : Math.min(138, Math.max(88, labelBounds.height * 0.15));
+      candidates.push({ id: 'axis:vertical', text: verticalTitle, x: safeBounds.left + 78, y: safeBounds.top + axisGutter + 10, width: 116, height: 18, priority: 110, kind: 'axis' });
+      candidates.push({ id: 'axis:time', text: 'YEAR', x: safeBounds.right - 26, y: safeBounds.bottom - 12, width: 46, height: 18, priority: 110, kind: 'axis' });
+    }
+    if (state.orbit > 0.04 && orbitQuestionParent.visible
+      && String(orbitQuestionParent.userData.questionId) === String(hoveredQuestionId)) {
+      const point = projectPoint(orbitQuestionParent.getWorldPosition(new THREE.Vector3()));
+      const question = orbitQuestionParentQuestion;
+      const text = question?.question || question?.title || question?.prompt || 'Saved question';
+      if (point.visible) candidates.push({ id: `question:${question?.id}`, text, ...point, width: Math.min(mobileLabels ? 220 : 240, safeBounds.right - safeBounds.left, Math.max(80, String(text).length * 6.4)), height: 20, priority: 95, kind: 'world' });
+    }
+    if (hoveredReference && p2Renderer.presentEarth.visible) {
+      const point = projectPoint(p2Renderer.presentEarth.getWorldPosition(new THREE.Vector3()));
+      if (point.visible) candidates.push({ id: 'present-earth', text: 'Present-day Earth · 2026', ...point, width: Math.min(152, safeBounds.right - safeBounds.left), height: 18, priority: 95, kind: 'world' });
+    }
+    const labelDocument = container.ownerDocument || document;
+    const reservedRects = [];
+    for (const element of labelDocument.querySelectorAll?.('#chronicle, #atlas-toolbar, #atlas-world-card, #atlas-compact-controls, #atlas-reopen-controls, .geography-panel') || []) {
+      if (element.hidden) continue;
+      const styles = labelDocument.defaultView?.getComputedStyle?.(element);
+      if (styles?.display === 'none' || styles?.visibility === 'hidden' || Number(styles?.opacity) <= 0.05) continue;
+      const rect = element.getBoundingClientRect();
+      const left = Math.max(labelBounds.left, rect.left), right = Math.min(labelBounds.right, rect.right);
+      const top = Math.max(labelBounds.top, rect.top), bottom = Math.min(labelBounds.bottom, rect.bottom);
+      if (right > left && bottom > top) reservedRects.push({ x: (left + right) / 2, y: (top + bottom) / 2, width: right - left, height: bottom - top });
+    }
+    const placements = placeScreenLabels(candidates, safeBounds, nodeRects, reservedRects);
+    const activeLabelIds = new Set();
+    const candidateLabelIds = new Set(candidates.map(candidate => candidate.id));
+    for (const placement of placements) {
+      const worldRecord = placement.kind === 'world' ? registry.get(placement.id) : null;
+      let element = worldRecord?.label || auxiliaryLabels.get(placement.id);
+      if (!element) {
+        element = createWorldLabel({ title: placement.text });
+        element.className = `atlas-screen-label atlas-${placement.kind || 'auxiliary'}-label`;
+        auxiliaryLabels.set(placement.id, element);
+        labelOverlay.append(element);
+      }
+      element.textContent = placement.text;
+      element.setAttribute('aria-label', placement.text);
+      element.title = placement.text;
+      element.style.left = `${placement.x - labelBounds.left}px`;
+      element.style.top = `${placement.y - labelBounds.top}px`;
+      element.style.width = `${placement.width}px`;
+      element.style.textAlign = 'center';
+      element.style.display = 'block';
+      element.style.color = '#ece4d4';
+      element.style.fontSize = placement.kind === 'axis' ? '12px' : '12.5px';
+      activeLabelIds.add(placement.id);
+    }
+    for (const entry of entries) {
+      const element = registry.get(entry.id)?.label;
+      if (element) element.style.display = activeLabelIds.has(entry.id) ? 'block' : 'none';
+    }
+    for (const [id, element] of auxiliaryLabels) {
+      if (!candidateLabelIds.has(id)) { element.remove(); auxiliaryLabels.delete(id); }
+      else if (!activeLabelIds.has(id)) element.style.display = 'none';
+    }
     const edgePositions = { lineage: [], proposed: [], question: [] };
     const edgeOpacity = { lineage: 0, proposed: 0, question: 0 };
-    const allClusteredIds = new Set(clusterPlan.orbit.clusteredIds || []);
+    const allClusteredIds = new Set(orbitClusteredIdsForPresentation(clusterPlan, { atlas: state.atlas, zoom, orbitNeighborhoodIds }));
     const visibleAtlasIds = new Set(entries.filter(entry => !folded.has(entry.id) && !allClusteredIds.has(entry.id)).map(entry => entry.id));
     const lineageIds = new Set(atlasTimeline?.lineageIds || []);
     const entryById = new Map(entries.map(entry => [entry.id, entry]));
@@ -969,6 +1210,19 @@ export function createAtlasScene(container, {
       ? planQuestionRootConnections(worlds, atlasTimeline?.questionBranches || [], lineageIds)
         .filter(connection => !folded.has(connection.worldId) || connection.color === 'lineage')
       : [];
+    if (state.orbit > 0.015 && orbitQuestionParentPosition && orbitQuestionParentQuestion) {
+      const currentQuestionId = String(current?.world?.questionId ?? '');
+      const parentOrbit = new THREE.Vector3(orbitQuestionParentPosition.x, orbitQuestionParentPosition.y, orbitQuestionParentPosition.z || 0);
+      const parentPoint = new THREE.Vector3().lerp(parentOrbit, state.lift);
+      for (const root of entries) {
+        if (root.parentId != null || String(root.world?.questionId ?? '') !== currentQuestionId || root.folded) continue;
+        const rootOrbit = root.orbit || root.atlas;
+        const rootPoint = new THREE.Vector3(rootOrbit.x, rootOrbit.y, rootOrbit.z || 0).multiplyScalar(state.lift)
+          .lerp(atlasPosition(root, timestamp), state.atlas);
+        edgePositions.question.push(parentPoint.x, parentPoint.y, parentPoint.z, rootPoint.x, rootPoint.y, rootPoint.z);
+      }
+      edgeOpacity.question = Math.max(edgeOpacity.question, state.orbit);
+    }
     for (const connection of rootConnections) {
       const root = entryById.get(connection.worldId);
       const branch = atlasTimeline?.questionBranches?.find(item => item.questionId === connection.questionId);
@@ -1017,6 +1271,7 @@ export function createAtlasScene(container, {
     lineageThreads.material.opacity = 0.9 * edgeOpacity.lineage;
     questionThreads.material.opacity = 0.84 * edgeOpacity.question;
     lodPoints.material.opacity = 0.92;
+    lodPointMaterial.size = 4.2 + 8.8 * state.atlas;
     instancedPins.material.transparent = true;
     instancedPins.material.opacity = 1;
     p2Renderer.update(atlasTimeline, {
@@ -1025,8 +1280,9 @@ export function createAtlasScene(container, {
       branchProgress: axisTransition ? axisTransitionProgress(timestamp - axisTransition.startedAt, AXIS_ANIMATION_MS) : 1,
       fromBranches: axisTransition?.fromTimeline.questionBranches,
     });
-    const labelViewport = renderer.domElement.getBoundingClientRect();
-    p2Renderer.layoutLabels(camera, labelViewport, acceptedLabels);
+    p2Renderer.group.traverse(object => {
+      if (object.isSprite && object.userData?.labelText != null) object.material.opacity = 0;
+    });
     const level = stageForZoom(zoom);
     if (announce && level !== lastLevel) { lastLevel = level; onLevelChange({ level, zoom, altitude: liveCameraDistance }); }
   }
@@ -1050,7 +1306,7 @@ export function createAtlasScene(container, {
     registry.reconcile(worlds);
     if (currentId && !worlds.some(world => stableWorldId(world) === currentId)) currentId = null;
     arrivalFromId = arrivalParentWorldId(worlds.find(world => stableWorldId(world) === currentId), worlds);
-    updateLayout(); drawCurrentMarker(); applyZoom(zoom, false);
+    updateLayout({ animateQuestionRefocus: true }); drawCurrentMarker(); applyZoom(zoom, false);
   }
 
   function setGeography(_geography, mode, renderState) {
@@ -1083,7 +1339,7 @@ export function createAtlasScene(container, {
     travelState = null;
     arrivalFromId = arrivalParentWorldId(world, worlds);
     currentId = worldId;
-    updateLayout(); drawCurrentMarker();
+    updateLayout({ animateQuestionRefocus: true }); drawCurrentMarker();
     applyZoom(options.zoom ?? Math.max(zoom, 0.68));
     return true;
   }
@@ -1202,12 +1458,14 @@ export function createAtlasScene(container, {
 
   function setFocusedWorld(world, anchor) {
     const id = world ? stableWorldId(world) : null;
+    const changed = id !== hoveredId;
     hoveredId = id;
     renderer.domElement.dataset.focusedWorldId = id || '';
     renderer.domElement.dataset.previewWorldId = id || '';
     container.dataset.focusedWorldId = id || '';
     container.dataset.previewWorldId = id || '';
     onPreview(world || null, anchor || null);
+    if (changed) applyZoom(zoom, false);
   }
 
   function neighborForKey(key) {
@@ -1276,7 +1534,7 @@ export function createAtlasScene(container, {
     const bounds = renderer.domElement.getBoundingClientRect();
     let best = null, bestDistance = 22;
     for (const { chip, sprite } of p2Renderer.getQuestionChipTargets()) {
-      if (!chip || !sprite.visible || sprite.material.opacity <= 0.05) continue;
+      if (!chip || !sprite.visible) continue;
       const screen = sprite.getWorldPosition(new THREE.Vector3()).project(camera);
       const x = bounds.left + (screen.x + 1) * 0.5 * bounds.width;
       const y = bounds.top + (1 - screen.y) * 0.5 * bounds.height;
@@ -1338,15 +1596,47 @@ export function createAtlasScene(container, {
   }
 
   listen(renderer.domElement, 'pointerdown', event => {
-    if (event.button !== 0) return;
-    drag = { x: event.clientX, y: event.clientY, rotation };
+    if (event.pointerType !== 'touch' && event.button !== 0) return;
     renderer.domElement.setPointerCapture?.(event.pointerId);
+    if (event.pointerType === 'touch') {
+      activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (activePointers.size === 2) {
+        const [first, second] = [...activePointers.values()];
+        pinchGesture = { distance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)), zoom };
+        drag = null;
+        event.preventDefault?.();
+        return;
+      }
+    }
+    drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, lastX: event.clientX, lastY: event.clientY, rotation };
   });
   listen(renderer.domElement, 'pointermove', event => {
-    if (drag) {
-      rotation = drag.rotation + (event.clientX - drag.x) * 0.006;
-      applySurfaceOrientation(1 - atlasPresentationState(zoom, motionReduced).state.lift);
+    if (event.pointerType === 'touch' && activePointers.has(event.pointerId)) {
+      activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (pinchGesture && activePointers.size >= 2) {
+        const [first, second] = [...activePointers.values()];
+        const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+        // Pinching apart moves toward the surface; pinching together moves out toward the atlas.
+        setZoom(zoomFromPinch(pinchGesture.zoom, pinchGesture.distance, distance));
+        event.preventDefault?.();
+        return;
+      }
+    }
+    if (drag && drag.pointerId === event.pointerId) {
+      const dx = event.clientX - drag.lastX, dy = event.clientY - drag.lastY;
+      drag.lastX = event.clientX; drag.lastY = event.clientY;
+      if (dragModeForZoom(zoom) === 'rotate') {
+        rotation += dx * 0.006;
+        applySurfaceOrientation(1 - atlasPresentationState(zoom, motionReduced).state.lift);
+      } else {
+        const delta = panDeltaForDrag(dx, dy, {
+          cameraDistance: liveCameraDistance, fovDegrees: camera.fov,
+          viewportHeight: renderer.domElement.getBoundingClientRect().height,
+        });
+        panOffset.x += delta.x; panOffset.y += delta.y;
+      }
       applyZoom(zoom, false);
+      if (event.pointerType === 'touch') event.preventDefault?.();
       return;
     }
     const reference = hitPresentEarth(event);
@@ -1362,13 +1652,17 @@ export function createAtlasScene(container, {
     }
     if (chipHit) {
       const question = questionForChip(chipHit.chip), questionId = String(question.id);
+      const questionChanged = hoveredQuestionId !== questionId || hoveredId != null || hoveredReference;
       if (hoveredId || hoveredReference) setFocusedWorld(null, null);
       onQuestionPreview(question, questionAnchor(question, 'pointer', event.clientX, event.clientY, chipHit.x, chipHit.y));
       hoveredQuestionId = questionId; hoveredReference = false; hoveredId = null;
       renderer.domElement.dataset.focusedQuestionId = questionId; container.dataset.focusedQuestionId = questionId;
+      if (questionChanged) applyZoom(zoom, false);
     } else {
+      const hadQuestion = Boolean(hoveredQuestionId);
       if (hoveredQuestionId) onQuestionPreview(null, null);
       hoveredQuestionId = null; renderer.domElement.dataset.focusedQuestionId = ''; container.dataset.focusedQuestionId = '';
+      if (hadQuestion) applyZoom(zoom, false);
     }
     if (reference) {
       if (hoveredId) setFocusedWorld(null, null);
@@ -1376,16 +1670,18 @@ export function createAtlasScene(container, {
       renderer.domElement.dataset.focusedWorldId = 'present-day-earth'; renderer.domElement.dataset.previewWorldId = 'present-day-earth';
       container.dataset.focusedWorldId = 'present-day-earth'; container.dataset.previewWorldId = 'present-day-earth';
       onPreview(virtualPresentEarth(), { source: 'pointer', worldId: 'present-day-earth', clientX: event.clientX, clientY: event.clientY });
+      applyZoom(zoom, false);
     } else if (id !== hoveredId || hoveredReference) {
       hoveredReference = false;
-      applyZoom(zoom, false);
       setFocusedWorld(world, world ? projectedAnchor(id, 'pointer', event.clientX, event.clientY) : null);
     } else if (world) {
       setFocusedWorld(world, projectedAnchor(id, 'pointer', event.clientX, event.clientY));
     }
   });
   listen(renderer.domElement, 'pointerup', event => {
-    if (!drag) return;
+    if (event.pointerType === 'touch') activePointers.delete(event.pointerId);
+    if (pinchGesture) { pinchGesture = null; drag = null; return; }
+    if (!drag || drag.pointerId !== event.pointerId) return;
     const moved = Math.hypot(event.clientX - drag.x, event.clientY - drag.y);
     drag = null;
     if (moved < 5) {
@@ -1408,21 +1704,25 @@ export function createAtlasScene(container, {
       if (world) explicitEnter(world, projectedAnchor(stableWorldId(world), 'pointer', event.clientX, event.clientY));
     }
   });
-  listen(renderer.domElement, 'pointercancel', () => { drag = null; });
+  listen(renderer.domElement, 'pointercancel', event => {
+    if (event.pointerType === 'touch') activePointers.delete(event.pointerId);
+    pinchGesture = null; drag = null;
+  });
   listen(renderer.domElement, 'pointerleave', () => {
     closeClusterFan();
     if (hoveredId) setFocusedWorld(null, null);
     if (hoveredQuestionId) onQuestionPreview(null, null);
     hoveredQuestionId = null; hoveredReference = false;
     renderer.domElement.dataset.focusedQuestionId = ''; container.dataset.focusedQuestionId = '';
+    applyZoom(zoom, false);
   });
   listen(renderer.domElement, 'wheel', event => {
     event.preventDefault();
-    setZoom(zoom + Math.sign(event.deltaY) * 0.035);
+    setZoom(zoomFromWheel(zoom, event.deltaY, { deltaMode: event.deltaMode, viewportHeight: renderer.domElement.clientHeight }));
   }, { passive: false });
   listen(renderer.domElement, 'keydown', event => {
-    if (event.key === '+' || event.key === '=') { event.preventDefault(); setZoom(zoom + 0.035); }
-    else if (event.key === '-' || event.key === '_') { event.preventDefault(); setZoom(zoom - 0.035); }
+    if (event.key === '+' || event.key === '=') { event.preventDefault(); setZoom(zoom - 0.035); }
+    else if (event.key === '-' || event.key === '_') { event.preventDefault(); setZoom(zoom + 0.035); }
     else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
       event.preventDefault();
       const next = neighborForKey(event.key);
@@ -1439,6 +1739,7 @@ export function createAtlasScene(container, {
         renderer.domElement.dataset.focusedWorldId = reference.id; renderer.domElement.dataset.previewWorldId = reference.id;
         container.dataset.focusedWorldId = reference.id; container.dataset.previewWorldId = reference.id;
         onPreview(reference, { source: 'keyboard', worldId: reference.id });
+        applyZoom(zoom, false);
       }
     } else if (event.key === 'Enter' && hoveredQuestionId) {
       const chip = atlasTimeline?.chips?.find(item => String(item.questionId) === hoveredQuestionId);
@@ -1450,9 +1751,9 @@ export function createAtlasScene(container, {
       if (world) explicitEnter(world, projectedAnchor(hoveredId, 'keyboard'));
     } else if (event.key === 'Escape') {
       event.preventDefault();
-      if (zoom > 0) setZoom(Math.max(0, zoom - 0.1));
+      if (zoom < 1) setZoom(Math.min(1, zoom + 0.1));
       else if (hoveredId) setFocusedWorld(null, null);
-      else if (hoveredQuestionId) { onQuestionPreview(null, null); hoveredQuestionId = null; }
+      else if (hoveredQuestionId) { onQuestionPreview(null, null); hoveredQuestionId = null; applyZoom(zoom, false); }
     }
   });
 
@@ -1489,7 +1790,7 @@ export function createAtlasScene(container, {
           const arriving = worlds.find(world => stableWorldId(world) === travelState.toId);
           arrivalFromId = arrivalParentWorldId(arriving, worlds);
           currentId = travelState.toId; travelState.cutSwitched = true;
-          updateLayout(); drawCurrentMarker();
+          updateLayout({ animateQuestionRefocus: true, timestamp }); drawCurrentMarker();
         }
         if (!travelState.zoomOverridden) applyZoom(travelZoomAt(travelState.fromZoom, travelState.toZoom, stateNow.progress, 0.68, 'cut'), false, timestamp);
         else applyZoom(zoom, false, timestamp);
@@ -1507,7 +1808,7 @@ export function createAtlasScene(container, {
       currentId = travelState.toId;
       travelState = null;
       travelOpacity = 1; updateCanvasOpacity();
-      updateLayout(); drawCurrentMarker();
+      updateLayout({ animateQuestionRefocus: true, timestamp }); drawCurrentMarker();
       applyZoom(finalZoom, false, timestamp);
     }
     if (axisTransition) {
@@ -1537,6 +1838,9 @@ export function createAtlasScene(container, {
     getLevel: () => stageForZoom(zoom),
     getDebugStats,
     getWorldObject: id => registry.get(id)?.object ?? null,
+    getOrbitQuestionTargets: () => orbitQuestionParent.visible && orbitQuestionParentQuestion
+      ? [{ questionId: String(orbitQuestionParentQuestion.id), question: orbitQuestionParentQuestion, object: orbitQuestionParent }]
+      : [],
     getCurrentWorldId: () => currentId,
     getFocusedWorldId: () => hoveredId,
     getWorldImageUrl,
@@ -1560,6 +1864,7 @@ export function createAtlasScene(container, {
         const materials = Array.isArray(object.material) ? object.material : [object.material];
         for (const material of materials) { material?.map?.dispose?.(); material?.dispose?.(); }
       });
+      auxiliaryLabels.clear(); labelOverlay.remove();
       unenteredOutlineTexture.dispose(); currentEarthTexture.dispose(); miniEarthTexture.dispose(); earthTexture.dispose(); renderer.dispose(); renderer.domElement.remove();
     },
   };

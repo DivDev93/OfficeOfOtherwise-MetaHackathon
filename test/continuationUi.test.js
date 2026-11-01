@@ -570,6 +570,14 @@ test('compact Atlas card follows the selected world and its quick controls updat
   app.ui.setAtlasLevel('orbit');
   app.get('atlas-compact-new').click();
   assert.equal(app.ui.state().invitationOpen, true, 'New exploration opens the prompt instead of leaving it behind the collapsed rail');
+  assert.equal(app.get('atlas-compact-new').getAttribute('aria-expanded'), 'true', 'the compact New exploration control exposes its open state');
+  assert.equal(app.get('atlas-compact-controls').inert, true, 'the visually hidden compact controls leave the keyboard order while the prompt is open');
+  assert.equal(app.get('atlas-compact-controls').getAttribute('aria-hidden'), 'true');
+  app.get('show-invitation').click();
+  assert.equal(app.ui.state().invitationOpen, false);
+  assert.equal(app.get('atlas-compact-new').getAttribute('aria-expanded'), 'false');
+  app.ui.setAtlasLevel('orbit');
+  assert.equal(app.get('atlas-compact-controls').inert, false, 'closing the prompt restores compact keyboard controls');
 });
 
 test('explicit Present-day Earth entry opens a blank attached-question form without dispatching generation', async () => {

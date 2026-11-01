@@ -612,14 +612,15 @@ function applyAtlasGeographyLevel(level = 'surface') {
   syncAtlasWorldCard(level);
 }
 function syncAtlasCompactButtons(level = '') {
-  const tree = $('atlas-compact-tree'), details = $('atlas-open-details'), nav = $('atlas-compact-controls');
+  const tree = $('atlas-compact-tree'), details = $('atlas-open-details'), newExploration = $('atlas-compact-new'), nav = $('atlas-compact-controls');
   const currentLevel = level || $('atlas-scene')?.dataset.atlasLevel || '';
   const compact = currentLevel === 'orbit' || currentLevel === 'atlas';
   const panelsOpen = document.body.classList.contains('atlas-panels-open');
   const detailsOpen = document.body.classList.contains('atlas-details-open');
+  const invitationOpen = document.body.classList.contains('invitation-open');
   if (nav) {
-    nav.inert = !compact;
-    nav.setAttribute('aria-hidden', String(!compact));
+    nav.inert = !compact || invitationOpen;
+    nav.setAttribute('aria-hidden', String(!compact || invitationOpen));
   }
   if (tree) {
     tree.setAttribute('aria-expanded', String(panelsOpen));
@@ -631,6 +632,7 @@ function syncAtlasCompactButtons(level = '') {
     details.setAttribute('aria-expanded', String(detailsOpen));
     details.textContent = detailsOpen ? 'Close details' : 'Open details';
   }
+  if (newExploration) newExploration.setAttribute('aria-expanded', String(invitationOpen));
 }
 function syncAtlasWorldCard(level = '') {
   const card = $('atlas-world-card');
@@ -982,6 +984,7 @@ function setInvitationOpen(open) {
   $('show-invitation').setAttribute('aria-expanded', String(!hasStory || open));
   const disclosure = $('voice-disclosure');
   if (disclosure) disclosure.open = voiceEnabled && open;
+  syncAtlasCompactButtons();
 }
 function openNewExploration() {
   const opening = !document.body.classList.contains('invitation-open');
