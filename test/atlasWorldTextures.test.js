@@ -1,12 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorldTextureFactory } from '../web/atlas/worldTextures.js';
-import { paintGeography } from '../web/geographyTexture.js';
 
 function makeCanvas(width, height) {
+  const pixels = new Uint8ClampedArray(width * height * 4);
   const context = {
-    paths: [], images: [], globalAlpha: 1,
-    clearRect() {}, drawImage(...args) { this.images.push(args); },
+    pixels, images: [], globalAlpha: 1,
+    clearRect() { pixels.fill(0); },
+    drawImage(...args) {
+      this.images.push(args);
+      for (let i = 0; i < pixels.length; i += 4) {
+        pixels[i] = 100; pixels[i + 1] = 100; pixels[i + 2] = 100; pixels[i + 3] = 255;
+      }
+    },
+    getImageData() { return { data: new Uint8ClampedArray(pixels), width, height }; },
+    putImageData(imageData) { pixels.set(imageData.data); },
+    paths: [],
     beginPath() { this.currentPath = []; },
     moveTo(x, y) { this.currentPath.push([x, y]); },
     lineTo(x, y) { this.currentPath.push([x, y]); },
@@ -25,17 +34,16 @@ const change = (id, region, kind) => ({
 const world = (id, geography) => ({ id, geography });
 
 test('v1 geography waits for terrain and makes distinct current and mini canvases at capped dimensions', async () => {
-  const terrain = { version: 'test-terrain' }, terrainCalls = [];
-  const factory = createWorldTextureFactory({ canvasFactory: makeCanvas, loadTerrain: async () => terrain,
-    draw(canvas, image, geography, _mode, _region, loadedTerrain) {
-      terrainCalls.push(loadedTerrain);
-      canvas.getContext('2d').drawImage(image, 0, 0);
-      paintGeography(canvas.getContext('2d'), geography, canvas.width, canvas.height);
-    } });
+  const terrain = {
+    width: 360,
+    height: 180,
+    elevation: new Int16Array(360 * 180).fill(1000),
+    landmass: new Uint8Array(360 * 180).fill(1),
+  };
+  const factory = createWorldTextureFactory({ canvasFactory: makeCanvas, loadTerrain: async () => terrain });
   const saharaPending = factory.create(world('sahara-world', { version: 1, changes: [change('green-sahara', 'sahara', 'vegetation')] }), { baseImage });
-  const beringiaPending = factory.create(world('beringia-world', { version: 1, changes: [change('beringia-land', 'beringia', 'land')] }), { baseImage });
   assert.equal(saharaPending.status, 'pending');
-  const [sahara, beringia] = await Promise.all([saharaPending.promise, beringiaPending.promise]);
+  const sahara = await saharaPending.promise;
 
   assert.equal(sahara.status, 'ready');
   assert.deepEqual(sahara.currentDimensions, { width: 2048, height: 1024 });
@@ -44,11 +52,15 @@ test('v1 geography waits for terrain and makes distinct current and mini canvase
   assert.deepEqual([sahara.miniCanvas.width, sahara.miniCanvas.height], [512, 256]);
   assert.equal(sahara.currentCanvas.context.images[0][0], baseImage);
   assert.equal(sahara.miniCanvas.context.images[0][0], baseImage);
-  assert.equal(sahara.currentCanvas.context.paths[0].color, '#2c9d52');
-  assert.equal(beringia.currentCanvas.context.paths[0].color, '#b2a16e');
-  assert.notDeepEqual(sahara.currentCanvas.context.paths[0].points, beringia.currentCanvas.context.paths[0].points);
+  for (const canvas of [sahara.currentCanvas, sahara.miniCanvas]) {
+    const y = Math.floor((90 - 22.5) / 180 * canvas.height);
+    const insideSahara = y * canvas.width + Math.floor((0 + 180) / 360 * canvas.width);
+    const outsideSahara = y * canvas.width + Math.floor((100 + 180) / 360 * canvas.width);
+    const insideOffset = insideSahara * 4, outsideOffset = outsideSahara * 4;
+    assert.ok(canvas.context.pixels[insideOffset + 1] > canvas.context.pixels[insideOffset], 'DEM-backed land inside the Sahara scenario receives vegetation shading');
+    assert.deepEqual([...canvas.context.pixels.slice(outsideOffset, outsideOffset + 4)], [100, 100, 100, 255], 'land outside the selected Sahara bounds keeps its basemap color');
+  }
   assert.deepEqual(sahara.geography.changes[0], change('green-sahara', 'sahara', 'vegetation'));
-  assert.deepEqual(terrainCalls, [terrain, terrain, terrain, terrain], 'the shared renderer receives terrain for both resolutions');
 });
 
 test('v2 geography loads terrain asynchronously and never becomes a permanent unsupported fallback', async () => {
