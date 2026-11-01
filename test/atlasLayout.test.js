@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   ATLAS_CAMERA_DISTANCE, SURFACE_CAMERA_DISTANCE, allowEarthBodySelection, altitudeForZoom,
   atlasZoomState, createWorldRegistry, layoutAtlasWorlds, measuredFps,
-  nearestDirectionalNeighbor, selectSurfaceLabels, surfaceFacingRotation, surfaceFacingOrientation, transformSurfaceNormal,
+  nearestDirectionalNeighbor, nearestProjectedAnchorHit, selectSurfaceLabels, surfaceFacingRotation, surfaceFacingOrientation, transformSurfaceNormal,
   slerpUnitVector, selectSurfaceWorldLabelIds, worldRadiusForScreenPixels, cappedTextureSize,
   fitCameraDistance, fitCenteredCameraDistance, layoutOrbitNeighborhood, zoomForAltitude,
   appendContinuousFrame, atlasPresentationState,
@@ -184,6 +184,20 @@ test('44 CSS-pixel pin targets and arrow navigation use projected screen coordin
   assert.equal(allowEarthBodySelection(0.56), false);
   assert.equal(allowEarthBodySelection(0.57), true);
   assert.equal(allowEarthBodySelection(1), true);
+});
+
+test('overlapping 44px hits belong to the nearest projected anchor with deterministic depth and ID ties', () => {
+  const nearerAnchor = { id: 'farther-depth', distanceSquared: 4, hitDistance: 8 };
+  const nearerDepth = { id: 'nearer-depth', distanceSquared: 25, hitDistance: 2 };
+  assert.equal(nearestProjectedAnchorHit([nearerDepth, nearerAnchor]), nearerAnchor,
+    'screen anchor distance outranks ray depth when hit targets overlap');
+  const tiedDepth = { id: 'z-node', distanceSquared: 25 + 5e-7, hitDistance: 2 + 5e-7 };
+  const stableId = { id: 'a-node', distanceSquared: 25, hitDistance: 2 };
+  assert.equal(nearestProjectedAnchorHit([tiedDepth, stableId]), stableId);
+  assert.equal(nearestProjectedAnchorHit([stableId, tiedDepth]), stableId,
+    'sub-pixel numeric ties do not depend on candidate insertion order');
+  assert.equal(nearestProjectedAnchorHit([{ id: 'bad', distanceSquared: NaN, hitDistance: 0 }, nearerAnchor]), nearerAnchor);
+  assert.equal(nearestProjectedAnchorHit([]), null);
 });
 
 test('surface labels stay on current, ranked direct children, arrived parent, and explicit ghosts', () => {

@@ -132,6 +132,23 @@ export function worldRadiusForScreenPixels(distance, fovDegrees, viewportHeight,
   return visibleHeight * size / (2 * height);
 }
 
+/** Resolve overlapping projected targets by anchor distance, then depth and stable ID. */
+export function nearestProjectedAnchorHit(hits = []) {
+  let best = null;
+  for (const hit of Array.isArray(hits) ? hits : []) {
+    const distanceSquared = Number(hit?.distanceSquared);
+    const hitDistance = Number(hit?.hitDistance);
+    if (!Number.isFinite(distanceSquared) || distanceSquared < 0 || !Number.isFinite(hitDistance)) continue;
+    const id = String(hit?.id ?? '');
+    if (!best || distanceSquared < best.distanceSquared - 1e-6
+      || (Math.abs(distanceSquared - best.distanceSquared) <= 1e-6 && hitDistance < best.hitDistance - 1e-6)
+      || (Math.abs(distanceSquared - best.distanceSquared) <= 1e-6 && Math.abs(hitDistance - best.hitDistance) <= 1e-6 && id < best.id)) {
+      best = { hit, id, distanceSquared, hitDistance };
+    }
+  }
+  return best?.hit || null;
+}
+
 /** Keep event pins as surface dots, then inflate them into mini-Earths only during Lift. */
 export function surfacePinScale(lift) {
   const progress = clamp(Number(lift) || 0, 0, 1);

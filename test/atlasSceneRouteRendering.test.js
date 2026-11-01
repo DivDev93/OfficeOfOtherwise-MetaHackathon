@@ -31,6 +31,15 @@ test('Atlas route bounds and edge presentation remain complete', () => {
     'exact lineage corners grow their opacity bucket instead of truncating at fixed capacity');
 });
 
+test('node hit ownership uses the nearest projected anchor after existing ray and occlusion checks', () => {
+  assert.match(scene, /raycaster\.ray\.intersectSphere\(new THREE\.Sphere\(center, radius\)/,
+    'candidates still need to hit their 44 CSS-pixel sphere');
+  assert.match(scene, /state\.surface > 0\.15 && hitDistance >= occlusionDistance/,
+    'surface Earth occlusion remains in force before ownership is resolved');
+  assert.match(scene, /const projected = center\.clone\(\)\.project\(camera\)[\s\S]*distanceSquared: dx \* dx \+ dy \* dy, hitDistance[\s\S]*nearestProjectedAnchorHit\(hits\)/,
+    'overlapping candidates are owned by nearest screen anchor, with depth then stable ID ties');
+});
+
 test('transition edge opacity is stored per rendered edge while retaining gold and dashed styles', () => {
   assert.match(scene, /vertexColors: true/,
     'the pinned Three r183 Line materials accept per-vertex RGBA edge opacity');

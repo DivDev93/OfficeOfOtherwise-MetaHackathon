@@ -21,7 +21,7 @@ import {
   pinScaleAtPresentation, pinAnchorRadiusAtPresentation,
   altitudeForZoom, atlasPresentationState, atlasZoomState, clampAtlasLevel, createWorldRegistry,
   layoutAtlasWorlds, layoutOrbitNeighborhood, measuredFps, surfaceFacingOrientation,
-  worldRadiusForScreenPixels, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds, slerpUnitVector,
+  worldRadiusForScreenPixels, nearestProjectedAnchorHit, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds, slerpUnitVector,
   cappedTextureSize, allowEarthBodySelection, fitCenteredCameraDistance,
   appendContinuousFrame, stableWorldId, localQuaternionForWorldFacing, isSurfaceNormalVisible,
 } from '../atlasLayout.js';
@@ -1679,7 +1679,7 @@ export function createAtlasScene(container, {
     if (currentId && !allowEarthBodySelection(zoom)) candidates.add(currentId);
     const byId = new Map(worlds.map(world => [stableWorldId(world), world]));
     const cameraPosition = camera.getWorldPosition(new THREE.Vector3());
-    let best = null, bestDistance = Number.POSITIVE_INFINITY;
+    const hits = [];
     for (const id of candidates) {
       const entry = entries.find(item => item.id === id);
       if (!entry) continue;
@@ -1692,9 +1692,14 @@ export function createAtlasScene(container, {
       if (!point) continue;
       const hitDistance = point.distanceTo(cameraPosition);
       if (state.surface > 0.15 && hitDistance >= occlusionDistance) continue;
-      if (hitDistance < bestDistance) { best = byId.get(id) || null; bestDistance = hitDistance; }
+      const projected = center.clone().project(camera);
+      const anchorX = bounds.left + (projected.x + 1) * 0.5 * bounds.width;
+      const anchorY = bounds.top + (1 - projected.y) * 0.5 * bounds.height;
+      const dx = event.clientX - anchorX, dy = event.clientY - anchorY;
+      hits.push({ id, distanceSquared: dx * dx + dy * dy, hitDistance, world: byId.get(id) || null });
     }
-    if (best) return best;
+    const best = nearestProjectedAnchorHit(hits);
+    if (best?.world) return best.world;
     if (allowEarthBodySelection(zoom) && currentEarthHit && currentId) return byId.get(currentId) || null;
     return null;
   }
