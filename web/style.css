@@ -484,7 +484,8 @@ body.atlas-panels-open:has(#atlas-scene[data-atlas-level="atlas"]) .atlas-toolba
   .atlas-world-card-copy span{font-size:11px}
   .atlas-world-card button{grid-column:auto;min-width:92px;min-height:44px;padding:5px;font-size:10px}
   body.atlas-details-open:has(#atlas-scene[data-atlas-level="orbit"]) .hero-panel,
-  body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{top:auto;right:9px;bottom:10px;left:9px;width:auto;height:auto;max-height:calc(100dvh - 130px);overflow:auto}
+  body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{top:184px;right:9px;bottom:10px;left:9px;width:auto;height:auto;max-height:calc(100dvh - 130px);overflow:auto}
+  body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .hero-panel{top:218px}
   body.atlas-details-open:has(#atlas-scene[data-atlas-level="orbit"]) .exploration-rail,
   body.atlas-details-open:has(#atlas-scene[data-atlas-level="atlas"]) .exploration-rail{bottom:10px}
   body.atlas-details-open:has(#atlas-scene[data-atlas-level="orbit"]) .atlas-compact-controls,
