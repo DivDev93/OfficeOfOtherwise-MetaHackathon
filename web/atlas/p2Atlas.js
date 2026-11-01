@@ -461,6 +461,26 @@ function routeShape(points, from, to) {
   });
 }
 
+function sampleSideSweep(from, to, gutterX, segments = 32) {
+  // A single cubic that bows into the already reserved outer gutter. Its end
+  // tangents are horizontal, so the edge leaves each node gently instead of
+  // exposing the long horizontal/vertical bus elbows at Atlas scale.
+  const reach = Math.max(Math.abs(gutterX - from.x), Math.abs(gutterX - to.x), 0.01) * 1.22;
+  const direction = Math.sign(gutterX - (from.x + to.x) / 2) || 1;
+  const control1 = { x: from.x + direction * reach, y: from.y };
+  const control2 = { x: to.x + direction * reach, y: to.y };
+  const points = [];
+  for (let index = 0; index <= segments; index++) {
+    const t = index / segments, u = 1 - t;
+    points.push({
+      x: u ** 3 * from.x + 3 * u ** 2 * t * control1.x + 3 * u * t ** 2 * control2.x + t ** 3 * to.x,
+      y: u ** 3 * from.y + 3 * u ** 2 * t * control1.y + 3 * u * t ** 2 * control2.y + t ** 3 * to.y,
+      z: (Number(from.z) || 0) * u + (Number(to.z) || 0) * t,
+    });
+  }
+  return points;
+}
+
 /** Route a visible forest through nested, row-local gutters while preserving each junction. */
 export function routeAtlasEdgePaths(edges = [], {
   laneGap = 0.06, routeMargin = 0.25, maxGutter = 3.5, nodeClearance = 0.16, nodes = [],
@@ -552,26 +572,34 @@ export function routeAtlasEdgePaths(edges = [], {
     }
   }
 
-  // The bus geometry is the safety baseline. Replace only routes whose direct cubic
-  // remains clear of every current route and visible node; each accepted replacement
-  // is rechecked against the routes already replaced.
-  const candidates = routed.map(path => {
-    const points = sampleAtlasEdgePath(path.from, path.to, 20);
-    const shape = routeShape(points, path.from, path.to);
-    const exactPoints = transformAtlasEdgeShape(path.from, path.to, shape);
+  // The bus geometry is the safety baseline. Try a gutter-following sweep and a
+  // direct cubic, replacing only routes that clear every current route and visible
+  // node. Each accepted replacement is rechecked against the routes already replaced.
+  const candidates = routed.flatMap(path => {
+    const sharpPath = sharpPaths.get(`${path.parentId}\u0000${path.childId}`);
+    const sweep = sampleSideSweep(path.from, path.to, sharpPath?.[1]?.x ?? path.to.x);
+    const direct = sampleAtlasEdgePath(path.from, path.to, 32);
     const chordLength = Math.hypot(path.to.x - path.from.x, path.to.y - path.from.y);
     const baselineLength = pathLength(path.points);
-    return { path, shape, points: exactPoints, savings: baselineLength - pathLength(exactPoints), chordLength };
+    return [sweep, direct].map((candidatePoints, rank) => {
+      const shape = routeShape(candidatePoints, path.from, path.to);
+      const exactPoints = transformAtlasEdgeShape(path.from, path.to, shape);
+      return { path, shape, points: exactPoints, savings: baselineLength - pathLength(exactPoints), chordLength, rank };
+    });
   }).filter(candidate => candidate.savings > 1e-4)
     .sort((a, b) => b.savings - a.savings || a.chordLength - b.chordLength
+      || a.rank - b.rank
       || String(a.path.parentId).localeCompare(String(b.path.parentId))
       || String(a.path.childId).localeCompare(String(b.path.childId)));
   for (const candidate of candidates) {
     const path = candidate.path;
     if (routeGeometryConflicts(candidate.points, path, routed, visibleNodes, nodeClearance)) continue;
+    // A route may have more than one safe candidate. Keep the best one already
+    // accepted for this edge instead of allowing a later, longer sweep to replace it.
+    if (pathLength(candidate.points) >= pathLength(path.points) - 1e-9) continue;
     path.points = candidate.points;
     path.routeShape = candidate.shape;
-    path.routeType = 'validated-direct-cubic';
+    path.routeType = candidate.rank === 0 ? 'validated-gutter-sweep' : 'validated-direct-cubic';
     path.routeCornerRadius = null;
     path.routeBounds = { left: Math.min(...path.points.map(point => point.x)), right: Math.max(...path.points.map(point => point.x)),
       bottom: Math.min(...path.points.map(point => point.y)), top: Math.max(...path.points.map(point => point.y)) };

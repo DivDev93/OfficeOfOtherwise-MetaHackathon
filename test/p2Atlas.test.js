@@ -100,6 +100,19 @@ function assertPlanarAtlasRoutes(layout) {
   }
 }
 
+test('safe direct cubic is not overwritten by a longer gutter sweep', () => {
+  const from = { x: 0, y: 0 }, to = { x: 0.1, y: 0.3 };
+  const [path] = routeAtlasEdgePaths([{ parentId: 'parent', childId: 'child', from, to }], {
+    nodes: [{ id: 'parent', ...from }, { id: 'child', ...to }],
+  });
+  const length = points => points.slice(1).reduce((sum, point, index) => sum
+    + Math.hypot(point.x - points[index].x, point.y - points[index].y), 0);
+  const directLength = length(sampleAtlasEdgePath(from, to, 32));
+  assert.equal(path.routeType, 'validated-direct-cubic');
+  assert.ok(Math.abs(length(path.points) - directLength) < 1e-8,
+    'the shorter direct curve remains selected after the safe gutter candidate is considered');
+});
+
 test('same-year question roots route from virtual parents outside each subtree without hits or crossings', () => {
   const worlds = [
     ...Array.from({ length: 5 }, (_, index) => ({ id: `map-root-${index}`, parentId: null, questionId: 'q-map', year: 1800 })),
@@ -510,9 +523,11 @@ test('nested gutters preserve the equal-year and backward-time 20-world fixture'
   const layout = buildAtlasTimeline({ worlds, questions: [{ id: 'q', divergenceYear: 1800 }] }, 'n19');
   assert.equal(layout.parentChildPaths.length, 19);
   assertPlanarAtlasRoutes(layout);
-  assert.equal(layout.parentChildPaths.filter(path => ['nested-prefix-gutter', 'validated-direct-cubic'].includes(path.routeType)).length, 19);
+  assert.equal(layout.parentChildPaths.filter(path => ['nested-prefix-gutter', 'validated-direct-cubic', 'validated-gutter-sweep'].includes(path.routeType)).length, 19);
   assert.ok(layout.parentChildPaths.some(path => path.routeType === 'validated-direct-cubic'),
     'safe edges use smoother direct cubics');
+  assert.ok(layout.parentChildPaths.some(path => path.routeType === 'validated-gutter-sweep'),
+    'safe edges can use a smooth curve through the reserved outer gutter');
   assert.ok(layout.parentChildPaths.some(path => path.routeCornerRadius > 0.22),
     'remaining gutter routes use a larger safe corner radius where spacing permits');
   assert.ok(layout.parentChildPaths.some(path => path.routeType === 'nested-prefix-gutter' && path.routeCornerRadius >= 1.1),
