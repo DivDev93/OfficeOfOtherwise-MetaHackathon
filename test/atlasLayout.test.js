@@ -187,6 +187,29 @@ test('44 CSS-pixel pin targets and arrow navigation use projected screen coordin
   assert.equal(allowEarthBodySelection(1), true);
 });
 
+test('44px target sphere includes projected boundary rays in 64 directions across Orbit and Atlas viewports', () => {
+  const fov = 38;
+  const zooms = [0.57, 0.7, 0.84, 0.92, 1];
+  const viewportHeights = [375, 812, 900];
+  const directionCount = 64;
+  for (const zoom of zooms) {
+    const depth = altitudeForZoom(zoom);
+    for (const height of viewportHeights) {
+      const radius = worldRadiusForScreenPixels(depth, fov, height, 44);
+      const worldUnitsPerPixel = 2 * depth * Math.tan(fov * Math.PI / 360) / height;
+      for (let direction = 0; direction < directionCount; direction += 1) {
+        const angle = direction * 2 * Math.PI / directionCount;
+        const x = Math.cos(angle) * 22 * worldUnitsPerPixel;
+        const y = Math.sin(angle) * 22 * worldUnitsPerPixel;
+        const rayLength = Math.hypot(x, y, depth);
+        const distanceToRay = depth * Math.hypot(x, y) / rayLength;
+        assert.ok(distanceToRay <= radius + 1e-12,
+          `the 22px boundary ray misses at zoom=${zoom}, height=${height}, direction=${direction}`);
+      }
+    }
+  }
+});
+
 test('question-chip occlusion uses the actual off-center pointer ray depth', () => {
   const origin = { x:0, y:0, z:0 };
   const forward = { x:0, y:0, z:-1 };
@@ -214,6 +237,30 @@ test('overlapping 44px hits belong to the nearest projected anchor with determin
     'sub-pixel numeric ties do not depend on candidate insertion order');
   assert.equal(nearestProjectedAnchorHit([{ id: 'bad', distanceSquared: NaN, hitDistance: 0 }, nearerAnchor]), nearerAnchor);
   assert.equal(nearestProjectedAnchorHit([]), null);
+});
+
+test('overlapping 44px candidate math gives stable nearest-anchor ownership around the shared region', () => {
+  const targetRadius = 22;
+  const firstAnchor = { id: 'a-world', x: 0, y: 0, hitDistance: 10 };
+  const secondAnchor = { id: 'b-world', x: 30, y: 0, hitDistance: 10 };
+  const directionCount = 64;
+  for (let direction = 0; direction < directionCount; direction += 1) {
+    const angle = direction * 2 * Math.PI / directionCount;
+    const pointer = { x: 15 + 5 * Math.cos(angle), y: 5 * Math.sin(angle) };
+    const firstDx = pointer.x - firstAnchor.x, firstDy = pointer.y - firstAnchor.y;
+    const secondDx = pointer.x - secondAnchor.x, secondDy = pointer.y - secondAnchor.y;
+    const firstDistanceSquared = firstDx ** 2 + firstDy ** 2;
+    const secondDistanceSquared = secondDx ** 2 + secondDy ** 2;
+    assert.ok(firstDistanceSquared <= targetRadius ** 2, 'pointer lies inside the first 44px target');
+    assert.ok(secondDistanceSquared <= targetRadius ** 2, 'pointer lies inside the overlapping second 44px target');
+    const firstHit = { ...firstAnchor, distanceSquared: firstDistanceSquared };
+    const secondHit = { ...secondAnchor, distanceSquared: secondDistanceSquared };
+    const expected = firstDistanceSquared <= secondDistanceSquared ? firstHit : secondHit;
+    assert.equal(nearestProjectedAnchorHit([firstHit, secondHit]), expected,
+      `nearest projected anchor wins at overlap direction ${direction}`);
+    assert.equal(nearestProjectedAnchorHit([secondHit, firstHit]), expected,
+      `candidate insertion order does not change ownership at overlap direction ${direction}`);
+  }
 });
 
 test('screen-pixel hit sizing uses transformed world camera depth for rotated surface clusters', () => {
