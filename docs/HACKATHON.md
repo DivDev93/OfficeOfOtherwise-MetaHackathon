@@ -155,3 +155,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-10-31 | Atlas round 3 follow-up: keep odd Orbit sibling counts clear of the parent path and attach question-root links to their moving nodes during zoom. | |
 | 2026-10-31 | Atlas round 3: refreshed Orbit screenshots and the local wheel walkthrough after clearing sibling overlap and aligning question-root endpoints. | |
 | 2026-10-31 | Atlas round 3: apply independent route opacity so Orbit paths no longer brighten newly appearing Atlas paths; validated local WebGL rendering. Intermediate route crossings remain. | |
+| 2026-10-31 | Atlas round 3: refreshed local screenshots and wheel recording after per-edge opacity correction. | |
