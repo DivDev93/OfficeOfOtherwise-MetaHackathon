@@ -52,6 +52,13 @@ test('Orbit ancestor labels reserve top chrome and move edge markers below it', 
     'only the lineage marker path receives the chrome-aware boundary while other labels retain the normal viewport');
 });
 
+test('mobile labels treat the visible Other questions control as reserved chrome', () => {
+  assert.match(scene, /querySelectorAll\?\.\('\.site-header \.brand, \.site-header \.header-actions, \.panel-head, #chronicle, #atlas-toolbar, #atlas-other-questions,[\s\S]*if \(element\.hidden\) continue/,
+    'the current visibility of the phone control gates its reserved label rectangle');
+  assert.match(scene, /element\.matches\?\.\('\.site-header \.brand, \.site-header \.header-actions, \.panel-head, #atlas-toolbar, #atlas-other-questions'\)/,
+    'ancestor markers also begin below the visible Other questions control');
+});
+
 test('transition edge opacity is stored per rendered edge while retaining gold and dashed styles', () => {
   assert.match(scene, /vertexColors: true/,
     'the pinned Three r183 Line materials accept per-vertex RGBA edge opacity');

@@ -108,6 +108,22 @@ test('crowded direct-child labels use compact collision-free edge slots', () => 
   }
 });
 
+test('direct-child labels clear the visible phone Other questions control', () => {
+  const bounds = { left: 0, top: 0, right: 375, bottom: 812 };
+  const toggle = { x: 187.5, y: 188, width: 116, height: 38 };
+  const [label] = placeScreenLabels([{
+    id:'child', text:'2003 · Canopy School', fullText:'2003 · River Canopy School Ferries',
+    x:187.5, y:188, width:220, height:18, priority:85, kind:'world', edgeFallback:true,
+  }], bounds, [], [toggle]);
+
+  assert.ok(label, 'the direct child remains labelled in the rest of the phone viewport');
+  assert.ok(label.y + label.height / 2 < toggle.y - toggle.height / 2 - 3
+    || label.y - label.height / 2 > toggle.y + toggle.height / 2 + 3
+    || label.x + label.width / 2 < toggle.x - toggle.width / 2 - 3
+    || label.x - label.width / 2 > toggle.x + toggle.width / 2 + 3,
+  'the label avoids the actual control rectangle with the normal placement gap');
+});
+
 test('42 admitted direct children fit when mobile edge lanes have no node blockers', () => {
   const bounds = { left: 10, top: 8, right: 365, bottom: 802 };
   const headerAndToolbar = { x: 187.5, y: 85, width: 355, height: 154 };

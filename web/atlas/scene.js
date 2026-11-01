@@ -1154,7 +1154,7 @@ export function createAtlasScene(container, {
     const labelDocument = container.ownerDocument || document;
     const reservedRects = [];
     const topChromeBottoms = [];
-    for (const element of labelDocument.querySelectorAll?.('.site-header .brand, .site-header .header-actions, .panel-head, #chronicle, #atlas-toolbar, #atlas-world-card, #atlas-compact-controls, #atlas-reopen-controls, .geography-panel') || []) {
+    for (const element of labelDocument.querySelectorAll?.('.site-header .brand, .site-header .header-actions, .panel-head, #chronicle, #atlas-toolbar, #atlas-other-questions, #atlas-world-card, #atlas-compact-controls, #atlas-reopen-controls, .geography-panel') || []) {
       if (element.hidden) continue;
       const styles = labelDocument.defaultView?.getComputedStyle?.(element);
       if (styles?.display === 'none' || styles?.visibility === 'hidden' || Number(styles?.opacity) <= 0.05) continue;
@@ -1163,7 +1163,7 @@ export function createAtlasScene(container, {
       const top = Math.max(labelBounds.top, rect.top), bottom = Math.min(labelBounds.bottom, rect.bottom);
       if (right > left && bottom > top) {
         reservedRects.push({ x: (left + right) / 2, y: (top + bottom) / 2, width: right - left, height: bottom - top });
-        if (element.matches?.('.site-header .brand, .site-header .header-actions, .panel-head, #atlas-toolbar')) topChromeBottoms.push(bottom);
+        if (element.matches?.('.site-header .brand, .site-header .header-actions, .panel-head, #atlas-toolbar, #atlas-other-questions')) topChromeBottoms.push(bottom);
       }
     }
     const safeBounds = {
