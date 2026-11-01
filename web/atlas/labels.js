@@ -75,7 +75,8 @@ export function shortQuestionTitle(text, maxWords = 5) {
 export function createWorldLabelCandidates(entries, { currentId, focusedId, project, measure, yearFirst = false, include = () => false, bounds }) {
   const candidates = [];
   for (const entry of entries || []) {
-    if (!shouldShowWorldLabel(entry, currentId, focusedId) && !include(entry)) continue;
+    const included = include(entry);
+    if (!shouldShowWorldLabel(entry, currentId, focusedId) && !included) continue;
     const point = project(entry);
     if (!point || point.visible === false) continue;
     const fullText = worldLabelText(entry.world, { yearFirst });
@@ -84,7 +85,7 @@ export function createWorldLabelCandidates(entries, { currentId, focusedId, proj
     candidates.push({
       id: entry.id, text, x: point.x, y: point.y,
       width: size.width, height: size.height,
-      priority: labelPriority({ id: entry.id, lineage: entry.lineage }, currentId, focusedId),
+      priority: Math.max(included ? 85 : 0, labelPriority({ id: entry.id, lineage: entry.lineage }, currentId, focusedId)),
       kind: 'world', fullText,
     });
   }

@@ -10,6 +10,7 @@ test('offscreen lineage has a directional marker and visible children can be lab
   assert.match(labels[0].text, /^↑ /);
   assert.equal(labels[0].fullText, 'Ancestor');
   assert.equal(labels[1].text, 'Child');
+  assert.ok(labels[1].priority > labels[0].priority, 'visible Orbit children take precedence over less immediate lineage labels');
 });
 
 test('world label text is concise and names the year when present', () => {
