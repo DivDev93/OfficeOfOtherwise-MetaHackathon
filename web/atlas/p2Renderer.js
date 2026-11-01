@@ -1,0 +1,359 @@
+import * as THREE from 'three';
+import { questionStemPathKey, transformAtlasEdgeShape } from './p2Atlas.js';
+
+const PARCHMENT = '#eadfca';
+const TRUNK = '#91acb5';
+const TICK = '#eadfca';
+
+function labelTexture(text, color = '#eadfca') {
+  const canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 100;
+  const context = canvas.getContext('2d');
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = color; context.font = '600 52px Inter, system-ui, sans-serif';
+  context.fillText(String(text).slice(0, 62), 20, 62, 598);
+  const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function blankLabelTexture() {
+  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 2;
+  const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function replaceLabel(sprite, text, color, scale) {
+  sprite.material.map?.dispose();
+  sprite.material.map = labelTexture(text, color);
+  sprite.material.color.set('#ffffff'); sprite.material.needsUpdate = true;
+  sprite.userData.labelText = String(text);
+  if (scale) sprite.scale.set(scale.x, scale.y, 1);
+}
+
+function setLabelPixels(sprite, width, height, priority = 0) {
+  sprite.userData.pixelSize = { width, height };
+  sprite.userData.labelPriority = priority;
+}
+
+function lineObject(color, opacity = 0.8) {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+  return new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false }));
+}
+
+function routeFractions(points) {
+  const cumulative = [0];
+  for (let index = 1; index < points.length; index++) cumulative.push(cumulative.at(-1)
+    + Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y));
+  const total = cumulative.at(-1) || 1;
+  return cumulative.map(distance => distance / total);
+}
+
+function sampleRoute(points, fractions, amount) {
+  let segment = 1;
+  while (segment < fractions.length - 1 && fractions[segment] < amount - 1e-10) segment++;
+  const span = fractions[segment] - fractions[segment - 1] || 1;
+  const t = Math.max(0, Math.min(1, (amount - fractions[segment - 1]) / span));
+  const a = points[segment - 1], b = points[segment];
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t };
+}
+
+function interpolateRoute(from, to, fromShape, toShape, progress, oldEndpoints, newEndpoints) {
+  const oldPath = transformAtlasEdgeShape(from, to, fromShape);
+  const newPath = transformAtlasEdgeShape(from, to, toShape);
+  if (oldPath.length < 2 || newPath.length < 2) return newPath.length >= 2 ? newPath : oldPath;
+  const oldBasis = transformAtlasEdgeShape(oldEndpoints?.from || from, oldEndpoints?.to || to, fromShape);
+  const newBasis = transformAtlasEdgeShape(newEndpoints?.from || from, newEndpoints?.to || to, toShape);
+  const oldFractions = routeFractions(oldPath), newFractions = routeFractions(newPath);
+  const fractions = [...new Set([...routeFractions(oldBasis), ...routeFractions(newBasis)])].sort((a, b) => a - b);
+  return fractions.map(fraction => {
+    const a = sampleRoute(oldPath, oldFractions, fraction), b = sampleRoute(newPath, newFractions, fraction);
+    return { x: a.x + (b.x - a.x) * progress, y: a.y + (b.y - a.y) * progress, z: a.z + (b.z - a.z) * progress };
+  });
+}
+
+/** Add the P2 trunk and controls visuals to the caller's only scene. */
+export function createAtlasP2Renderer(scene, { earthGeometry, earthMaterial } = {}) {
+  const group = new THREE.Group(); group.name = 'Atlas P2 trunk overlay'; scene.add(group);
+  const trunk = lineObject(TRUNK, 0.7); group.add(trunk);
+  const branches = lineObject(PARCHMENT, 0.82); group.add(branches);
+  const questionAttachments = lineObject(PARCHMENT, 0.86); questionAttachments.name = 'Inactive current-world question chip attachments'; group.add(questionAttachments);
+  const ticks = lineObject(TICK, 0.64); group.add(ticks);
+  const focusBreaks = lineObject('#d5a85c', 0.92); focusBreaks.name = 'Focus and context time-scale breaks'; group.add(focusBreaks);
+  const chipStems = lineObject(PARCHMENT, 0.78); chipStems.name = 'Folded question stems to trunk divergence'; group.add(chipStems);
+  const presentMaterial = earthMaterial?.clone?.() || new THREE.MeshStandardMaterial({ color: '#dce9eb', roughness: 0.94 });
+  const presentEarth = new THREE.Mesh(earthGeometry || new THREE.SphereGeometry(1, 48, 32), presentMaterial);
+  presentEarth.name = 'Present-day Earth 2026'; presentEarth.userData.referenceYear = 2026;
+  group.add(presentEarth);
+  const presentLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture('PRESENT-DAY EARTH · 2026', '#d7e5e8'), transparent: true, depthWrite: false, opacity: 0 }));
+  presentLabel.scale.set(1.7, 0.27, 1); group.add(presentLabel);
+  const scaleLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture('YEAR'), transparent: true, depthWrite: false, opacity: 0 }));
+  scaleLabel.scale.set(2.7, 0.32, 1); group.add(scaleLabel);
+  const axisLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture('HISTORY DEPTH'), transparent: true, depthWrite: false, opacity: 0 }));
+  axisLabel.scale.set(1.75, 0.28, 1); group.add(axisLabel);
+  const undatedLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture('UNDATED · NO TIME POSITION'), transparent: true, depthWrite: false, opacity: 0 }));
+  undatedLabel.scale.set(1.8, 0.25, 1); group.add(undatedLabel);
+  setLabelPixels(presentLabel, 190, 30, 90);
+  setLabelPixels(scaleLabel, 280, 28, 35);
+  setLabelPixels(axisLabel, 210, 28, 80);
+  setLabelPixels(undatedLabel, 190, 24, 50);
+  let tickSprites = [], chipSprites = [], questionSprites = [], layout = null, axisMode = 'history-distance';
+  let questionBranchOpacity = 1, currentOpacity = 0;
+  let disposed = false;
+
+  function setBaseTexture(texture) {
+    if (disposed || !texture) return;
+    const previous = presentMaterial.map;
+    presentMaterial.map = texture.clone();
+    presentMaterial.map.needsUpdate = true;
+    if (previous && previous !== texture) previous.dispose();
+    presentMaterial.needsUpdate = true;
+  }
+
+  function ensureSprites(collection, count, prefix) {
+    while (collection.length < count) {
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture(''), transparent: true, depthWrite: false, opacity: 0 }));
+      sprite.name = `${prefix} ${collection.length + 1}`; group.add(sprite); collection.push(sprite);
+    }
+    while (collection.length > count) {
+      const sprite = collection.pop(); group.remove(sprite); sprite.material.map?.dispose(); sprite.material.dispose();
+    }
+  }
+
+  function setLinePositions(line, values) {
+    const old = line.geometry.attributes.position?.array;
+    if (!old || old.length !== values.length) {
+      line.geometry.dispose(); line.geometry = new THREE.BufferGeometry();
+      line.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(values.length), 3));
+    }
+    const attribute = line.geometry.attributes.position;
+    attribute.array.set(values); attribute.needsUpdate = true;
+    line.geometry.computeBoundingSphere();
+  }
+
+  function update(nextLayout, {
+    opacity = 0,
+    axisMode: nextMode = 'history-distance',
+    branchProgress = 1,
+    fromBranches = null,
+    fromStems = null,
+    revealPlan = null,
+  } = {}) {
+    if (disposed || !nextLayout) return;
+    layout = nextLayout; axisMode = nextMode;
+    const alpha = Math.max(0, Math.min(1, opacity));
+    currentOpacity = alpha;
+    group.visible = alpha > 0;
+    trunk.material.opacity = 0.7 * alpha;
+    branches.material.opacity = 0.82 * alpha * questionBranchOpacity;
+    branches.visible = questionBranchOpacity > 0;
+    ticks.material.opacity = 0.64 * alpha;
+    focusBreaks.material.opacity = 0.92 * alpha;
+    chipStems.material.opacity = 0.78 * alpha * questionBranchOpacity;
+    chipStems.visible = questionBranchOpacity > 0;
+    presentEarth.visible = alpha > 0;
+    presentEarth.position.set(layout.presentEarth.x, layout.presentEarth.y, -0.15);
+    presentEarth.scale.setScalar(0.36 * alpha);
+    presentMaterial.opacity = alpha; presentMaterial.transparent = true;
+    presentMaterial.needsUpdate = true;
+    presentLabel.position.set(layout.presentEarth.x, layout.presentEarth.y + 0.58, 0);
+    // The crisp screen-space overlay owns this label; suppress the old sprite.
+    presentLabel.material.opacity = 0;
+    const scaleText = 'YEAR';
+    if (scaleLabel.userData.labelText !== scaleText) replaceLabel(scaleLabel, scaleText, PARCHMENT, { x: 0.65, y: 0.2 });
+    scaleLabel.position.set((layout.trunk.left + layout.trunk.right) / 2, layout.trunk.y - 0.88, 0);
+    scaleLabel.material.opacity = alpha;
+    const axisText = `${nextMode === 'history-distance' ? 'HISTORY DEPTH' : nextMode === 'branch-order' ? 'BRANCH ORDER' : 'THEME'}`;
+    if (axisLabel.userData.labelText !== axisText) replaceLabel(axisLabel, axisText, PARCHMENT, { x: 1.2, y: 0.2 });
+    axisLabel.position.set(layout.trunk.left - 0.75, 1.5, 0);
+    axisLabel.material.opacity = alpha;
+    const undatedText = layout.undatedLane?.label || 'UNDATED · NO TIME POSITION';
+    if (undatedLabel.userData.labelText !== undatedText) replaceLabel(undatedLabel, undatedText, PARCHMENT, { x: 1.8, y: 0.25 });
+    undatedLabel.position.set(layout.undatedLane?.x ?? layout.trunk.left, layout.trunk.y + 0.34, 0.05);
+    undatedLabel.material.opacity = layout.undatedLane ? alpha : 0;
+
+    setLinePositions(trunk, [layout.trunk.left, layout.trunk.y, -0.1, layout.trunk.right, layout.trunk.y, -0.1]);
+    const focus = layout.focusContext;
+    const breakValues = [];
+    for (const x of [focus?.olderContext ? focus.left : null, focus?.newerContext ? focus.right : null]) {
+      if (x == null) continue;
+      breakValues.push(
+        x - 0.18, layout.trunk.y - 0.12, 0.02, x - 0.06, layout.trunk.y + 0.12, 0.02,
+        x + 0.06, layout.trunk.y - 0.12, 0.02, x + 0.18, layout.trunk.y + 0.12, 0.02,
+      );
+    }
+    setLinePositions(focusBreaks, breakValues);
+    const branchValues = [];
+    const foldedQuestionIds = new Set(layout.chips.map(chip => String(chip.questionId)));
+    const oldById = new Map((fromBranches || []).map(branch => [branch.questionId, branch]));
+    const oldStems = new Map((fromStems || []).map(path => [questionStemPathKey(path), path]));
+    const stems = new Map((layout.questionStemPaths || []).map(path => [questionStemPathKey(path), path]));
+    const progress = Math.max(0, Math.min(1, branchProgress));
+    for (const branch of layout.questionBranches) {
+      const retainsLineageRoot = (layout.questionRootPaths || []).some(path => path.questionId === branch.questionId && path.color === 'lineage');
+      if (!branch.active && foldedQuestionIds.has(String(branch.questionId)) && !retainsLineageRoot) continue;
+      if (branch.attachmentMode === 'current-world' && branch.attachment) continue;
+      const questionRootId = `${String.fromCharCode(0)}question-root:${branch.questionId}`;
+      const revealAnchor = revealPlan?.positions.get(questionRootId);
+      if (revealPlan && !revealAnchor) continue;
+      const stemKey = questionStemPathKey({ questionId: branch.questionId });
+      const stem = stems.get(stemKey);
+      if (!stem?.routeShape?.length || stem.foldedChip) continue;
+      const prior = oldById.get(branch.questionId);
+      const startY = prior ? prior.y : 0;
+      const y = revealAnchor?.y ?? (startY + (branch.y - startY) * progress);
+      const x = revealAnchor?.x ?? branch.x;
+      const revealAmount = revealPlan ? Math.max(0, Math.min(1, revealPlan.opacity.get(questionRootId) ?? 0)) : 1;
+      const from = { x, y: layout.trunk.y, z: -0.05 };
+      const to = { x, y: layout.trunk.y + (y - layout.trunk.y) * revealAmount, z: -0.05 };
+      const previousStem = oldStems.get(stemKey);
+      const points = previousStem?.routeShape?.length > 1 && progress < 1
+        ? interpolateRoute(from, to, previousStem.routeShape, stem.routeShape, progress,
+          { from: previousStem.from, to: previousStem.to }, { from: stem.from, to: stem.to })
+        : transformAtlasEdgeShape(from, to, stem.routeShape);
+      for (let index = 1; index < points.length; index++) {
+        branchValues.push(points[index - 1].x, points[index - 1].y, points[index - 1].z,
+          points[index].x, points[index].y, points[index].z);
+      }
+    }
+    setLinePositions(branches, branchValues);
+
+    const attachmentValues = [];
+    for (const branch of layout.questionBranches) {
+      if (!branch.active && foldedQuestionIds.has(String(branch.questionId))) continue;
+      if (branch.attachmentMode !== 'current-world' || branch.active || !branch.attachment) continue;
+      const chip = layout.chips.find(item => item.questionId === branch.questionId);
+      if (!chip) continue;
+      attachmentValues.push(branch.attachment.from.x, branch.attachment.from.y, branch.attachment.from.z || 0, chip.x, chip.y, 0.06);
+    }
+    setLinePositions(questionAttachments, attachmentValues);
+    questionAttachments.material.opacity = 0.86 * alpha * questionBranchOpacity;
+    questionAttachments.visible = questionBranchOpacity > 0;
+
+    ensureSprites(questionSprites, layout.questionBranches.length, 'Question divergence token');
+    layout.questionBranches.forEach((branch, index) => {
+      const sprite = questionSprites[index];
+      const prefix = branch.active ? 'ACTIVE QUESTION · ' : 'QUESTION · ';
+      const text = `${prefix}${branch.label || branch.questionId}`;
+      if (sprite.userData.labelText !== text) replaceLabel(sprite, text, PARCHMENT, { x: 2.45, y: 0.28 });
+      setLabelPixels(sprite, branch.active ? 220 : 190, 30, branch.active ? 85 : 35);
+      const rootId = `${String.fromCharCode(0)}question-root:${branch.questionId}`;
+      const planned = revealPlan?.positions.get(rootId);
+      const chip = branch.attachmentMode === 'current-world' && !branch.active ? layout.chips.find(item => item.questionId === branch.questionId) : null;
+      sprite.position.set(chip?.x ?? planned?.x ?? branch.labelX ?? branch.x,
+        chip ? chip.y + 0.36 : planned ? planned.y + 0.34 : branch.labelY ?? (branch.y + 0.34), 0.03);
+      sprite.material.opacity = !branch.active && foldedQuestionIds.has(String(branch.questionId)) ? 0
+        : alpha * (revealPlan ? revealPlan.opacity.get(rootId) ?? 0 : 1);
+    });
+
+    const tickValues = [];
+    for (const tick of layout.visibleTicks) tickValues.push(tick.x, layout.trunk.y - 0.04, -0.04, tick.x, layout.trunk.y - 0.19, -0.04);
+    setLinePositions(ticks, tickValues);
+    const stemValues = [];
+    for (const chip of layout.chips) {
+      const stemKey = questionStemPathKey({ questionId: chip.questionId, foldedChip: true });
+      const stem = stems.get(stemKey);
+      if (!stem?.foldedChip || !stem.routeShape?.length) continue;
+      const from = { x: stem.from.x, y: layout.trunk.y, z: 0.04 };
+      const to = { x: stem.to.x, y: chip.y + 0.22, z: 0.04 };
+      const previousStem = oldStems.get(stemKey);
+      const points = previousStem?.foldedChip && previousStem.routeShape?.length > 1 && progress < 1
+        ? interpolateRoute(from, to, previousStem.routeShape, stem.routeShape, progress,
+          { from: previousStem.from, to: previousStem.to }, { from: stem.from, to: stem.to })
+        : transformAtlasEdgeShape(from, to, stem.routeShape);
+      for (let index = 1; index < points.length; index++) {
+        stemValues.push(points[index - 1].x, points[index - 1].y, points[index - 1].z,
+          points[index].x, points[index].y, points[index].z);
+      }
+    }
+    setLinePositions(chipStems, stemValues);
+    ensureSprites(tickSprites, layout.visibleTicks.length, 'Time tick');
+    layout.visibleTicks.forEach((tick, index) => {
+      const sprite = tickSprites[index];
+      if (sprite.userData.labelText !== tick.label) replaceLabel(sprite, tick.label, PARCHMENT, { x: Math.max(0.72, tick.label.length * 0.026), y: 0.2 });
+      setLabelPixels(sprite, Math.max(58, tick.label.length * 7.4), 16, 30);
+      sprite.position.set(tick.x, -0.5, 0);
+      sprite.material.opacity = alpha;
+    });
+
+    ensureSprites(chipSprites, layout.chips.length, 'Folded question chip');
+    layout.chips.forEach((chip, index) => {
+      const sprite = chipSprites[index];
+      if (!sprite.userData.overlayTarget) {
+        sprite.material.map?.dispose();
+        sprite.material.map = blankLabelTexture();
+        sprite.material.color.set('#ffffff'); sprite.material.needsUpdate = true;
+        sprite.userData.overlayTarget = true;
+      }
+      sprite.userData.labelText = chip.label;
+      setLabelPixels(sprite, Math.min(220, Math.max(92, chip.label.length * 6.4)), 20, 80);
+      sprite.position.set(chip.x, chip.y + 0.36, 0.08);
+      sprite.material.opacity = alpha;
+    });
+  }
+
+  function layoutLabels(camera, viewport, reservedRects = []) {
+    if (disposed || !camera || !viewport?.width || !viewport?.height) return;
+    camera.updateMatrixWorld(true); group.updateMatrixWorld(true);
+    const labels = [presentLabel, scaleLabel, axisLabel, undatedLabel, ...questionSprites, ...tickSprites, ...chipSprites]
+      .filter(sprite => sprite.visible && sprite.material.opacity > 0.04)
+      .sort((a, b) => (b.userData.labelPriority || 0) - (a.userData.labelPriority || 0)
+        || String(a.userData.labelText || '').localeCompare(String(b.userData.labelText || '')));
+    const cameraQuaternion = camera.getWorldQuaternion(new THREE.Quaternion());
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cameraQuaternion);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cameraQuaternion);
+    const reservedTop = Math.min(138, Math.max(88, viewport.height * 0.15));
+    const originX = Number(viewport.left) || 0, originY = Number(viewport.top) || 0;
+    const safe = { left: originX + 8, right: originX + viewport.width - 8, top: originY + reservedTop, bottom: originY + viewport.height - 8 };
+    const accepted = reservedRects.map(rect => ({ ...rect }));
+    for (const sprite of labels) {
+      const base = sprite.getWorldPosition(new THREE.Vector3());
+      const distance = base.distanceTo(camera.getWorldPosition(new THREE.Vector3()));
+      const size = sprite.userData.pixelSize || { width: 160, height: 28 };
+      const width = Math.min(size.width, Math.max(80, viewport.width - 16));
+      const height = size.height;
+      const worldPerPixel = 2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / viewport.height;
+      sprite.scale.set(width * worldPerPixel, height * worldPerPixel, 1);
+      const projected = base.clone().project(camera);
+      const originalX = originX + (projected.x + 1) * 0.5 * viewport.width;
+      const originalY = originY + (1 - projected.y) * 0.5 * viewport.height;
+      const offsets = [[0, 0], [0, -(height / 2 + 6)], [0, height / 2 + 6], [width / 2 + 6, 0], [-width / 2 - 6, 0], [0, -(height + 10)], [0, height + 10]];
+      let chosen = null;
+      for (const [dx, dy] of offsets) {
+        const x = Math.min(safe.right - width / 2, Math.max(safe.left + width / 2, originalX + dx));
+        const y = Math.min(safe.bottom - height / 2, Math.max(safe.top + height / 2, originalY + dy));
+        const overlaps = accepted.some(other => Math.abs(other.x - x) < (other.width + width) / 2 + 3
+          && Math.abs(other.y - y) < (other.height + height) / 2 + 3);
+        if (!overlaps) { chosen = { x, y, width, height }; break; }
+      }
+      if (!chosen || projected.z < -1 || projected.z > 1) { sprite.material.opacity = 0; continue; }
+      const dx = chosen.x - originalX, dy = chosen.y - originalY;
+      const world = base.addScaledVector(right, dx * worldPerPixel).addScaledVector(up, -dy * worldPerPixel);
+      sprite.position.copy(group.worldToLocal(world));
+      accepted.push(chosen);
+    }
+  }
+
+  function setQuestionBranchOpacity(value) {
+    questionBranchOpacity = Math.max(0, Math.min(1, Number(value) || 0));
+    branches.material.opacity = 0.82 * currentOpacity * questionBranchOpacity;
+    questionAttachments.material.opacity = 0.86 * currentOpacity * questionBranchOpacity;
+    chipStems.material.opacity = 0.78 * currentOpacity * questionBranchOpacity;
+    branches.visible = questionBranchOpacity > 0;
+    questionAttachments.visible = questionBranchOpacity > 0;
+    chipStems.visible = questionBranchOpacity > 0;
+  }
+
+  function dispose() {
+    if (disposed) return; disposed = true; group.removeFromParent();
+    group.traverse(object => {
+      object.geometry?.dispose?.();
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) { material?.map?.dispose?.(); material?.dispose?.(); }
+    });
+  }
+
+  return {
+    update, layoutLabels, dispose, group, presentEarth, setBaseTexture, setQuestionBranchOpacity,
+    getQuestionChipTargets: () => chipSprites.map((sprite, index) => ({ chip: layout?.chips?.[index] || null, sprite })),
+  };
+}

@@ -1,20 +1,24 @@
 import { createServer } from 'node:http';
 import { readFile, readdir, stat, realpath } from 'node:fs/promises';
-import { resolve, join, extname } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { resolve, join, extname, basename, dirname, sep } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateVoiceWav, MAX_AUDIO_BYTES, createDemoTranscriber } from '../src/providers/metaVoice.js';
 import { createContinuationStore } from '../src/demo/continuationStore.js';
 import { createEventSceneStore } from '../src/demo/eventSceneStore.js';
 import { createEventCutoutStore } from '../src/demo/eventCutoutStore.js';
 import { continuationFor, MAX_CONTINUATION_DEPTH } from '../src/demo/continuation.js';
+import { prepareAuthoredQuestion } from '../src/demo/authoredQuestion.js';
 import { keywordCheck } from '../src/guardrails/topicPolicy.js';
 import { geographyText } from '../web/geography.js';
 import { SpendCapError } from '../src/lib/metaClient.js';
 import { configuredDailyCap, configuredRateLimit, validateStartupConfig } from '../src/demo/budget.js';
 import { configuredExpansionLimit, createExpansionBudget } from '../src/demo/expansionBudget.js';
+import { selectRunEvidence } from '../src/evidence/index.js';
+import { selectFreshEvidence } from '../src/evidence/fresh.js';
 
 const assets = new Set(['branch.json', 'trace.json', 'hero.png', 'mask.png', 'cutout.png', 'model.glb', 'model.meshopt.glb']);
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.glb': 'model/gltf-binary', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
@@ -54,7 +58,7 @@ function canonicalJson(value) {
   return value;
 }
 
-export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), runPipeline, renderEventScene, segmentEventCutout, transcribeAudio, voiceTimeoutMs = 45_000, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now, importRunIds = [], maxContinuationDepth = MAX_CONTINUATION_DEPTH, maxConcurrentJobs = Number(env.DEMO_MAX_CONCURRENT_JOBS ?? 3), localReviewAccess = false } = {}) {
+export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), evidencePath = resolve('demo/evidence/v1.json'), runPipeline, renderEventScene, segmentEventCutout, transcribeAudio, voiceTimeoutMs = 45_000, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now, importRunIds = [], maxContinuationDepth = MAX_CONTINUATION_DEPTH, maxConcurrentJobs = Number(env.DEMO_MAX_CONCURRENT_JOBS ?? 3), localReviewAccess = false, packagedReplayRoot = resolve(fileURLToPath(new URL('../demo/replay-history/', import.meta.url))) } = {}) {
   if (!Number.isInteger(maxConcurrentJobs) || maxConcurrentJobs < 1 || maxConcurrentJobs > 8) throw new RangeError('maxConcurrentJobs must be an integer from 1 to 8');
   let activeJobs = 0;
   const acquireJob = () => { if (activeJobs >= maxConcurrentJobs) return false; activeJobs++; return true; };
@@ -64,9 +68,86 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
   const requests = new Map();
   const expansionLimit = configuredExpansionLimit(env);
   const liveRoots = new Map();
-  const root = resolve(webDir), runsRoot = resolve(runsDir), liveRoot = resolve(liveRunsDir);
-  const expansionBudget = createExpansionBudget(expansionLimit, { filePath: join(liveRoot, '.expansion-sessions.json') });
+  const canonicalRoot = path => {
+    const target = resolve(path);
+    let current = target;
+    const suffix = [];
+    while (true) {
+      try { return resolve(realpathSync(current), ...suffix); }
+      catch {
+        const parent = dirname(current);
+        if (parent === current) return target;
+        suffix.unshift(basename(current));
+        current = parent;
+      }
+    }
+  };
+  const pathKey = path => process.platform === 'win32' ? path.toLocaleLowerCase('en-US') : path;
+  const isWithinRoot = (candidate, parent) => {
+    const childKey = pathKey(candidate), parentKey = pathKey(parent);
+    const prefix = parentKey.endsWith(sep) ? parentKey : `${parentKey}${sep}`;
+    return childKey === parentKey || childKey.startsWith(prefix);
+  };
+  const root = resolve(webDir), runsRoot = resolve(runsDir), liveRoot = canonicalRoot(resolve(liveRunsDir));
+  const packagedRoot = packagedReplayRoot ? canonicalRoot(resolve(packagedReplayRoot)) : null;
+  const writableRootIsPackage = !!packagedRoot && isWithinRoot(liveRoot, packagedRoot);
+  async function writableRootSharesPackage() {
+    if (!packagedRoot) return false;
+    return isWithinRoot(canonicalRoot(liveRoot), canonicalRoot(packagedRoot));
+  }
+  const expansionBudget = createExpansionBudget(expansionLimit, { filePath: writableRootIsPackage ? undefined : join(liveRoot, '.expansion-sessions.json') });
   const store = createContinuationStore(liveRoot, now);
+  // The checked-in replay package is a read-only fallback. Runtime state stays
+  // in liveRoot, and a live registry record always wins for a colliding ID.
+  const packagedStore = packagedRoot ? createContinuationStore(packagedRoot, now) : null;
+  const packagedIds = new Set();
+  function savedRecord(id) { return store.get(id) ?? (packagedIds.has(id) ? packagedStore?.get(id) ?? null : null); }
+  function packagedChildMatches(edge) {
+    const record = safeId(edge?.runId) ? savedRecord(edge.runId) : null;
+    return record?.id === edge.runId && record.status === 'complete'
+      && record.completion?.runId === edge.runId && record.completion?.branch?.status === 'ok'
+      && record.continuation?.parentRunId === edge.parentRunId
+      && record.continuation?.parentBranchId === edge.parentBranchId
+      && JSON.stringify(canonicalJson(record.continuation)) === JSON.stringify(canonicalJson(edge.continuation));
+  }
+  const semanticBranch = source => ({ id: source.id, title: source.title, year: source.year, summary: source.summary, place: source.place,
+    ...(source.causalLink !== undefined ? { causalLink: source.causalLink } : {}), ...(source.geography !== undefined ? { geography: source.geography } : {}) });
+  async function packagedRunMatches(id, branch) {
+    if (!packagedIds.has(id) || !packagedRoot || !branch) return false;
+    for (const candidate of [packagedRoot, runsRoot]) {
+      try {
+        const actualRoot = await realpath(candidate);
+        const actualPath = await realpath(join(candidate, id, 'branch.json'));
+        const separator = actualRoot.includes('\\') ? '\\' : '/';
+        if (!actualPath.startsWith(actualRoot + separator)) continue;
+        const packagedBranch = JSON.parse(await readFile(actualPath, 'utf8'));
+        const semanticRun = value => ({ status: value.status, divergence: value.divergence,
+          branches: (Array.isArray(value.branches) ? value.branches : []).map(semanticBranch).sort((a, b) => String(a.id).localeCompare(String(b.id))) });
+        return JSON.stringify(canonicalJson(semanticRun(branch))) === JSON.stringify(canonicalJson(semanticRun(packagedBranch)));
+      } catch { /* try the other known packaged source root */ }
+    }
+    return false;
+  }
+  async function savedParentRecord(parent, branchId) {
+    const live = store.get(parent?.id);
+    if (live) return live;
+    const packaged = packagedIds.has(parent?.id) ? packagedStore?.get(parent.id) : null;
+    const branch = parent?.branch?.branches?.find(item => item.id === branchId);
+    return packaged && await packagedRunMatches(parent.id, parent.branch) && branch ? packaged : null;
+  }
+  function packageEdgeMatches(parentId, branch, edge, parentDivergence) {
+    const event = edge?.continuation?.path?.at(-1);
+    if (!branch || edge?.parentRunId !== parentId || edge?.parentBranchId !== branch.id || event?.runId !== parentId || event?.branchId !== branch.id
+      || edge.continuation?.rootDivergence !== parentDivergence) return false;
+    return JSON.stringify(canonicalJson(semanticBranch(branch))) === JSON.stringify(canonicalJson(semanticBranch({ ...event, id: event.branchId })));
+  }
+  function savedEdge(parentId, branchId, parent) {
+    const liveEdge = store.edge(parentId, branchId);
+    if (liveEdge) return liveEdge;
+    const branch = parent?.branch?.branches?.find(item => item.id === branchId);
+    const packagedEdge = packagedIds.has(parentId) ? packagedStore?.edge(parentId, branchId) : null;
+    return packageEdgeMatches(parentId, branch, packagedEdge, parent?.divergence) && packagedChildMatches(packagedEdge) ? packagedEdge : null;
+  }
   const scenes = createEventSceneStore(liveRoot);
   const cutouts = createEventCutoutStore(liveRoot);
   const activeScenes = new Set(), activeCutouts = new Set();
@@ -185,7 +266,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       const separator = actualRoot.includes('\\') ? '\\' : '/';
       if (!actualPath.startsWith(actualRoot + separator)) throw new Error('Outside root');
       let data = await readFile(actualPath);
-      if ((allowedRoot === runsRoot || allowedRoot === liveRoot) && extname(path) === '.json') data = Buffer.from(JSON.stringify(clean(JSON.parse(data.toString('utf8')))));
+      if ((allowedRoot === runsRoot || allowedRoot === liveRoot || allowedRoot === packagedRoot) && extname(path) === '.json') data = Buffer.from(JSON.stringify(clean(JSON.parse(data.toString('utf8')))));
       res.writeHead(200, { 'Content-Type': types[extname(path).toLowerCase()] ?? 'application/octet-stream', 'Content-Length': data.length, 'X-Content-Type-Options': 'nosniff' });
       res.end(method === 'HEAD' ? undefined : data);
     } catch { json(res, 404, { error: 'Not found' }); }
@@ -202,7 +283,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     return result.sort((a, b) => a.id.localeCompare(b.id));
   }
   async function manifest(id) {
-    const roots = [runsRoot, liveRoots.get(id)].filter(Boolean);
+    const roots = [liveRoots.get(id), packagedIds.has(id) ? packagedRoot : null, runsRoot].filter(Boolean);
     for (const candidate of roots) {
       try {
         const actualRoot = await realpath(candidate);
@@ -230,27 +311,56 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         } catch { /* optional metadata */ }
         const assetUrls = Object.fromEntries(present.map(name => [name, `/runs/${encodeURIComponent(id)}/${name}`]));
         const rendering = renderMetadata(branch);
-        const saved = store.get(id);
-        const children = store.children(id);
+        const liveSaved = store.get(id);
+        const packagedSaved = packagedIds.has(id) && await packagedRunMatches(id, branch) ? packagedStore?.get(id) : null;
+        const saved = liveSaved ?? packagedSaved;
+        const liveChildren = store.children(id);
+        const childrenByBranch = new Map();
+        if (packagedIds.has(id)) {
+          for (const child of packagedStore?.children(id) ?? []) {
+            const selectedBranch = branch.branches?.find(item => item.id === child.branchId);
+            const edge = packagedStore?.edge(id, child.branchId);
+            if (packageEdgeMatches(id, selectedBranch, edge, branch.divergence) && packagedChildMatches(edge)) childrenByBranch.set(child.branchId, child);
+          }
+        }
+        for (const child of liveChildren) childrenByBranch.set(child.branchId, child);
+        const branchIds = new Set((Array.isArray(branch.branches) ? branch.branches : []).map(item => item?.id).filter(safeId));
+        const children = [...childrenByBranch.values()].filter(child => branchIds.has(child.branchId));
         for (const child of children) {
           const edge = store.edge(id, child.branchId);
           if (await budgetFailureEdge(edge, id, child.branchId)) child.code = 'budget_exhausted';
         }
         const continuation = { rootRunId: saved?.continuation?.rootRunId ?? id, path: [], ...(saved?.continuation ?? {}), children };
         const selectedHero = Array.isArray(branch.branches) ? branch.branches.find(item => item.id === branch.hero?.branchId) : null;
-        return { id, title: value(branch.hero?.title) || value(selectedHero?.title) || value(branch.title) || value(branch.divergence) || id, divergence: value(branch.divergence), ...rendering, status: provisional?.status ?? rendering.status ?? (value(branch.status) || 'unknown'), ...((provisional?.reason ?? rendering.reason) ? { reason: provisional?.reason ?? rendering.reason } : {}), hasModel: present.includes('model.glb') || present.includes('model.meshopt.glb'), assets: present, assetUrls, branch, continuation };
+        return { id, title: value(branch.hero?.title) || value(selectedHero?.title) || value(branch.title) || value(branch.divergence) || id, divergence: value(branch.divergence), ...rendering, status: provisional?.status ?? rendering.status ?? (value(branch.status) || 'unknown'), ...((provisional?.reason ?? rendering.reason) ? { reason: provisional?.reason ?? rendering.reason } : {}), hasModel: present.includes('model.glb') || present.includes('model.meshopt.glb'), assets: present, assetUrls, branch, continuation, ...(saved?.questionAttachment ? { questionAttachment: saved.questionAttachment } : {}) };
       } catch { /* no valid manifest in this root */ }
     }
     return null;
   }
   const ready = (async () => {
-    // An operator may import explicitly named IDs from the configured live root only.
-    for (const id of importRunIds) {
-      if (!safeId(id) || store.get(id)) continue;
-      liveRoots.set(id, liveRoot);
-      const item = await manifest(id);
-      if (!item || item.branch?.status !== 'ok') { liveRoots.delete(id); continue; }
-      store.save({ id, status: 'complete', rootDivergence: item.divergence, completion: { runId: id, branch: item.branch } });
+    // Only discover direct, safe-ID directories in the fixed packaged fixture;
+    // never scan arbitrary output roots or copy package data into writable state.
+    try {
+      if (packagedRoot) {
+        for (const entry of await readdir(packagedRoot, { withFileTypes: true })) {
+          if (entry.isDirectory() && safeId(entry.name)) packagedIds.add(entry.name);
+        }
+        try {
+          const packaged = JSON.parse(await readFile(join(packagedRoot, 'PACKAGE.json'), 'utf8'));
+          if (safeId(packaged.root?.runId)) packagedIds.add(packaged.root.runId);
+        } catch { /* root metadata is optional */ }
+      }
+    } catch { /* packaged replay data is optional */ }
+    // Never turn the checked-in replay source into a writable import target.
+    if (!(await writableRootSharesPackage())) {
+      // An operator may import explicitly named IDs from the configured live root only.
+      for (const id of importRunIds) {
+        if (!safeId(id) || store.get(id)) continue;
+        liveRoots.set(id, liveRoot);
+        const item = await manifest(id);
+        if (!item || item.branch?.status !== 'ok') { liveRoots.delete(id); continue; }
+        store.save({ id, status: 'complete', rootDivergence: item.divergence, completion: { runId: id, branch: item.branch } });
+      }
     }
   })();
   const server = createServer(async (req, res) => {
@@ -260,11 +370,13 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       const path = url.pathname;
       if (req.method === 'GET' && path === '/api/history') {
         if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.' });
+        const records = new Map(store.list().map(record => [record.id, record]));
+        for (const record of packagedStore?.list() ?? []) if (packagedIds.has(record.id) && !records.has(record.id)) records.set(record.id, record);
         const runs = [];
-        for (const record of store.list()) {
+        for (const record of records.values()) {
           if (record.status !== 'complete') continue;
           const item = await manifest(record.id);
-          if (item) runs.push({ id: item.id, title: item.title, divergence: record.rootDivergence ?? item.divergence, ...(record.continuation ? { parentRunId: record.continuation.parentRunId, parentBranchId: record.continuation.parentBranchId } : {}), updatedAt: record.updatedAt });
+          if (item) runs.push({ id: item.id, title: item.title, divergence: record.rootDivergence ?? item.divergence, ...(record.continuation ? { parentRunId: record.continuation.parentRunId, parentBranchId: record.continuation.parentBranchId } : {}), ...(record.questionAttachment ? { questionAttachment: record.questionAttachment } : {}), updatedAt: record.updatedAt });
         }
         return json(res, 200, { runs: runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) });
       }
@@ -310,7 +422,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         const branch = item?.branch?.branches?.find(entry => entry.id === input.branchId);
         if (!branch) return json(res, 404, { error: 'Event not found.' });
         let context;
-        try { context = continuationFor(item, input.branchId, store.get(input.runId), 100); }
+        try { context = continuationFor(item, input.branchId, await savedParentRecord(item, input.branchId), 100); }
         catch { return json(res, 400, { error: 'This saved event cannot be segmented.' }); }
         const policyInput = [branch.title, branch.summary, branch.scene, branch.place?.name, context.rootDivergence, ...context.path.map(event => `${event.title}. ${event.summary}. ${geographyText(event.geography)}`)].filter(value => typeof value === 'string').join('\n');
         if (!keywordCheck(policyInput).allowed) return json(res, 400, { error: 'This saved event cannot pass the topic policy.' });
@@ -326,7 +438,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         const hasHero = item.branch.hero?.branchId === input.branchId && item.assets.includes('hero.png');
         if (req.method === 'GET') return json(res, 200, { status: hasHero || sceneRecord?.status === 'complete' ? 'missing' : 'missing-image' });
         if (!hasHero && sceneRecord?.status !== 'complete') return json(res, 200, { status: 'missing-image' });
-        if (env.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled.' });
+        if (await writableRootSharesPackage() || env.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled.' });
         let imagePath, imageRoot;
         if (hasHero) {
           for (const candidate of [runsRoot, liveRoot]) {
@@ -403,9 +515,9 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           return json(res, 200, { status: existing.status === 'in-progress' && !activeScenes.has(scenes.keyFor(input.runId, input.branchId)) ? 'uncertain' : existing.status });
         }
         if (req.method === 'GET') return json(res, 200, { status: 'missing' });
-        if (env.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled.' });
+        if (await writableRootSharesPackage() || env.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled.' });
         let context;
-        try { context = continuationFor(item, input.branchId, store.get(input.runId), 100); }
+        try { context = continuationFor(item, input.branchId, await savedParentRecord(item, input.branchId), 100); }
         catch { return json(res, 400, { error: 'This saved event cannot be illustrated.' }); }
         const scene = typeof branch.scene === 'string' ? branch.scene.slice(0, 4000) : '';
         const pathContext = context.path.map(event => `${event.year}: ${event.title}. ${event.summary}. ${geographyText(event.geography)}`).join('\n');
@@ -449,15 +561,35 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       }
       if ((req.method === 'GET' || req.method === 'HEAD') && path.startsWith('/runs/')) {
         const segments = path.split('/');
+        if (segments.length === 4 && safeId(segments[2]) && segments[3] === 'evidence') {
+          const id = segments[2];
+          const saved = await manifest(id);
+          let evidence = null;
+          if (saved?.status === 'ok' && liveRoots.has(id)) {
+            evidence = selectFreshEvidence(id, saved.branch);
+          }
+          // Imported saved runs can live under the writable root too. If their
+          // exact branch artifact has curated evidence, serve that after fresh
+          // evidence selection; selectRunEvidence binds it to the saved digest.
+          if (!evidence && saved?.status === 'ok') {
+            try {
+              const dataset = JSON.parse(await readFile(evidencePath, 'utf8'));
+              evidence = selectRunEvidence(dataset, id, saved.branch);
+            } catch { /* missing, malformed, or stale notes must not be exposed */ }
+          }
+          return evidence ? json(res, 200, evidence) : json(res, 404, { error: 'No valid evidence is available for this run.' });
+        }
         if (segments.length === 3 && safeId(segments[2])) {
           const data = await manifest(segments[2]);
           return data ? json(res, 200, data) : json(res, 404, { error: 'Not found' });
         }
         if (segments.length !== 4 || !safeId(segments[2]) || !assets.has(segments[3])) return json(res, 404, { error: 'Not found' });
-        const cached = join(runsRoot, segments[2], segments[3]);
-        if (await stat(cached).then(s => s.isFile()).catch(() => false)) return file(res, cached, req.method, runsRoot);
         const registeredRoot = liveRoots.get(segments[2]);
         if (registeredRoot) return file(res, join(registeredRoot, segments[2], segments[3]), req.method, registeredRoot);
+        const packagedAsset = packagedIds.has(segments[2]) && packagedRoot ? join(packagedRoot, segments[2], segments[3]) : null;
+        if (packagedAsset && await stat(packagedAsset).then(s => s.isFile()).catch(() => false)) return file(res, packagedAsset, req.method, packagedRoot);
+        const cached = join(runsRoot, segments[2], segments[3]);
+        if (await stat(cached).then(s => s.isFile()).catch(() => false)) return file(res, cached, req.method, runsRoot);
         return json(res, 404, { error: 'Not found' });
       }
       if (req.method === 'POST' && path === '/api/transcribe') {
@@ -517,21 +649,23 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > 8192) return json(res, 413, { error: 'Request too large' }); }
         let input;
         try { input = JSON.parse(body); } catch { return json(res, 400, { error: 'Invalid JSON' }); }
-        let continuation, edge, divergence;
+        let continuation, edge, divergence, questionAttachment;
         const retryBudgetFailure = continuing && input?.retryBudgetFailure === true;
         if (continuing) {
           if (!input || Object.keys(input).some(key => !['runId', 'branchId', 'retryBudgetFailure'].includes(key)) || (input.retryBudgetFailure !== undefined && typeof input.retryBudgetFailure !== 'boolean') || !safeId(input.runId ?? '') || !safeId(input.branchId ?? '')) return json(res, 400, { error: 'Choose a valid saved run and branch.' });
           const parent = await manifest(input.runId);
           if (!parent) return json(res, 404, { error: 'The parent run was not found.' });
-          try { continuation = continuationFor(parent, input.branchId, store.get(input.runId), Math.min(MAX_CONTINUATION_DEPTH, Math.max(1, maxContinuationDepth))); }
+          const parentSaved = await savedParentRecord(parent, input.branchId);
+          try { continuation = continuationFor(parent, input.branchId, parentSaved, Math.min(MAX_CONTINUATION_DEPTH, Math.max(1, maxContinuationDepth))); }
           catch (error) { return json(res, 400, { error: error.message }); }
           divergence = continuation.rootDivergence;
-          edge = store.edge(input.runId, input.branchId);
+          questionAttachment = parentSaved?.questionAttachment;
+          edge = savedEdge(input.runId, input.branchId, parent);
           if (edge) {
-            const saved = store.get(edge.runId);
+            const saved = savedRecord(edge.runId);
             if (edge.status === 'complete' && saved?.status === 'complete' && await manifest(edge.runId)) {
               res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
-              return res.end(`event: complete\ndata: ${JSON.stringify(clean({ ...saved.completion, continuation: saved.continuation, reused: true, step: 'complete', ...renderMetadata(saved.completion?.branch) }))}\n\n`);
+              return res.end(`event: complete\ndata: ${JSON.stringify(clean({ ...saved.completion, continuation: saved.continuation, ...(saved.questionAttachment ? { questionAttachment: saved.questionAttachment } : {}), reused: true, step: 'complete', ...renderMetadata(saved.completion?.branch) }))}\n\n`);
             }
             const eligibleBudgetRetry = await budgetFailureEdge(edge, input.runId, input.branchId);
             if (!retryBudgetFailure || !eligibleBudgetRetry) return json(res, 409, { error: eligibleBudgetRetry ? 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.' : 'This continuation is unfinished or uncertain. Automatic retry is disabled to avoid duplicate charges.', status: edge.status, ...(eligibleBudgetRetry ? { code: 'budget_exhausted' } : {}), ...(safeId(edge.runId ?? '') ? { runId: edge.runId } : {}) });
@@ -541,10 +675,27 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
             return json(res, 409, { error: 'No server-recorded budget refusal authorizes this retry.', status: 'failed' });
           }
         } else {
-          if (typeof input?.divergence !== 'string' || !input.divergence.trim() || input.divergence.length > 2000) return json(res, 400, { error: 'A divergence is required' });
+          if (!input || Object.keys(input).some(key => !['divergence', 'attachment'].includes(key)) || typeof input?.divergence !== 'string' || !input.divergence.trim() || input.divergence.length > 2000) return json(res, 400, { error: 'A divergence is required' });
           divergence = input.divergence.trim();
+          if (input.attachment !== undefined) {
+            const questionId = randomUUID();
+            const attachmentParent = input.attachment?.mode === 'current-world' && safeId(input.attachment.parentRunId)
+              ? await manifest(input.attachment.parentRunId) : null;
+            try {
+              const prepared = prepareAuthoredQuestion({
+                attachment: input.attachment,
+                questionId,
+                divergence,
+                parent: attachmentParent,
+                parentSaved: attachmentParent ? await savedParentRecord(attachmentParent, input.attachment.parentBranchId) : null,
+                maxDepth: Math.min(MAX_CONTINUATION_DEPTH, Math.max(1, maxContinuationDepth)),
+              });
+              continuation = prepared.continuation;
+              questionAttachment = prepared.questionAttachment;
+            } catch (error) { return json(res, 400, { error: error.message }); }
+          }
         }
-        if (env.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled. Use replay mode.' });
+        if (await writableRootSharesPackage() || env.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled. Use replay mode.' });
         if (continuing && !keywordCheck(divergence).allowed) return json(res, 400, { error: 'The saved branch cannot pass the topic policy.' });
         let dailyCapUsd;
         try { dailyCapUsd = configuredDailyCap({ env }); } catch { dailyCapUsd = NaN; }
@@ -556,10 +707,10 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         if (continuing) {
           edge = store.edge(input.runId, input.branchId);
           if (edge) {
-            const saved = store.get(edge.runId);
+            const saved = savedRecord(edge.runId);
             if (edge.status === 'complete' && saved?.status === 'complete' && await manifest(edge.runId)) {
               res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
-              return res.end(`event: complete\ndata: ${JSON.stringify(clean({ ...saved.completion, continuation: saved.continuation, reused: true, step: 'complete', ...renderMetadata(saved.completion?.branch) }))}\n\n`);
+              return res.end(`event: complete\ndata: ${JSON.stringify(clean({ ...saved.completion, continuation: saved.continuation, ...(saved.questionAttachment ? { questionAttachment: saved.questionAttachment } : {}), reused: true, step: 'complete', ...renderMetadata(saved.completion?.branch) }))}\n\n`);
             }
             const eligibleBudgetRetry = await budgetFailureEdge(edge, input.runId, input.branchId);
             if (!retryBudgetFailure || !eligibleBudgetRetry) return json(res, 409, { error: eligibleBudgetRetry ? 'A previous budget-stopped continuation is preserved. Explicitly request a budget retry to continue.' : 'This continuation is unfinished or uncertain. Automatic retry is disabled to avoid duplicate charges.', status: edge.status, ...(eligibleBudgetRetry ? { code: 'budget_exhausted' } : {}), ...(safeId(edge.runId ?? '') ? { runId: edge.runId } : {}) });
@@ -603,25 +754,27 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           if (continuing) {
             if (!store.get(input.runId)) {
               const parent = await manifest(input.runId);
-              store.save({ id: input.runId, status: 'complete', rootDivergence: divergence, completion: { runId: input.runId, branch: clean(parent.branch) } });
+              const parentRecord = await savedParentRecord(parent, input.branchId);
+              store.save({ id: input.runId, status: 'complete', rootDivergence: divergence, completion: { runId: input.runId, branch: clean(parent.branch) }, ...(parentRecord?.continuation ? { continuation: parentRecord.continuation } : {}), ...(parent.questionAttachment ? { questionAttachment: parent.questionAttachment } : {}) });
             }
           }
-          const reservedRunId = edge?.runId ?? randomUUID();
-          store.save({ id: reservedRunId, status: 'in-progress', rootDivergence: divergence, ...(continuation ? { continuation } : {}) });
+          const reservedRunId = questionAttachment?.questionId ?? edge?.runId ?? randomUUID();
+          const persistedQuestionAttachment = questionAttachment ? { ...questionAttachment, questionId: reservedRunId } : undefined;
+          store.save({ id: reservedRunId, status: 'in-progress', rootDivergence: divergence, ...(continuation ? { continuation } : {}), ...(persistedQuestionAttachment ? { questionAttachment: persistedQuestionAttachment } : {}) });
           res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Content-Type-Options': 'nosniff', ...(expansionUsed === null ? {} : { 'X-Expansion-Used': String(expansionUsed) }) });
           res.flushHeaders();
           const controller = new AbortController();
           res.on('close', () => { if (!res.writableEnded) controller.abort(); });
           const emit = (event, data) => { if (!res.destroyed && !res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(clean(data))}\n\n`); };
-          const allowed = new Set(['policy', 'propose', 'review', 'image', 'cutout', '3d']);
+          const allowed = new Set(['policy', 'evidence', 'propose', 'review', 'image', 'cutout', '3d']);
           try {
-            const result = await runner({ divergence, continuation, runId: reservedRunId, signal: controller.signal, dailyCapUsd, onStep: event => { if (allowed.has(event?.step)) { if (safeId(event.runId ?? '')) liveRoots.set(event.runId, liveRoot); emit(event.step, event); } } });
+            const result = await runner({ divergence, continuation, ...(questionAttachment?.divergenceYear ? { divergenceYear: questionAttachment.divergenceYear } : {}), ...(questionAttachment?.divergencePlace ? { divergencePlace: questionAttachment.divergencePlace } : {}), runId: reservedRunId, signal: controller.signal, dailyCapUsd, onStep: event => { if (allowed.has(event?.step)) { if (safeId(event.runId ?? '')) liveRoots.set(event.runId, liveRoot); emit(event.step, event); } } });
             if (result?.runId !== reservedRunId) throw new Error('Generation did not complete under its reserved run ID');
             if (continuing && result?.branch?.status !== 'ok') throw new Error('Continuation did not complete');
             if (safeId(result?.runId ?? '')) liveRoots.set(result.runId, liveRoot);
             if (continuing && (await manifest(reservedRunId))?.branch?.status !== 'ok') throw new Error('Continuation was not saved');
-            const completion = clean({ ...result, directory: undefined, ...(continuation ? { continuation } : {}), reused: false });
-            if (safeId(result?.runId ?? '')) store.save({ id: result.runId, status: 'complete', rootDivergence: divergence, ...(continuation ? { continuation } : {}), completion });
+            const completion = clean({ ...result, directory: undefined, ...(continuation ? { continuation } : {}), ...(questionAttachment ? { questionAttachment: persistedQuestionAttachment } : {}), reused: false });
+            if (safeId(result?.runId ?? '')) store.save({ id: result.runId, status: 'complete', rootDivergence: divergence, ...(continuation ? { continuation } : {}), ...(questionAttachment ? { questionAttachment: persistedQuestionAttachment } : {}), completion });
             if (edge) store.finish(edge, 'complete');
             emit('complete', { ...completion, ...renderMetadata(result?.branch), step: 'complete' });
           } catch (error) {
@@ -630,7 +783,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
             // their durable reservation for review.
             let retryable = !!edge && !controller.signal.aborted && error instanceof SpendCapError && error.continuationRetryable === true;
             const budgetProof = continuing && !controller.signal.aborted ? spendCapProof(error) : null;
-            const record = status => ({ id: reservedRunId, status, rootDivergence: divergence, ...(continuation ? { continuation } : {}), ...(budgetProof ? { budgetFailure: budgetProof } : {}) });
+            const record = status => ({ id: reservedRunId, status, rootDivergence: divergence, ...(continuation ? { continuation } : {}), ...(questionAttachment ? { questionAttachment: persistedQuestionAttachment } : {}), ...(budgetProof ? { budgetFailure: budgetProof } : {}) });
             if (retryable) {
               store.save(record('retryable'));
               try { store.releaseUndispatched(edge); } catch { retryable = false; }

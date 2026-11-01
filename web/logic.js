@@ -116,7 +116,13 @@ export function availableView(requested, { image = false, cutout = false, model 
 }
 export function completionStatus(branch = {}) {
   if (branch.status === 'blocked') return 'This question needs a reframe';
+  if (branch.status === 'empty' && branch.evidenceStatus?.status === 'unavailable') return 'No suitable path was found; no source passage is available';
   if (branch.status === 'empty') return 'No suitable branches found';
+  if (branch.status === 'evidence_unavailable') return 'Fresh evidence is unavailable for this question';
+  if (branch.status === 'ungrounded') return 'No path preserved a complete source passage';
+  if (branch.evidenceStatus?.status === 'unavailable') return branch.renderStatus === '2d-only'
+    ? '2D scene only · no source passage retrieved; hypothetical only'
+    : 'Story complete · no source passage retrieved; hypothetical only';
   if (branch.renderStatus === '2d-only') return '2D scene only · no SAM cutout available';
   return 'Story complete';
 }
@@ -132,6 +138,8 @@ export function branchProgress(state = { branches: [], heroId: null, phase: 'idl
   }
   const result = event === 'complete' ? (data.branch || data) : data;
   if (result.status === 'blocked' || result.allowed === false) return { branches: [], heroId: null, phase: 'blocked' };
+  if (result.status === 'evidence_unavailable') return { branches: [], heroId: null, phase: 'evidence-unavailable' };
+  if (result.status === 'ungrounded') return { branches: [], heroId: null, phase: 'ungrounded' };
   if (!Array.isArray(result.branches)) return state;
   if (event === 'propose' && data.pending === false && result.branches.length === 0) return { branches: [], heroId: null, phase: 'empty' };
   if (event === 'complete' && result.status === 'empty') return { branches: [], heroId: null, phase: 'empty' };
@@ -151,6 +159,8 @@ export function branchPhaseLabel(phase) {
   if (phase === 'final') return 'HERO BRANCH';
   if (phase === 'blocked') return 'OUTSIDE EXPLORATION SCOPE';
   if (phase === 'empty') return 'NO SUITABLE PATHS';
+  if (phase === 'evidence-unavailable') return 'FRESH EVIDENCE UNAVAILABLE';
+  if (phase === 'ungrounded') return 'NO GROUNDED PATHS';
   return 'AWAITING A STORY';
 }
 

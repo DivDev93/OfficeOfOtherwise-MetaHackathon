@@ -1,0 +1,102 @@
+[
+  {
+    "name": "surface",
+    "samples": [
+      {
+        "fps": "228.20362785253369",
+        "level": "surface"
+      },
+      {
+        "fps": "228.20362785253369",
+        "level": "surface"
+      },
+      {
+        "fps": "228.20362785253369",
+        "level": "surface"
+      },
+      {
+        "fps": "239.85239852397666",
+        "level": "surface"
+      },
+      {
+        "fps": "239.85239852397666",
+        "level": "surface"
+      }
+    ]
+  },
+  {
+    "name": "lift",
+    "samples": [
+      {
+        "fps": "233.95320935813245",
+        "level": "lift"
+      },
+      {
+        "fps": "233.95320935813245",
+        "level": "lift"
+      },
+      {
+        "fps": "233.95320935813245",
+        "level": "lift"
+      },
+      {
+        "fps": "239.85239852399812",
+        "level": "lift"
+      },
+      {
+        "fps": "239.85239852399812",
+        "level": "lift"
+      }
+    ]
+  },
+  {
+    "name": "orbit",
+    "samples": [
+      {
+        "fps": "240",
+        "level": "orbit"
+      },
+      {
+        "fps": "240",
+        "level": "orbit"
+      },
+      {
+        "fps": "240",
+        "level": "orbit"
+      },
+      {
+        "fps": "240",
+        "level": "orbit"
+      },
+      {
+        "fps": "240",
+        "level": "orbit"
+      }
+    ]
+  },
+  {
+    "name": "atlas",
+    "samples": [
+      {
+        "fps": "240",
+        "level": "atlas"
+      },
+      {
+        "fps": "240",
+        "level": "atlas"
+      },
+      {
+        "fps": "240.14778325124013",
+        "level": "atlas"
+      },
+      {
+        "fps": "240.14778325124013",
+        "level": "atlas"
+      },
+      {
+        "fps": "240.14778325124013",
+        "level": "atlas"
+      }
+    ]
+  }
+]

@@ -26,7 +26,10 @@ test('every real cached branch uses the same continuation runner and leaves cach
   };
   runner.enforcesDailyCap = true;
   const server = createDemoServer({ runsDir:resolve('demo/runs'), liveRunsDir, webDir:resolve('web'), runPipeline:runner,
-    rateLimit:100, env:{ DEMO_ACCESS_CODE:'test-code' } });
+    rateLimit:100, env:{ DEMO_ACCESS_CODE:'test-code' },
+    // This test verifies fresh continuation dispatch from the base cache. Packaged
+    // saved descendants have separate reuse coverage in replayHistoryPackage.test.js.
+    packagedReplayRoot:null });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => {
     await new Promise(resolve => server.close(resolve));

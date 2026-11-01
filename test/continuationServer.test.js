@@ -42,7 +42,7 @@ async function setup(t, options = {}) {
   };
   runner.enforcesDailyCap = true;
   async function start(extra = {}) {
-    server = createDemoServer({ runsDir, liveRunsDir, webDir, runPipeline: runner, rateLimit: 100, env: { DEMO_ACCESS_CODE: 'local-code' }, ...options.server, ...extra });
+    server = createDemoServer({ runsDir, liveRunsDir, webDir, runPipeline: runner, rateLimit: 100, env: { DEMO_ACCESS_CODE: 'local-code' }, packagedReplayRoot: null, ...options.server, ...extra });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     return `http://127.0.0.1:${server.address().port}`;
   }

@@ -300,10 +300,8 @@ test('optional orbit changes projection and Flat restores the chronological base
   assert.notEqual(star().getAttribute('transform'), beforeZoom, 'wheel zoom changes the projection');
   flatButton.dispatch('click');
   assert.equal(star().getAttribute('transform'), flatTransform, 'Flat restores the left-to-right timeline');
-  assert.match(page, /flat timeline.*older.*left.*later.*right/i);
-  const mapInstructions = [
-    page.match(/<p class="exploration-map-help">([^<]*)<\/p>/)?.[1] || '',
-    page.match(/<p id="exploration-map-instructions"[^>]*>([^<]*)<\/p>/)?.[1] || '',
-  ].join(' ');
-  assert.match(mapInstructions, /orbit/i);
+  assert.match(page, /id="atlas-scene"/);
+  assert.match(page, /id="atlas-toolbar"/);
+  assert.match(page, /id="branch-list"/);
+  assert.doesNotMatch(page, /id="exploration-map-panel"|id="starmap"|id="globe"/);
 });

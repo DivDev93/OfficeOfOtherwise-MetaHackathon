@@ -1,0 +1,103 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { dragModeForZoom, panDeltaForDrag, surfaceDragAngles, surfaceDetailFromPinch, surfaceDetailFromWheel, zoomFromPinch, zoomFromWheel } from '../web/atlas/interaction.js';
+
+test('surface dragging rotates in both directions and clamps at the poles', () => {
+  const moved = surfaceDragAngles(0, 0, 0, 50, 40);
+  assert.ok(moved.yaw > 0);
+  assert.ok(moved.pitch > 0);
+  const reversed = surfaceDragAngles(moved.yaw, moved.pitch, 0, -50, -40);
+  assert.ok(Math.abs(reversed.yaw) < 1e-10 && Math.abs(reversed.pitch) < 1e-10);
+  assert.equal(surfaceDragAngles(0, 0, 0, 0, 10000).pitch, Math.PI / 2);
+  assert.equal(surfaceDragAngles(0, 0, 0.4, 0, -10000).pitch, -Math.PI / 2 - 0.4);
+});
+
+test('wheel and trackpad cover the full 0–100 range with continuous outward and inward motion', () => {
+  assert.ok(zoomFromWheel(40, 1) > 40, 'positive scroll moves outward');
+  assert.ok(zoomFromWheel(40, -1) < 40, 'negative scroll moves inward');
+  assert.equal(zoomFromWheel(99, 100), 100);
+  assert.equal(zoomFromWheel(1, -100), 0);
+  assert.ok(zoomFromWheel(40, 1, { deltaMode: 1 }) > zoomFromWheel(40, 1));
+
+  let zoom = 40;
+  let previous = zoom;
+  for (let index = 0; index < 20; index += 1) {
+    zoom = zoomFromWheel(zoom, 4);
+    assert.ok(zoom > previous, 'small trackpad deltas keep moving outward');
+    assert.ok(zoom - previous < 1, 'small trackpad deltas stay smooth');
+    previous = zoom;
+  }
+  assert.ok(zoom > 40 && zoom < 50, 'a trackpad gesture can scrub through intermediate zoom levels');
+});
+
+test('wheel gently settles on surface, orbit, and Atlas resting levels', () => {
+  assert.equal(zoomFromWheel(0.1, -3), 0);
+  assert.equal(zoomFromWheel(56.5, 4), 57);
+  assert.equal(zoomFromWheel(99.9, 4), 100);
+  const nearOrbit = zoomFromWheel(55, 20);
+  assert.ok(nearOrbit > 55 && nearOrbit < 57, 'approach to orbit is attracted without jumping');
+});
+
+test('Surface wheel detail zoom is reversible and remains separate from Orbit routing', () => {
+  assert.ok(surfaceDetailFromWheel(0, -1) > 0, 'negative wheel delta zooms closer on Surface');
+  assert.ok(surfaceDetailFromWheel(40, 1) < 40, 'positive wheel delta returns toward the fitted globe');
+  assert.equal(surfaceDetailFromWheel(1, 100), 0, 'surface detail bottoms out at the fitted view');
+  assert.equal(surfaceDetailFromWheel(99, -100), 100, 'surface detail has a bounded close zoom');
+  assert.equal(zoomFromWheel(0, 100), 8, 'the scene zoom helper still routes outward from Surface');
+});
+
+test('Surface pinch detail zoom follows the natural closer-apart gesture and reverses cleanly', () => {
+  assert.ok(surfaceDetailFromPinch(0, 100, 200) > 0, 'widening the gap zooms closer');
+  assert.ok(surfaceDetailFromPinch(40, 100, 50) < 40, 'narrowing the gap returns toward the fitted globe');
+  assert.equal(surfaceDetailFromPinch(1, 100, 50), 0, 'pinch detail bottoms out at the fitted view');
+  assert.equal(surfaceDetailFromPinch(99, 100, 1000), 100, 'pinch detail has a bounded close zoom');
+  assert.ok(zoomFromPinch(0, 100, 50) > 0, 'pinching inward from the fitted Surface continues into Orbit routing');
+});
+
+test('coarse wheel notches catch Orbit from either direction without trapping the next notch', () => {
+  assert.equal(zoomFromWheel(52, 120), 57);
+  assert.equal(zoomFromWheel(62, -120), 57);
+  assert.ok(zoomFromWheel(57, 120) > 57);
+  assert.ok(zoomFromWheel(57, -120) < 57);
+  assert.ok(zoomFromWheel((57 / 100) * 100, 120) > 57, 'normalized scene zoom must leave Orbit despite floating-point roundoff');
+});
+
+test('repeated tiny trackpad deltas accumulate away from surface and pass orbit in either direction', () => {
+  let fromSurface = 0;
+  for (let index = 0; index < 10; index += 1) fromSurface = zoomFromWheel(fromSurface, 1);
+  assert.ok(fromSurface > 0.5, 'tiny outward deltas escape the surface stop');
+
+  let outwardAcrossOrbit = 56.6;
+  for (let index = 0; index < 10; index += 1) outwardAcrossOrbit = zoomFromWheel(outwardAcrossOrbit, 1);
+  assert.ok(outwardAcrossOrbit > 57, 'tiny outward deltas pass the orbit stop');
+
+  let inwardAcrossOrbit = 57.4;
+  for (let index = 0; index < 10; index += 1) inwardAcrossOrbit = zoomFromWheel(inwardAcrossOrbit, -1);
+  assert.ok(inwardAcrossOrbit < 57, 'tiny inward deltas pass the orbit stop');
+});
+
+test('pinch apart moves toward surface and pinch together moves toward Atlas', () => {
+  assert.ok(zoomFromPinch(50, 100, 200) < 50);
+  assert.ok(zoomFromPinch(50, 100, 50) > 50);
+  assert.equal(zoomFromPinch(10, 100, 1000), 0);
+  assert.equal(zoomFromPinch(90, 100, 1), 100);
+
+  let previous = zoomFromPinch(50, 100, 100);
+  for (const distance of [102, 104, 106, 108, 110]) {
+    const zoom = zoomFromPinch(50, 100, distance);
+    assert.ok(zoom < previous, 'pinching apart moves smoothly toward the surface');
+    assert.ok(previous - zoom < 1, 'small pinch changes stay smooth');
+    previous = zoom;
+  }
+});
+
+test('surface drags rotate while lift, orbit, and Atlas drags pan with viewport-scaled offsets', () => {
+  assert.equal(dragModeForZoom(0), 'rotate');
+  assert.equal(dragModeForZoom(21), 'rotate');
+  for (const zoom of [22, 57, 84, 100]) assert.equal(dragModeForZoom(zoom), 'pan');
+  const delta = panDeltaForDrag(100, 50, { cameraDistance: 10, fovDegrees: 38, viewportHeight: 500 });
+  assert.ok(delta.x < 0, 'dragging right moves the camera focus left');
+  assert.ok(delta.y > 0, 'dragging down moves the camera focus up');
+  const doubled = panDeltaForDrag(100, 50, { cameraDistance: 10, fovDegrees: 38, viewportHeight: 250 });
+  assert.ok(Math.abs(doubled.x - delta.x * 2) < 1e-12, 'pan speed scales with viewport height');
+});

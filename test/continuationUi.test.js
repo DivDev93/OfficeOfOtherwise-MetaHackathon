@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import { continuationAction, causalEdges, createNavigationGuard, eventIdFromHash, runIdFromHash, replayLabel } from '../web/logic.js';
 import * as logic from '../web/logic.js';
 import * as geographyTexture from '../web/geographyTexture.js';
+import * as geography from '../web/geography.js';
+import * as geographyControls from '../web/geographyControls.js';
 import * as geographyLabels from '../web/geographyLabels.js';
 import * as savedPreviews from '../web/savedPreview.js';
 import { REGIONS, GEOGRAPHY_STYLES } from '../web/geographyRegions.js';
@@ -78,7 +80,10 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
   const nodes = new Map(), get = id => { if (!nodes.has(id)) { const node = element(); if (id === 'root-generation-status') { node.hidden = true; node.setAttribute('role','status'); node.setAttribute('aria-live','polite'); } nodes.set(id, node); } return nodes.get(id); };
   const documentListeners = new Map(), document = { getElementById:get, createElement:element, createTextNode:text => ({ textContent:text }), querySelector:get, querySelectorAll:() => [], body:element(), addEventListener(type, callback) { documentListeners.set(type, callback); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; documentListeners.get('keydown')?.(event); return event; } };
   const windowListeners = new Map(), window = { innerWidth:390, innerHeight:844, addEventListener(type, callback) { const callbacks = windowListeners.get(type) || []; callbacks.push(callback); windowListeners.set(type, callbacks); }, dispatch(type) { for (const callback of windowListeners.get(type) || []) callback(); } };
-  const posts = [], gets = [], heads = [], storage = new Map(), location = { hash: initialHash, pathname: '/', search: '' };
+  let reducedMotionMatches = false;
+  const reducedMotionListeners = [];
+  const reducedMotionQuery = { get matches() { return reducedMotionMatches; }, addEventListener(type, callback) { if (type === 'change') reducedMotionListeners.push(callback); } };
+  const posts = [], gets = [], heads = [], atlasWorldHistory = [], atlasEntryHistory = [], storage = new Map(), location = { hash: initialHash, pathname: '/', search: '' };
   const fetch = async (url, options = {}) => {
     if (options.method === 'HEAD') { heads.push(url); if (onHead) return onHead(url); const parts = url.split('/'); return new Response('', { status: fixtures[parts[2]]?.assets?.includes(parts[3]) ? 200 : 404 }); }
     if (options.method === 'POST') { posts.push({ url, body: JSON.parse(options.body) }); return onPost(url, options); }
@@ -94,17 +99,33 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     if (!fixture) return new Response('', { status: 404 });
     return Response.json(match[2] === 'branch.json' ? fixture.branch : match[2] === 'trace.json' ? { steps: [] } : fixture);
   };
-  const context = vm.createContext({ ...logic, ...geographyTexture, ...geographyLabels, ...savedPreviews, REGIONS, GEOGRAPHY_STYLES, console, fetch, AbortController, TextDecoder, Uint8Array, URLSearchParams, setTimeout:scheduleTimer, clearTimeout:cancelTimer,
-    createStarMap(container, options) { context.starMap = { container, options, nodes: options.nodes, selectedId: options.selectedId, setData(data) { this.nodes = data.nodes; this.selectedId = data.selectedId; }, select(id) { this.options.onSelect(this.nodes.find(node => node.id === id) || id); }, destroy() {} }; return context.starMap; },
+  const context = vm.createContext({ ...logic, ...geographyTexture, ...geography, ...geographyControls, ...geographyLabels, ...savedPreviews, REGIONS, GEOGRAPHY_STYLES,
+    loadLocalTerrain: async () => ({ width:1, height:1, elevation:new Int16Array([0]), landmass:new Uint8Array([1]) }), console, fetch, AbortController, TextDecoder, Uint8Array, URLSearchParams, setTimeout:scheduleTimer, clearTimeout:cancelTimer,
+    createAtlasController(options) {
+      const controller = {
+        graph:options.graph || {}, nodes:options.graph?.mapNodes || [], selectedId:options.graph?.currentWorldId || null,
+        scene:{ currentId:options.graph?.currentWorldId || null, level:'surface', enterWorld(id, settings = {}) { this.currentId = id; this.lastEntry = { id, settings }; atlasEntryHistory.push(id); }, setGeography(geography, mode, renderState) { this.geographyPreview = { geography, mode, renderState }; }, setZoom(value) { this.zoom = value; }, getZoom() { return this.zoom || 0; }, getLevel() { return this.level; } },
+        setGraph(next) { this.graph = next; this.nodes = next.mapNodes || []; this.selectedId = next.currentWorldId || null; this.scene.currentId = this.selectedId; atlasWorldHistory.push(this.selectedId); },
+        setGeography(geography, mode, renderState) { this.scene.setGeography(geography, mode, renderState); },
+        getData() { return { worlds:this.nodes.map(node => ({...node, eventRef:node.eventRef || (node.runId && node.branchId ? {runId:node.runId,branchId:node.branchId} : undefined)})), questions:this.graph.questions || [], currentWorldId:this.selectedId }; },
+        getAttachmentIntent() { return {...(this.attachment || {mode:'current-world'}), currentWorldId:this.selectedId}; },
+        getViewOptions() { return {}; },
+        select(id) { const world = this.nodes.find(node => node.id === id); if (world) { this.selectedId = id; this.scene.enterWorld(id); options.onEnter?.(world, {source:'atlas-explicit-entry'}); } },
+        destroy() {},
+      };
+      context.atlasController = controller;
+      context.starMap = { get nodes() { return controller.nodes; }, get selectedId() { return controller.selectedId; }, select(id) { controller.select(id); }, get options() { return options; } };
+      return Promise.resolve(controller);
+    },
     createVoiceInput: () => ({ cancel() {}, setEnabled() {} }),
     document,
-    matchMedia: () => ({ matches: false, addEventListener() {} }), window,
+    matchMedia: query => query === '(prefers-reduced-motion: reduce)' ? reducedMotionQuery : ({ matches: false, addEventListener() {} }), window,
     location, history: { pushState(a, b, target) { location.hash = target.includes('#') ? target.slice(target.indexOf('#')) : ''; } },
     localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) }, Option: function(text, value) { return { text, value }; },
   });
-  const source = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace("import('./visuals.js')", "Promise.reject(new Error('No renderer in fixture'))");
-  vm.runInContext(`${source}\n globalThis.ui = {loadRun,selectBranch,activateBranch,selectStarMapNode,expandBranch,runPrompt,setView,setSurfaceMode,refreshHistory,toggleArchiveHistory, setGlobe:api=>{globeApi=api;renderGeography();}, setModelApi:api=>{modelApi=api;}, previewGlobe:(branch,anchor)=>showGlobeBranchPreview(branch,anchor), eventWorkFor:(runId,branchId)=>{const work=eventWork.get(eventKey(runId,branchId));return work?{...work}:null;}, state:()=>({currentRunId,continuation,streamBusy,selectedContext,hasImage,activeView,surfaceGeography,surfaceMode,hasStory:document.body.classList.contains('has-story'),starMapNodes,serverExpansionUsed,expansionLimit,enteredNodesCount:enteredNodes.size,pendingExpansionCount:pendingExpansionNodes.size,selectedBranchId,selectedWork:{...eventWork.get(eventKey(currentRunId,selectedBranchId))},activePreview:savedPreview.activePreview,previewHidden:savedPreview.element.hidden})};`, context);
-  return { ui: context.ui, get, posts, gets, heads, storage, location, starMap: context.starMap, document, window, navigate(hash, ...events) { location.hash = hash; for (const event of events) window.dispatch(event); } };
+  const source = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/import\('\.\/visuals\.js'\)\.then\(async \(\{createModelViewer\}\) => \{[\s\S]*?\}\)\.catch\(\(\) => \{ modelApi = null; setView\(activeView\); \}\);/, '');
+  vm.runInContext(`${source}\n globalThis.ui = {loadRun,selectBranch,activateBranch,selectStarMapNode,expandBranch,runPrompt,setView,setSurfaceMode,setAtlasLevel:applyAtlasGeographyLevel,toggleAtlasGeographyPanel,refreshHistory,toggleArchiveHistory,setCurrentRunContextForTest:id=>{currentRunId=id;currentManifest=knownRunManifests.get(id)||currentManifest;continuation=currentManifest?.continuation||continuation;renderExplorationTree();},setAtlasAttachmentIntent:value=>{atlasController.attachment=value;},setGlobe:api=>{Object.assign(atlasController.scene,api);renderGeography();},setModelApi:api=>{modelApi=api;},syncOtherQuestionsForTest:(level,mapNodes)=>{window.matchMedia=()=>({matches:true});atlasController.scene.level=level;syncAtlasOtherQuestionToggle(mapNodes);},previewGlobe:(branch,anchor)=>showAtlasPreview(branch,anchor),eventWorkFor:(runId,branchId)=>{const work=eventWork.get(eventKey(runId,branchId));return work?{...work}:null;},state:()=>({currentRunId,atlasCurrentWorldRunId,continuation,streamBusy,selectedContext,hasImage,activeView,continuationViewSelection,surfaceGeography,surfaceMode,hasStory:document.body.classList.contains('has-story'),invitationOpen:document.body.classList.contains('invitation-open'),starMapNodes:atlasNodes,atlasAttachmentIntent,serverExpansionUsed,expansionLimit,enteredNodesCount:enteredNodes.size,pendingExpansionCount:pendingExpansionNodes.size,selectedBranchId,selectedWork:{...eventWork.get(eventKey(currentRunId,selectedBranchId))},activePreview:savedPreview.activePreview,previewHidden:savedPreview.element.hidden})};`, context);
+  return { ui: context.ui, get, posts, gets, heads, atlasWorldHistory, atlasEntryHistory, storage, location, starMap: context.starMap, document, window, setReducedMotion(matches) { reducedMotionMatches = Boolean(matches); for (const listener of reducedMotionListeners) listener({ matches:reducedMotionMatches }); }, navigate(hash, ...events) { location.hash = hash; for (const event of events) window.dispatch(event); } };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const complete = fixture => new Response(`event: complete\ndata: ${JSON.stringify({ runId: fixture.id, branch: fixture.branch, continuation: fixture.continuation })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
@@ -115,20 +136,18 @@ test('geography follows saved selection, survives pending continuation, toggles,
   const root = run('geo-root',parentChoice), legacy = run('legacy',next), future = run('future',{...next,geography:parentChoice.geography});
   let release; const pendingResponse = new Promise(resolve=>{release=resolve;});
   const app = harness({'geo-root':root,legacy,future},()=>pendingResponse); await tick();
-  const surfaces=[];
-  app.ui.setGlobe({setGeography:(state,mode)=>surfaces.push({state,mode}),setBranches(){},select(){},focus(){}});
+
   await app.ui.loadRun('geo-root',{animate:false,autoConsequences:false});
-  assert.equal(surfaces.at(-1).state.changes[0].id,'green-sahara');
-  app.ui.setSurfaceMode('present'); assert.equal(surfaces.at(-1).mode,'present');
-  app.ui.setSurfaceMode('scenario'); assert.equal(surfaces.at(-1).mode,'scenario');
+  const selectedWorld = () => app.starMap.nodes.find(node => node.runId === 'geo-root' && node.branchId === parentChoice.id);
+  assert.equal(selectedWorld().geography.changes[0].id,'green-sahara');
+  app.ui.setSurfaceMode('present'); assert.equal(selectedWorld().geography,null,'present-day toggle removes the selected-world scenario overlay in the Atlas graph');
+  app.ui.setSurfaceMode('scenario'); assert.equal(selectedWorld().geography.changes[0].id,'green-sahara');
   app.get('access').value='fixture-only';
   const pending = app.ui.expandBranch(parentChoice);
-  assert.equal(surfaces.at(-1).state.changes[0].id,'green-sahara');
   assert.equal(app.ui.state().continuation.path[0].geography.changes[0].id,'green-sahara');
   await app.ui.loadRun('legacy',{animate:false});
-  assert.equal(surfaces.at(-1).state,undefined); assert.equal(surfaces.at(-1).mode,'present');
   release(complete(future)); await pending;
-  assert.equal(surfaces.at(-1).state,undefined);
+  assert.equal(app.starMap.nodes.find(node => node.runId === 'legacy' && node.branchId === next.id)?.geography,undefined);
   assert.match(app.get('geography-status').textContent,/no scenario geography recorded/);
 });
 
@@ -354,7 +373,37 @@ test('tree navigation selects the clicked descendant before activation and never
   assert.match(app.get('hero-title').textContent,/Coastal observatories/);
 });
 
-test('tree and globe hover or keyboard focus preview saved metadata without selecting or requesting anything', async () => {
+test('cached tree navigation selects the requested continuation branch before the child run hero reaches the Atlas', async () => {
+  const rootEvent=branch('b2','Sundaland River Plain Unites Islands',1800);
+  const root=run('d67',rootEvent,{children:[{branchId:'b2',runId:'d9',status:'complete'}]});
+  const parentEvent=branch('b2','Forest Pharmacy Catalogued in Kuching',1902);
+  const parent=run('d9',parentEvent,{rootRunId:'d67',parentRunId:'d67',parentBranchId:'b2',path:[{runId:'d67',branchId:'b2',...rootEvent}],children:[{branchId:'b2',runId:'acc2',status:'complete'}]});
+  const childHero=branch('b1','Medicinal Resin Chemistry Advances',1931);
+  const requested=branch('b3','Canopy Walkway Exploration Network',1978);
+  const child=run('acc2',childHero,{rootRunId:'d67',parentRunId:'d9',parentBranchId:'b2',path:[{runId:'d67',branchId:'b2',...rootEvent},{runId:'d9',branchId:'b2',...parentEvent}]});
+  child.branch.branches.push(requested);
+  const app=harness({d67:root,d9:parent,acc2:child},async()=>{throw new Error('Saved tree selection must not generate');},true);
+  await tick();
+  await app.ui.loadRun('acc2',{animate:false,autoConsequences:false});
+  await app.ui.loadRun('d9',{animate:false,autoConsequences:false,selectedBranchId:'b2'});
+  for(let i=0;i<12;i++) await tick();
+  const event=findNode(app.get('exploration-tree-status'),node=>node?.className==='tree-event'&&node.dataset.runId==='acc2'&&node.dataset.branchId==='b3');
+  assert.ok(event,'the nested saved continuation event is present in the tree');
+  app.atlasWorldHistory.length=0; app.atlasEntryHistory.length=0;
+  await event.click();
+  assert.equal(app.ui.state().currentRunId,'acc2');
+  assert.equal(app.ui.state().selectedBranchId,'b3');
+  assert.equal(app.starMap.selectedId,'acc2::b3');
+  assert.doesNotMatch(app.get('hero-title').textContent,/Medicinal Resin Chemistry Advances/);
+  assert.match(app.get('hero-title').textContent,/1978 CE · Canopy Walkway Exploration Network/);
+  assert.ok(app.atlasWorldHistory.length>0);
+  assert.equal(app.atlasWorldHistory.includes('acc2::b1'),false,'the unrequested child hero never becomes current during navigation');
+  assert.equal(app.atlasEntryHistory.includes('acc2::b1'),false,'the unrequested child hero is never explicitly entered');
+  assert.equal(app.atlasWorldHistory.at(-1),'acc2::b3');
+  assert.equal(app.location.hash,'#run=acc2&event=b3');
+});
+
+test('tree and Atlas hover or keyboard focus preview saved metadata without selecting or requesting anything', async () => {
   const alternate=branch('alt','Mammoth steppe',-4500), root=run('preview-root',choice); root.branch.branches.push(alternate); root.assets=['hero.png'];
   const app=harness({'preview-root':root},async()=>{throw new Error('Preview must never dispatch a model route');},false);
   await tick(); await app.ui.loadRun('preview-root',{animate:false,autoConsequences:false});
@@ -368,19 +417,34 @@ test('tree and globe hover or keyboard focus preview saved metadata without sele
   assert.match(app.ui.state().activePreview.summary,/Mammoth steppe changes this world/);
   assert.equal(app.ui.state().activePreview.sceneReference,null,'an unknown foreign scene is not inferred from the root hero');
   assert.equal(app.ui.state().selectedBranchId,selectedBefore);
-  node.pointerleave(); assert.equal(app.ui.state().previewHidden,true);
+  node.pointerleave(); assert.equal(app.ui.state().previewHidden,false,'the preview stays available briefly while the pointer can enter it');
+  await new Promise(resolve => setTimeout(resolve, 240));
+  assert.equal(app.ui.state().previewHidden,true,'the preview dismisses after the pointer-transfer delay');
   node.focus(); assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
-  node.blur(); assert.equal(app.ui.state().previewHidden,true);
+  node.blur(); assert.equal(app.ui.state().previewHidden,false,'focused previews also allow transfer into the preview');
+  await new Promise(resolve => setTimeout(resolve, 240));
+  assert.equal(app.ui.state().previewHidden,true);
+  const atlasNode = app.starMap.nodes.find(item => item.runId === 'preview-root' && item.branchId === 'alt');
+  app.starMap.options.onPreview(atlasNode, { source:'pointer', clientX:150, clientY:180 });
+  assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
+  assert.equal(app.ui.state().selectedBranchId,selectedBefore,'Atlas preview does not move the selected world');
+  app.starMap.options.onPreview(null);
+  assert.equal(app.ui.state().previewHidden,false,'Atlas pointer exit keeps the preview alive during transfer');
+  await new Promise(resolve => setTimeout(resolve, 240));
+  assert.equal(app.ui.state().previewHidden,true);
   app.ui.previewGlobe(alternate,node);
   assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
   assert.equal(app.ui.state().selectedBranchId,selectedBefore);
-  app.ui.previewGlobe(null,node); assert.equal(app.ui.state().previewHidden,true);
+  app.ui.previewGlobe(null,node); assert.equal(app.ui.state().previewHidden,false);
+  await new Promise(resolve => setTimeout(resolve, 240));
+  assert.equal(app.ui.state().previewHidden,true);
   assert.equal(app.posts.length,0,'preview surfaces never call generation APIs');
   assert.equal(app.gets.filter(url=>url.startsWith('/api/event-scene?')).length,sceneChecksBefore,'previewing adds no scene lookup');
 });
 
 test('starmap hydrates read-only and explicit event selection preserves run-scoped identity and requests consequences', async () => {
-  const root = run('root', choice, { children: [{ branchId: 'a', runId: 'child', status: 'complete' }] });
+  const reviewedChoice = { ...choice, causalLink:'A measured shift in seasonal rainfall made year-round observation practical.', theme:'geography-ecology', boldness:0.62, score:7.5 };
+  const root = run('root', reviewedChoice, { children: [{ branchId: 'a', runId: 'child', status: 'complete' }] });
   root.assets = ['hero.png', 'model.glb'];
   const alternate = branch('alt', 'Mammoth steppe', -4500);
   choice.causalLink = 'A measured shift in seasonal rainfall made year-round observation practical.';
@@ -416,7 +480,13 @@ test('starmap hydrates read-only and explicit event selection preserves run-scop
   assert.equal(typeof rootEvent.location, 'string');
   assert.equal(rootEvent.scene, '/runs/root/hero.png', 'the preview receives a confirmed local scene URL, not prompt text');
   assert.equal(rootEvent.thumbnail, '/runs/root/hero.png', 'only a manifest-listed local hero asset is used');
+  assert.equal(rootEvent.heroSelected, true, 'the exact selected event owns the saved hero image ref');
+  assert.deepEqual(JSON.parse(JSON.stringify(rootEvent.heroRef)), { status:'complete', url:'/runs/root/hero.png', runId:'root', branchId:'a' });
+  assert.equal(rootEvent.sceneRef, undefined, 'a hero image is kept distinct from generated event-scene refs');
   assert.equal(rootEvent.ready, true, 'the saved root hero scene enables the map event');
+  assert.equal(rootEvent.theme, 'geography-ecology');
+  assert.equal(rootEvent.boldness, 0.62, 'an explicit normalized boldness takes priority over the review score');
+  assert.equal(rootEvent.reviewScore, 7.5, 'the saved ranking score is preserved separately');
   const alternateEvent = app.starMap.nodes.find(node => node.runId === 'root' && node.branchId === 'alt');
   assert.equal(alternateEvent.ready, false, 'an event with no confirmed scene stays pending');
   assert.equal(app.starMap.selectedId, rootEvent.id);
@@ -426,30 +496,220 @@ test('starmap hydrates read-only and explicit event selection preserves run-scop
   for (let i = 0; i < 8; i++) await tick();
   assert.equal(app.posts.length, 0, 'clicking an event with a saved child reopens its results without generation');
   const globeSelections = [];
-  app.ui.setGlobe({ setGeography(){}, setBranches(){}, select(branch){ globeSelections.push(branch?.id); } });
+  app.ui.setGlobe({ setGeography(){}, setBranches(){}, select(branch){ globeSelections.push(branch?.id); }, enterWorld(id){ this.currentId=id; globeSelections.push(id); } });
   app.ui.activateBranch(alternate);
   for (let i = 0; i < 8; i++) await tick();
   const sceneReadyAlternate = app.starMap.nodes.find(node => node.runId === 'root' && node.branchId === 'alt');
   assert.equal(sceneReadyAlternate.ready, false, 'missing saved scenes stay unavailable as previews');
   assert.equal(sceneReadyAlternate.consequencesStatus, 'Not explored');
   assert.equal(app.posts.length, 0, 'scene lookup without access does not generate consequences');
-  app.get('exploration-map-panel').popoverOpen = true;
   app.starMap.select(childAltEvent.id);
-  assert.equal(app.get('exploration-map-panel').popoverOpen, true, 'node selection itself leaves the map open');
-  const escape = app.document.keydown('Escape');
-  assert.equal(escape.prevented, true);
-  assert.equal(app.get('exploration-map-panel').popoverOpen, false, 'Escape closes the map during asynchronous run navigation');
   for (let i = 0; i < 8; i++) await tick();
   assert.equal(app.ui.state().currentRunId, 'child');
   assert.equal(app.starMap.selectedId, childAltEvent.id, 'navigation restores the exact nonhero selected event identity');
   assert.equal(app.get('hero-title').textContent.includes('Coastal observatories'), true, 'the auto-selected child hero never replaces the requested map event');
-  assert.equal(app.get('exploration-map-panel').popoverOpen, false, 'late navigation and graph refresh work cannot reopen an explicitly closed map');
-  assert.equal(globeSelections.at(-1), 'child-alt', 'the underlying globe follows the exact map-selected event');
+  assert.equal(globeSelections.at(-1), 'child::child-alt', 'tree and Atlas scene stay linked to the exact selected event ID');
   assert.equal(app.posts.length, 0, 'read-only graph hydration and no-access selection make no generation request');
   app.get('access').value = 'fixture';
   app.starMap.select(childAltEvent.id);
   for (let i = 0; i < 12 && app.posts.length === 0; i++) await tick();
   assert.deepEqual(app.posts.map(post => [post.url, post.body.runId, post.body.branchId]), [['/api/continue','child','child-alt']], 'an explicit event selection starts consequence lookup for that exact run and branch');
+});
+
+test('Atlas reload hydration rebuilds previously opened question roots without changing the selected world', async () => {
+  const active = run('active-question', choice), prior = run('prior-question', branch('p', 'Coral observatories', 650));
+  const app = harness({ 'active-question':active, 'prior-question':prior }, undefined, true, '',
+    () => Response.json({ runs:[{ id:'active-question' }, { id:'prior-question' }] }), undefined, false);
+  await tick();
+  await app.ui.loadRun('active-question', { animate:false, autoConsequences:false });
+  await app.ui.refreshHistory();
+  for (let index = 0; index < 12 && !app.starMap.nodes.some(node => node.runId === 'prior-question'); index++) await tick();
+  assert.ok(app.starMap.nodes.some(node => node.runId === 'prior-question' && node.branchId === 'p'));
+  assert.equal(app.ui.state().currentRunId, 'active-question');
+  assert.equal(app.starMap.selectedId, app.starMap.nodes.find(node => node.runId === 'active-question' && node.branchId === choice.id).id,
+    'read-only hydration does not auto-enter another saved question');
+  assert.equal(app.posts.length, 0);
+});
+
+test('Earth comparison panel automatically tucks away beyond Lift and returns at Surface', async () => {
+  const root = run('atlas-levels', choice);
+  const app = harness({ 'atlas-levels':root }); await tick();
+  await app.ui.loadRun('atlas-levels', { animate:false, autoConsequences:false });
+  app.ui.setAtlasLevel('surface'); assert.equal(app.get('geography-panel').hidden, false);
+  app.ui.setAtlasLevel('lift'); assert.equal(app.get('geography-panel').hidden, false);
+  app.ui.setAtlasLevel('orbit'); assert.equal(app.get('geography-panel').hidden, true);
+  app.ui.setAtlasLevel('atlas'); assert.equal(app.get('geography-panel').hidden, true);
+  app.ui.toggleAtlasGeographyPanel(); assert.equal(app.get('geography-panel').hidden, false, 'View options can reopen comparison at Orbit or Atlas level');
+  app.ui.setAtlasLevel('orbit'); assert.equal(app.get('geography-panel').hidden, false, 'explicit comparison remains open until dismissed');
+  app.ui.toggleAtlasGeographyPanel(); assert.equal(app.get('geography-panel').hidden, true);
+  app.ui.setAtlasLevel('surface'); assert.equal(app.get('geography-panel').hidden, true, 'the explicit hide choice persists across level changes');
+  app.ui.toggleAtlasGeographyPanel(); assert.equal(app.get('geography-panel').hidden, false);
+});
+
+test('reduced-motion Lift keeps the original panel set accessible until the instant Orbit handoff', async () => {
+  const fixture = run('reduced-lift-panels', choice); fixture.assets = ['hero.png'];
+  const app = harness({ 'reduced-lift-panels':fixture }); await tick();
+  await app.ui.loadRun('reduced-lift-panels', { animate:false, autoConsequences:false });
+  app.setReducedMotion(true);
+  app.ui.setAtlasLevel('lift');
+  app.get('atlas-scene').dataset.atlasLevel = 'lift';
+  assert.equal(app.get('geography-panel').inert, false, 'the visible comparison panel remains keyboard available throughout Lift');
+  assert.equal(app.get('geography-panel').getAttribute('aria-hidden'), 'false');
+  assert.equal(app.get('exploration-tree').inert, false, 'the visible story tree remains keyboard available throughout Lift');
+  assert.equal(app.get('atlas-world-details').inert, false, 'the visible story sheet remains keyboard available throughout Lift');
+  assert.equal(app.get('atlas-compact-controls').inert, true, 'the hidden compact controls stay out of keyboard navigation');
+  assert.equal(app.get('atlas-world-card').inert, true, 'the hidden compact card stays out of keyboard navigation');
+  app.ui.setAtlasLevel('orbit');
+  app.get('atlas-scene').dataset.atlasLevel = 'orbit';
+  assert.equal(app.get('geography-panel').hidden, true);
+  assert.equal(app.get('geography-panel').inert, true, 'the hidden old panel leaves keyboard navigation at Orbit');
+  assert.equal(app.get('atlas-compact-controls').inert, false, 'the incoming compact controls become keyboard available at Orbit');
+  assert.equal(app.get('atlas-world-card').inert, false, 'the incoming card becomes keyboard available at Orbit');
+  app.ui.setAtlasLevel('lift');
+  app.get('atlas-scene').dataset.atlasLevel = 'lift';
+  app.setReducedMotion(false);
+  assert.equal(app.get('geography-panel').inert, true, 'changing the preference mid-Lift resynchronizes accessibility state');
+  assert.equal(app.get('exploration-tree').inert, true);
+});
+
+test('compact Atlas card follows the selected world and its quick controls update expanded state', async () => {
+  const fixture = run('compact', choice); fixture.assets = ['hero.png'];
+  const app = harness({ compact:fixture }); await tick();
+  await app.ui.loadRun('compact', { animate:false, autoConsequences:false });
+  assert.equal(app.get('atlas-world-title').textContent, choice.title);
+  assert.equal(app.get('atlas-world-year').textContent, '500 CE');
+  assert.equal(app.get('atlas-world-thumbnail').hidden, false);
+  assert.equal(app.get('atlas-world-thumbnail').src, '/runs/compact/hero.png');
+  app.ui.setAtlasLevel('orbit');
+  app.get('atlas-scene').dataset.atlasLevel = 'orbit';
+  app.get('atlas-compact-tree').click();
+  assert.equal(app.document.body.classList.contains('atlas-panels-open'), true);
+  assert.equal(app.get('atlas-compact-tree').getAttribute('aria-expanded'), 'true');
+  app.get('atlas-open-details').click();
+  assert.equal(app.document.body.classList.contains('atlas-panels-open'), false, 'opening details closes the story-tree sheet');
+  assert.equal(app.document.body.classList.contains('atlas-details-open'), true);
+  assert.equal(app.get('atlas-open-details').getAttribute('aria-expanded'), 'true');
+  assert.equal(app.get('atlas-world-card').inert, true, 'the compact card leaves the keyboard order while full details are open');
+  assert.equal(app.get('atlas-world-card').getAttribute('aria-hidden'), 'true');
+  assert.equal(app.get('atlas-close-details').hidden, false, 'a separate close action remains in the full-details heading');
+  assert.equal(app.get('atlas-close-details').getAttribute('aria-expanded'), 'true');
+  await new Promise(resolve => setTimeout(resolve, 160));
+  assert.equal(app.get('atlas-close-details').focused, true, 'opening details moves focus to the available close action');
+  app.get('atlas-close-details').click();
+  assert.equal(app.document.body.classList.contains('atlas-details-open'), false, 'the full-details close action returns to compact Orbit');
+  assert.equal(app.get('atlas-close-details').hidden, true);
+  assert.equal(app.get('atlas-open-details').focused, true, 'closing details returns focus to its opener');
+  assert.equal(app.get('atlas-world-card').inert, false, 'the compact card becomes keyboard accessible again');
+  app.ui.setAtlasLevel('orbit');
+  assert.equal(app.get('atlas-compact-controls').inert, false, 'Orbit exposes the native quick-action buttons to keyboard navigation');
+  assert.equal(app.get('atlas-compact-controls').getAttribute('aria-hidden'), 'false');
+  assert.equal(app.get('atlas-world-card').inert, false, 'Orbit exposes the compact card and open-details button');
+  app.ui.setAtlasLevel('surface');
+  assert.equal(app.document.body.classList.contains('atlas-details-open'), false, 'Surface restores the full panels');
+  assert.equal(app.get('atlas-compact-controls').inert, true, 'the hidden compact strip leaves the keyboard tab order at Surface');
+  assert.equal(app.get('atlas-compact-controls').getAttribute('aria-hidden'), 'true');
+  assert.equal(app.get('atlas-world-card').inert, true, 'the hidden compact card leaves the keyboard tab order at Surface');
+  app.ui.setAtlasLevel('orbit');
+  app.get('atlas-compact-new').click();
+  assert.equal(app.ui.state().invitationOpen, true, 'New exploration opens the prompt instead of leaving it behind the collapsed rail');
+  assert.equal(app.get('atlas-compact-new').getAttribute('aria-expanded'), 'true', 'the compact New exploration control exposes its open state');
+  assert.equal(app.get('atlas-compact-controls').inert, true, 'the visually hidden compact controls leave the keyboard order while the prompt is open');
+  assert.equal(app.get('atlas-compact-controls').getAttribute('aria-hidden'), 'true');
+  app.get('show-invitation').click();
+  assert.equal(app.ui.state().invitationOpen, false);
+  assert.equal(app.get('atlas-compact-new').getAttribute('aria-expanded'), 'false');
+  app.ui.setAtlasLevel('orbit');
+  assert.equal(app.get('atlas-compact-controls').inert, false, 'closing the prompt restores compact keyboard controls');
+});
+
+test('details-close focus delay is cancelled on a fast close and rescheduled on reopen', async () => {
+  const fixture = run('compact-focus-reopen', choice);
+  const app = harness({ 'compact-focus-reopen':fixture }); await tick();
+  await app.ui.loadRun('compact-focus-reopen', { animate:false, autoConsequences:false });
+  app.ui.setAtlasLevel('orbit'); app.get('atlas-scene').dataset.atlasLevel = 'orbit';
+  const close = app.get('atlas-close-details');
+  app.get('atlas-open-details').click();
+  close.click();
+  assert.notEqual(close.focused, true, 'a fast close cancels pending focus into the hidden heading');
+  app.get('atlas-open-details').click();
+  await new Promise(resolve => setTimeout(resolve, 160));
+  assert.equal(app.document.body.classList.contains('atlas-details-open'), true);
+  assert.equal(close.focused, true, 'reopening schedules focus after the details heading becomes visible');
+});
+
+test('delayed details focus does not steal focus after the user moves elsewhere', async () => {
+  const fixture = run('compact-focus-respect', choice);
+  const app = harness({ 'compact-focus-respect':fixture }); await tick();
+  await app.ui.loadRun('compact-focus-respect', { animate:false, autoConsequences:false });
+  app.ui.setAtlasLevel('orbit'); app.get('atlas-scene').dataset.atlasLevel = 'orbit';
+  app.document.activeElement = app.get('atlas-open-details');
+  app.get('atlas-open-details').click();
+  app.document.activeElement = app.get('atlas-compact-tree');
+  await new Promise(resolve => setTimeout(resolve, 160));
+  assert.notEqual(app.get('atlas-close-details').focused, true, 'the reveal callback preserves a deliberate move to another control');
+});
+
+test('leaving compact details restores focus to the visible Atlas scene at Surface and Lift', async () => {
+  const fixture = run('compact-focus', choice);
+  const app = harness({ 'compact-focus':fixture }); await tick();
+  await app.ui.loadRun('compact-focus', { animate:false, autoConsequences:false });
+  app.ui.setAtlasLevel('orbit'); app.get('atlas-scene').dataset.atlasLevel = 'orbit';
+
+  app.get('atlas-open-details').click();
+  app.document.activeElement = app.get('atlas-close-details');
+  app.ui.setAtlasLevel('surface'); app.get('atlas-scene').dataset.atlasLevel = 'surface';
+  assert.equal(app.document.body.classList.contains('atlas-details-open'), false);
+  assert.equal(app.get('atlas-close-details').hidden, true);
+  assert.equal(app.get('atlas-scene').focused, true, 'Surface transition moves focus to the persistent, visible scene');
+
+  app.ui.setAtlasLevel('orbit'); app.get('atlas-scene').dataset.atlasLevel = 'orbit';
+  app.get('atlas-open-details').click();
+  app.document.activeElement = app.get('atlas-close-details');
+  app.ui.setAtlasLevel('lift'); app.get('atlas-scene').dataset.atlasLevel = 'lift';
+  assert.equal(app.document.body.classList.contains('atlas-details-open'), false);
+  assert.equal(app.get('atlas-close-details').hidden, true);
+  assert.equal(app.get('atlas-scene').focused, true, 'Lift transition moves focus to the persistent, visible scene');
+});
+
+test('hiding the phone Other questions control restores focus only when it owned focus', async () => {
+  const root = run('other-question-focus', choice);
+  const app = harness({ 'other-question-focus':root }); await tick();
+  await app.ui.loadRun('other-question-focus', { animate:false, autoConsequences:false });
+  const otherQuestion = { otherTree:true, questionId:'another-question' };
+  const toggle = app.get('atlas-other-questions'), scene = app.get('atlas-scene');
+  app.ui.syncOtherQuestionsForTest('atlas', [otherQuestion]);
+  assert.equal(toggle.hidden, false, 'phone Atlas exposes the control when another saved question exists');
+
+  app.document.activeElement = toggle;
+  app.ui.syncOtherQuestionsForTest('orbit', [otherQuestion]);
+  assert.equal(toggle.hidden, true, 'leaving Atlas hides the phone-only control');
+  assert.equal(scene.focused, true, 'focus moves to the persistent Atlas scene before its control hides');
+
+  scene.focused = false;
+  app.ui.syncOtherQuestionsForTest('atlas', [otherQuestion]);
+  assert.equal(toggle.hidden, false);
+  app.document.activeElement = scene;
+  app.ui.syncOtherQuestionsForTest('orbit', [otherQuestion]);
+  assert.equal(scene.focused, false, 'a control that did not own focus does not steal it during hide');
+});
+
+test('explicit Present-day Earth entry opens a blank attached-question form without dispatching generation', async () => {
+  const root = run('present-entry-root', choice);
+  const app = harness({ 'present-entry-root':root }, async () => { throw new Error('Entry must not generate before prompt submission'); }, true);
+  await tick(); await app.ui.loadRun('present-entry-root', { animate:false, autoConsequences:false });
+  app.get('prompt').value = 'old prompt';
+  const intent = { mode:'present-day', parentId:null, divergenceYear:2026, currentWorldId:app.starMap.selectedId };
+  app.starMap.options.onAttachmentIntent(intent);
+  app.starMap.options.onEnter({ id:'present-day-earth', kind:'present-day', year:2026, title:'Present-day Earth' }, { source:'present-day-question', attachmentIntent:intent });
+  assert.equal(app.get('prompt').value, '');
+  assert.equal(app.get('prompt').focused, true);
+  assert.equal(app.ui.state().invitationOpen, true);
+  assert.equal(app.get('show-invitation').getAttribute('aria-expanded'), 'true');
+  assert.equal(app.ui.state().atlasAttachmentIntent.mode, 'present-day');
+  assert.equal(app.ui.state().currentRunId, 'present-entry-root', 'the saved graph stays open while the new question form is shown');
+  assert.equal(app.posts.length, 0);
+  assert.equal(app.gets.some(url => /\/api\/(?:run|continue|transcribe)(?:\?|$)/.test(url)), false,
+    'opening the form does not start generation or transcription; read-only scene hydration may continue');
 });
 
 test('starmap confirms durable nonhero scenes with bounded read-only checks after restart', async () => {
@@ -1295,22 +1555,24 @@ test('saved model loading indicator clears on success, error, retry and run swit
   assert.equal(app.get('model-loading-indicator').hidden, true);
 });
 
-test('unsupported v2 geography remains visible as bounded labels and assumptions without drawing it', async () => {
+test('saved v2 geography shows bounded labels and enables the local terrain preview controls', async () => {
   const root = run('geography-v2');
-  root.branch.branches[0].geography = { version:2, seaLevelMeters:-115, changes:[
-    { id:'sundaland-forest-plain', kind:'forest', intensity:.9, bounds:[95,-8,120,7], assumption:'A forest spreads across the exposed shelf.', uncertainty:'Vegetation varies locally.' },
-    { id:'coastal-mangrove-fringe', kind:'mangrove', intensity:.6, bounds:[100,-5,118,3], assumption:'Mangroves extend inland.', uncertainty:'Coastal extent is hypothetical.' },
+  root.branch.branches[0].geography = { version:2, seaLevelMeters:-115, continentalTransforms:[], changes:[
+    { id:'sundaland-forest-plain', kind:'vegetation', intensity:.9, bounds:[95,-8,120,7], assumption:'A forest spreads across the exposed shelf.', uncertainty:'Vegetation varies locally.' },
+    { id:'coastal-mangrove-fringe', kind:'vegetation', intensity:.6, bounds:[100,-5,118,3], assumption:'Mangroves extend inland.', uncertainty:'Coastal extent is hypothetical.' },
   ] };
   const app = harness({[root.id]:root}, undefined, true);
   await tick(); await app.ui.loadRun(root.id, {animate:false,autoConsequences:false});
   const legend = textContentDeep(app.get('geography-legend'));
-  assert.match(legend, /Sundaland Forest Plain · Forest/);
+  assert.match(legend, /Sundaland Forest Plain · Vegetation/);
   assert.match(legend, /A forest spreads across the exposed shelf/);
   assert.match(legend, /Vegetation varies locally/);
   assert.match(legend, /sundaland-forest-plain/);
   assert.match(legend, /95,-8,120,7/);
-  assert.match(app.get('geography-status').textContent, /unsupported by the atlas/i);
-  assert.equal(app.get('geography-scenario').disabled, true, 'unsupported v2 masks are listed but not drawn');
+  assert.match(app.get('geography-status').textContent, /illustrative surface changes/);
+  assert.equal(app.get('geography-scenario').disabled, false, 'supported v2 geography remains selectable');
+  assert.equal(app.get('geography-water-number').value, -115, 'the selected v2 sea level initializes its local control');
+  assert.deepEqual(app.ui.state().surfaceGeography, root.branch.branches[0].geography, 'the saved v2 state is retained for the selected event');
 });
 
 test('only explicit entry expands one node once; reentry reuses it and child nodes stay unopened', async () => {
@@ -1513,4 +1775,32 @@ test('desktop story mode collapses New exploration and keeps voice disclosure ti
   assert.equal(app.document.body.classList.contains('invitation-open'),false);
   assert.equal(button.getAttribute('aria-expanded'),'false');
   assert.equal(voiceDisclosure.open,false);
+});
+
+test('authored question submission sends a validated parent reference for current-world attachment', async () => {
+  const root = run('attach-root', choice);
+  const generated = run('new-question', next);
+  const app = harness({ 'attach-root':root, 'new-question':generated }, async url => {
+    assert.equal(url, '/api/run');
+    return complete(generated);
+  }, false, '', undefined, undefined, true);
+  await tick();
+  await app.ui.loadRun('attach-root', { animate:false, autoConsequences:false });
+  app.ui.setAtlasAttachmentIntent({ mode:'current-world' });
+  await app.ui.runPrompt('What if the observatory network changed?');
+  const request = app.posts.find(item => item.url === '/api/run');
+  assert.deepEqual(request.body.attachment, { mode:'current-world', parentRunId:'attach-root', parentBranchId:'a' });
+  assert.equal(request.body.divergence, 'What if the observatory network changed?');
+});
+
+test('authored present-day question attaches to the 2026 trunk without a parent event reference', async () => {
+  const root = run('present-root', choice);
+  const generated = run('new-present-question', next);
+  const app = harness({ 'present-root':root, 'new-present-question':generated }, async () => complete(generated), false, '', undefined, undefined, true);
+  await tick();
+  await app.ui.loadRun('present-root', { animate:false, autoConsequences:false });
+  app.ui.setAtlasAttachmentIntent({ mode:'present-day', divergenceYear:2026, divergencePlace:{ name:'Alexandria', lat:31.2, lon:29.9 } });
+  await app.ui.runPrompt('What if river sensors arrived earlier?');
+  const request = app.posts.find(item => item.url === '/api/run');
+  assert.deepEqual(request.body.attachment, { mode:'present-day', divergenceYear:2026, divergencePlace:{ name:'Alexandria', lat:31.2, lon:29.9 } });
 });

@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "captureDate": "2026-11-01",
+  "subject": {
+    "savedEvent": "1978 CE · Canopy Walkway Exploration Network",
+    "storyContext": "Sundaland canopy research"
+  },
+  "captureMethod": {
+    "application": "Current workspace app served from a local replay-only fixture",
+    "browser": "Chrome",
+    "screenshots": "Page screenshots at the stated CSS viewport sizes",
+    "wheelRecording": "Chrome DevTools Protocol screencast with synthetic Input.dispatchMouseEvent wheel inputs on the Atlas canvas",
+    "modelGeneration": false,
+    "remoteDeployment": false
+  },
+  "screenshots": {
+    "desktop": {
+      "viewportCssPixels": [
+        1440,
+        900
+      ],
+      "levels": [
+        {
+          "level": "Surface",
+          "zoomPercent": 0,
+          "file": "desktop-1440x900-surface.png"
+        },
+        {
+          "level": "Lift",
+          "zoomPercent": 30,
+          "file": "desktop-1440x900-lift.png"
+        },
+        {
+          "level": "Orbit",
+          "zoomPercent": 57,
+          "file": "desktop-1440x900-orbit.png"
+        },
+        {
+          "level": "Atlas",
+          "zoomPercent": 100,
+          "file": "desktop-1440x900-atlas.png"
+        }
+      ]
+    },
+    "mobileViewport": {
+      "viewportCssPixels": [
+        375,
+        812
+      ],
+      "levels": [
+        {
+          "level": "Surface",
+          "zoomPercent": 0,
+          "file": "mobile-375x812-surface.png"
+        },
+        {
+          "level": "Lift",
+          "zoomPercent": 30,
+          "file": "mobile-375x812-lift.png"
+        },
+        {
+          "level": "Orbit",
+          "zoomPercent": 57,
+          "file": "mobile-375x812-orbit.png"
+        },
+        {
+          "level": "Atlas",
+          "zoomPercent": 100,
+          "file": "mobile-375x812-atlas.png"
+        }
+      ]
+    }
+  },
+  "wheelRecording": {
+    "file": "wheel-roundtrip-chrome-cdp-synthetic-12fps.webm",
+    "direction": "Surface to Atlas and back to Surface",
+    "syntheticWheelEvents": 24,
+    "sampledZoomPercent": [
+      10,
+      19,
+      29,
+      38,
+      48,
+      57,
+      67,
+      76,
+      86,
+      95,
+      100,
+      100,
+      90,
+      81,
+      71,
+      62,
+      57,
+      47,
+      38,
+      28,
+      19,
+      9,
+      0,
+      0
+    ],
+    "encodedVideoFrameRate": "12 fps",
+    "encodedDurationSeconds": 45.5,
+    "chromeScreencastFrames": 546,
+    "applicationRenderFrameRate": "Not measured; the 12 fps value describes the encoded recording only."
+  },
+  "observations": {
+    "consoleErrors": 0,
+    "eventSceneResponses": {
+      "count": 28,
+      "httpStatus": 200
+    },
+    "canceledOptionalAssetHeadChecks": 4,
+    "modelCapablePostRequests": 0,
+    "metaModelDispatches": 0,
+    "physicalDeviceVerification": false,
+    "notes": [
+      "The wheel video records synthetic browser input, not a physical mouse or trackpad gesture.",
+      "The app's normal hover preview appears when the wheel pointer crosses a saved world target.",
+      "The four canceled requests were optional asset HEAD checks; no visible asset failure was observed."
+    ]
+  },
+  "artifactSha256": {
+    "desktop-1440x900-atlas.png": "b45b3cc4210e9461b812ff403f81673c0b574a05db30016f3b4ee07d5180780e",
+    "desktop-1440x900-lift.png": "91c65f9e07fd930de6962a5929762046bf02334aacac88a0b1d91e2b2c90add7",
+    "desktop-1440x900-orbit.png": "0b1c0492340d5c3fc5d29c9f921407c07b1a0edc1c8258635138611f30e9c7a5",
+    "desktop-1440x900-surface.png": "609ca02c1581bc4e719f4b9b173b2eec5b49146ef329d3ce84d998b865f0bb96",
+    "mobile-375x812-atlas.png": "5fa9de48c7961b77035f3b4e84e7e064a2491d892a0fb730f21bc196dcbc0061",
+    "mobile-375x812-lift.png": "fcd8636a486059f4134939269c46cbd4220ad551c71912d3991387d9a978a114",
+    "mobile-375x812-orbit.png": "f34e3e21ee940f77739f52435f146c56180c4507c18e3468170d9422ad068554",
+    "mobile-375x812-surface.png": "bab163d42239c4fe41efbe64c1d5fbd0c60a0f74a7cae4011d7f10992ba8cf38",
+    "wheel-roundtrip-chrome-cdp-synthetic-12fps.webm": "9aff33d38a48ae47f4857d6533e309fd85fcea82b8064b7c42e735572f87d51d"
+  }
+}

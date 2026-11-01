@@ -1,0 +1,82 @@
+[
+  {
+    "file": "sahara-surface-1440.jpg",
+    "story": "sahara",
+    "requested": "surface",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "actual": "surface"
+  },
+  {
+    "file": "sahara-lift-1440.jpg",
+    "story": "sahara",
+    "requested": "lift",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "actual": "lift"
+  },
+  {
+    "file": "sahara-orbit-1440.jpg",
+    "story": "sahara",
+    "requested": "orbit",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "actual": "orbit"
+  },
+  {
+    "file": "sahara-atlas-1440.jpg",
+    "story": "sahara",
+    "requested": "atlas",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "actual": "atlas"
+  },
+  {
+    "file": "sahara-surface-390.jpg",
+    "story": "sahara",
+    "requested": "surface",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "actual": "surface"
+  },
+  {
+    "file": "sahara-lift-390.jpg",
+    "story": "sahara",
+    "requested": "lift",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "actual": "lift"
+  },
+  {
+    "file": "sahara-orbit-390.jpg",
+    "story": "sahara",
+    "requested": "orbit",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "actual": "orbit"
+  },
+  {
+    "file": "sahara-atlas-390.jpg",
+    "story": "sahara",
+    "requested": "atlas",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "actual": "atlas"
+  }
+]

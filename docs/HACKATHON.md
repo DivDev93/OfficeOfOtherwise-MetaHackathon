@@ -120,3 +120,108 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-10-31 | Separated saved-scene retry from consequence retry. When a scene check fails after consequences are saved, the action is labeled Retry scene and cannot submit the continuation again; entering a completed event also keeps its saved children. Local UI fixture checks only; no Meta calls, deployment, or submission. | |
 | 2026-10-31 | During an explicit continuation, the entered event now shows three undated direct-child placeholders beside its saved graph node. The parent retains the gold lineage; pending children cannot be entered and are replaced by saved child events on completion or removed on abort. Other branches of the same question stay in the same visual tree. Collapsed the invitation on desktop as well as mobile after opening a story. Local UI fixture checks only; no Meta calls, deployment, or submission. | |
 | 2026-10-31 | Preserved the saved version 2 wetland-lake seed format during continuation validation. Lake seeds still have to be finite coordinates within their bounded region, and the saved water-level range remains enforced; this changes validation only, not atlas rendering. Local schema and stub-runner checks only; no Meta calls, deployment, or submission. | |
+| 2026-10-31 | Atlas P0 checkpoint on the isolated feat/atlas-zoom branch: added canonical world/question records, deterministic theme/boldness/divergence-year defaults, and a no-model migration sidecar with verified event-specific image references. Extended Meta branch output metadata while preserving cancellation and saved geography compatibility. Thirty focused Node 22 tests passed. No paid backfill, deployment, or submission. | |
+| 2026-10-31 | Atlas P1 checkpoint: added one-scene Surface/Lift/Orbit rendering with persistent world IDs, ranked pin and possibility-cloud controls, screen-sized preview targets, bounded textures and reduced-motion fades. Captured a 9.40-second 1440x900 saved Sundaland-to-Kuching zoom-out/back recording in docs/atlas-zoom/p1-sundaland-kuching.webm. No live models, deployment or submission. | |
+| 2026-10-31 | Atlas P2 checkpoint: integrated the persistent Atlas workspace, compressed history trunk, 2026 reference Earth, animated vertical-axis modes, folded question chips, sphere LOD and separate Surface/Orbit sliders. Kept the full tree equivalent and exact selected-event ownership through cached-run handoffs; removed the old map modal from the active UI. Saved-only visual and fixture checks; no model calls, deployment or submission. | |
+| 2026-10-31 | Atlas P3 checkpoint: new questions retain separate present-day or current-world attachments without overwriting generated continuation edges. Carried attachment, theme and divergence metadata through saved manifests and fresh-run prompts; kept deterministic migration and explicit event asset provenance. Added thread travel, direct fade-through cuts and optional ghost trail controls. Local fixtures only; no paid backfill, private 3D, deployment or submission. | |
+| 2026-10-31 | Atlas P4 checkpoint: captured all four zoom levels at 1440x900 and 390x844, options/preview/geography examples, native zoom recording and per-level browser frame-cadence samples. Verified exact saved-event entry, keyless zero-model hover/focus/re-entry, keyboard controls and reduced-motion fade behavior. Node 22.23.3: 420 tests passed; Gitleaks 8.30.1 found no secrets in source export or the completed source commit range. Kept advanced terrain work separate and documented unsupported saved geography honestly. Prepared feat/atlas-zoom for a draft PR only; main, PR #7, submission video and hosting remain untouched. | |
+| 2026-10-31 | Atlas review fix: replaced raised Surface mini-Earth event pins with tangent geographic rings; mini-Earths now appear during Lift, including the previous-world navigation Earth. Unified rendered/hit anchors and scaled Earth radius, reprojected labels during dragging, and hid labels past the perspective horizon without clipping their text into the globe. Preserved Orbit/Atlas sizing. Verified local pan and Lift/Orbit behavior, saved 1544x822 before/after pan images, and passed 423 Node 22 tests. No model calls, deployment or submission; update remains in draft PR #11. | |
+| 2026-10-31 | Atlas integration repair after operator found a terrain regression: carried the preserved elevation-backed geography renderer, public rasters/provenance and water/continent controls into feat/atlas-zoom. Current and mini-Earth textures share async terrain readiness; transformed pins, labels, route anchors and camera focus follow the same world geography. Restored active hover thumbnails, pointer transfer and internal scrolling, and corrected high-latitude Surface centering. Recorded the baseline/parity audit and single active candidate in AGENTS.md. Live saved-data checks cover Sahara, exposed Sundaland, Beringia, local continent adjustment and hover scroll/dismissal; 449 Node 22 tests passed with zero model dispatches. Main, PR #7, submission materials/video and private backend remain unchanged; PR #11 remains draft. | |
+| 2026-10-31 | Atlas polish: added zoom-responsive compact navigation and selected-world card, a tree/details drawer and mobile bottom sheets, with reduced-motion and keyboard reachability handling. Work remains local pending full Atlas integration and review. | |
+| 2026-10-31 | Atlas polish: corrected wheel, pinch and keyboard zoom directions, endpoint controls, and pan behavior; local tests cover the gesture mapping. | |
+| 2026-10-31 | Atlas polish: added screen-space labels with collision handling, accessible full text, and compact mobile year-first presentation. | |
+| 2026-10-31 | Atlas polish: changed the arrival thread to a direct, stretching path to avoid a globe-sized halo. | |
+| 2026-10-31 | Atlas polish: expanded the active timeline in context, placed question chips on the trunk, and added miniature Earth sprites with focus transition tests. | |
+| 2026-10-31 | Atlas polish: oriented world snapshots toward their event coordinates and added the root question and sibling branches to Orbit. | |
+| 2026-10-31 | Atlas polish: integrated responsive camera framing, accessible controls and screen-space labels, preserved lineage colours, and culled far-side labels on Surface. | |
+| 2026-10-31 | Atlas polish evidence: recorded both saved stories at all four zoom levels in desktop and mobile viewports, measured local frame cadence, and captured a wheel-driven Surface-to-Atlas-to-Surface walkthrough. Local replay fixture only; no model calls, hosting, or submission. | |
+| 2026-10-31 | Atlas round 3: preserve panel widths while transitioning, sequence the compact controls and sheet, and disable animation under reduced motion. | |
+| 2026-10-31 | Atlas round 3: give visible worlds stable tree rows and smooth parent-child curves while preserving the focused time scale. | |
+| 2026-10-31 | Atlas round 3: normalize wheel range and add gentle resting-level attraction without trapping small trackpad movements. | |
+| 2026-10-31 | Atlas round 3: show offscreen lineage direction markers and concise question labels while retaining full accessible text. | |
+| 2026-10-31 | Atlas round 3: integrate curved hover paths, child labels, thinner selection ring, focused camera fitting, and a single present-day marker. | |
+| 2026-10-31 | Atlas round 3: on phones, first zoom-out targets Orbit and other questions are available through an Atlas toggle; preserve initialization and saved-graph synchronization. | |
+| 2026-10-31 | Atlas round 3: route time-anchored tree edges through tested curved lanes and preserve the chosen routes while the layout animates. | |
+| 2026-10-31 | Atlas round 3: make the phone question toggle reachable and keep its state stable when saved roots finish loading. | |
+| 2026-10-31 | Atlas round 3: captured desktop and phone views plus a wheel-driven Surface–Atlas–Surface recording; verified saved-tree routing, phone toggle, and reduced-motion panel behavior using local replay fixtures. | |
+| 2026-10-31 | Atlas round 3 follow-up: restore phone zoom button hit testing and make its first zoom-out use the controller; limit routing work and preserve warnings for unresolved generated-tree crossings. | |
+| 2026-10-31 | Atlas round 3 follow-up: constrain route detours, debounce camera refits, and record stress-tested routing limits; sampled generated trees may still have crossings. | |
+| 2026-10-31 | Atlas round 3 validation: distinguish the resize-layout debounce from timed camera tweens in the scene guard. | |
+| 2026-10-31 | Atlas round 3 routing experiment: route short edges first to reduce crossings and bound detours on generated trees; general noncrossing behavior remains under investigation. | |
+| 2026-10-31 | Atlas round 3: refreshed the saved-story visual evidence after routing-order refinement; larger generated trees still need a crossing-free solution. | |
+| 2026-10-31 | Atlas round 3 follow-up: prioritize visible Orbit child labels when laying out screen-space text. | |
+| 2026-10-31 | Atlas round 3 follow-up: route exact branch and question-root paths with preserved junctions, prioritize the active lineage, and suppress paths during axis morphs to avoid transient crossings. | |
+| 2026-10-31 | Atlas round 3: refreshed saved-story captures and wheel recording for exact branch and root routes; independent mixed-date tests found no settled crossings in sampled trees. | |
+| 2026-10-31 | Atlas round 3 follow-up: keep odd Orbit sibling counts clear of the parent path and attach question-root links to their moving nodes during zoom. | |
+| 2026-10-31 | Atlas round 3: refreshed Orbit screenshots and the local wheel walkthrough after clearing sibling overlap and aligning question-root endpoints. | |
+| 2026-10-31 | Atlas round 3: apply independent route opacity so Orbit paths no longer brighten newly appearing Atlas paths; validated local WebGL rendering. Intermediate route crossings remain. | |
+| 2026-10-31 | Atlas round 3: refreshed local screenshots and wheel recording after per-edge opacity correction. | |
+| 2026-11-01 | Atlas round 3: resolve overlapping event hit targets by nearest visible screen anchor, with depth and stable ID tie-breaking. | |
+| 2026-11-01 | Atlas round 3: keep offscreen ancestry labels clear of top controls and show a directional arrow with a short title. | |
+| 2026-11-01 | Atlas round 3: add compact, collision-aware phone edge labels for visible Orbit children. | |
+| 2026-11-01 | Atlas round 3: refreshed desktop and phone Orbit captures after checking ancestry and child edge markers. | |
+| 2026-11-01 | Atlas round 3: catch coarse wheel movement at the Orbit resting point in both directions; verified the reverse path locally. | |
+| 2026-11-01 | Atlas round 3: move compact desktop controls smoothly beside the expanded rail without covering its content. | |
+| 2026-11-01 | Atlas round 3: route expanded-question and folded-chip stems with world paths, retain both stems for partly folded questions, and suppress stems during axis transitions. | |
+| 2026-11-01 | Atlas round 3: soften routed gutter bends while retaining collision checks. | |
+| 2026-11-01 | Atlas round 3: avoid trapping wheel input at Orbit when normalized zoom introduces floating-point roundoff. | |
+| 2026-11-01 | Atlas round 3: refresh four-level desktop and phone screenshots and the local wheel round trip after routing and wheel fixes. | |
+| 2026-11-01 | Atlas round 3: separate compact and full selected-world views, and preserve keyboard focus when opening, closing, or leaving details. | |
+| 2026-11-01 | Atlas round 3: capture the open detail sheet at desktop and phone sizes after browser focus and visibility checks. | |
+| 2026-11-01 | Atlas round 3: keep the phone detail sheet below the zoom toolbar and Atlas question toggle. | |
+| 2026-11-01 | Atlas round 3: add compact overflow lanes for crowded phone child labels while retaining full-width labels where space permits. | |
+| 2026-11-01 | Atlas round 3: enlarge the selected-world close control to a 44px touch target and verify it on phone and desktop. | |
+| 2026-11-01 | Atlas round 3: interpolate Orbit chords directly to Atlas routes while keeping endpoints attached; sampled parent-child crossings decreased, but intermediate crossings remain. | |
+| 2026-11-01 | Atlas round 3: prevent phone labels from covering the Other questions control during zoom. | |
+| 2026-11-01 | Atlas round 3: refresh the wheel recording after route and phone-label adjustments. | |
+| 2026-11-01 | Atlas round 3: return keyboard focus to the scene when the phone question toggle hides. | |
+| 2026-11-01 | Atlas round 3: skip Orbit-to-Atlas endpoint calculations while rendering Surface and Lift. | |
+| 2026-11-01 | Atlas round 3: increase the phone Other questions control to a 44px target and verify it clears the open sheet. | |
+| 2026-11-01 | Atlas round 3: keep undated worlds and question stems in a labeled non-temporal lane outside the calendar trunk. | |
+| 2026-11-01 | Atlas round 3: keep previewed event targets clickable while preserving slow pointer transfer and scrolling, including resize and keyboard-dismissal handling. | |
+| 2026-11-01 | Atlas round 3: capture the phone Orbit hover preview after pointer-transfer and scroll checks. | |
+| 2026-11-01 | Atlas round 3: refresh the hover capture after final resize and slow-transfer verification. | |
+| 2026-11-01 | Atlas round 3: prevent large Surface and Orbit clusters from overflowing the fan; preserve keyboard, pointer, and paged selection. | |
+| 2026-11-01 | Atlas round 3: resolve overlapping cluster targets by proximity and suppress clusters hidden behind Earth while retaining pending-cloud hover. | |
+| 2026-11-01 | Verify saved Green Sahara textures through the production terrain raster path using synthetic elevation data. | |
+| 2026-11-01 | Atlas round 3: keep Orbit child labels available through a control-clearing drawer or visible host when no collision-free canvas lane fits. | |
+| 2026-11-01 | Atlas round 3: add a bounded simplified-model Orbit-to-Atlas crossing measurement; its projected counts omit production camera fitting and viewport-specific presentation. | |
+| 2026-11-01 | Atlas round 3: ease attached route interiors into their Atlas shapes; the simplified measurement falls from 44 to 26 crossing frames and 358 to 200 pair observations, while peak simultaneous crossings remain 14. | |
+| 2026-11-01 | Atlas round 3: preserve focused Orbit child labels through lane resize/reparent, reveal them by scrolling only their lane, and avoid per-label world rescans. | |
+| 2026-11-01 | Atlas round 3: fade the full Lift panels without overlapping the compact card, prevent hidden panel input, and enlarge zoom slider targets. | |
+| 2026-11-01 | Atlas round 3: keep the desktop Lift rail at full width while sliding its contents, with reduced-motion transforms disabled. | |
+| 2026-11-01 | Atlas round 3: make the reduced-motion panel handoff instantaneous and reserve the full desktop rail width during Lift. | |
+| 2026-11-01 | Atlas round 3: keep Lift labels clear of the visible details sheet without hiding unrelated labels. | |
+| 2026-11-01 | Atlas round 3: capture a timed local wheel round trip without shortening pauses and record input and frame timings. | |
+| 2026-11-01 | Atlas round 3: size Orbit and Atlas cluster raycast planes from transformed camera depth so rotated Surface clusters retain their declared touch target. | |
+| 2026-11-01 | Atlas round 3: sample Orbit cluster and Atlas world/question hit boundaries in a local synthetic fixture at desktop and phone widths. | |
+| 2026-11-01 | Atlas round 3: keep crowded Orbit child labels visible in a scrollable fallback where a control-clear slot exists. | |
+| 2026-11-01 | Atlas round 3: verify crowded Orbit child labels use a visible host when controls block every fallback dock slot. | |
+| 2026-11-01 | Atlas round 3: try broader safe corner radii on settled Atlas routes while retaining crossing and node-clearance checks. | |
+| 2026-11-01 | Atlas round 3: apply axis changes immediately under reduced motion without blanking the canvas; preserve normal animated transitions. | |
+| 2026-11-01 | Atlas round 3: stage connected Atlas route reveals and preserve the prior renderer when transition ancestry or anchors are unavailable. | |
+| 2026-11-01 | Atlas round 3: center the time-axis title and test its separation from nearby date labels. | |
+| 2026-11-01 | Atlas round 3: record replay-only actual-app views and a synthetic-wheel round trip at the requested desktop and phone widths; note remaining route and label limits. | |
+| 2026-11-01 | Atlas round 3: put ancestor titles before dates in offscreen and crowded edge markers so phone labels retain context. | |
+| 2026-11-01 | Atlas round 3: try shorter cubic gutter sweeps where route and node clearance checks allow them. | |
+| 2026-11-01 | Atlas round 3: resolve overlapping world and Earth pointer targets by their nearest projected anchors. | |
+| 2026-11-01 | Atlas round 3: widen safe gutter turns for the saved Canopy story while retaining the transition-crossing test threshold. | |
+| 2026-11-01 | Atlas round 3: clamp paged-cluster touch controls to the visible phone viewport while retaining their original world anchors. | |
+| 2026-11-01 | Atlas round 3: refresh all level captures and the wheel recording, and document acceptance results and remaining limits. | |
+| 2026-11-01 | Atlas: require visible world anchors before accepting hits from the 44px selection target, preventing clicks through Earth. | |
+| 2026-11-01 | Atlas: reject question-chip hits when Earth is nearer along the actual pointer ray, while keeping Orbit/Atlas chips selectable. Added off-center ray-depth coverage. | |
+| 2026-11-01 | Atlas: add browser-free 64-direction 44px boundary-ray and overlapping-anchor helper math across Orbit/Atlas depths; this does not verify runtime occlusion or ownership. | |
+| 2026-11-01 | Improve concurrent spend-ledger test diagnostics while preserving its reservation assertions. | |
+| 2026-10-31 | Consolidated offline summaries of the captured trace/task cohort and separate single-session fresh-run timing evidence. Public aggregates omit paths, IDs, prompts, hashes, costs and assets; stage spans are application-measured, cache state is unknown, and the observations do not establish provider latency or global reliability. The fresh video candidate and continuous original remain local review artifacts; no publication or submission. | |
+| 2026-11-01 | Atlas: keep unresolved reveal candidates diagnostic-only and leave continuous scene positioning and saved event paths with the legacy renderer; cover missing Orbit anchors and renderer handoff offline. | |
+| 2026-11-01 | Atlas: preserve selected and ancestry labels on narrow settled views by using collision-checked edge slots when local placements are blocked; cover 390px and 375px layouts offline. | |
+| 2026-11-01 | Atlas entry: initialize the Earth texture before a world is selected and keep the four saved starting questions open on first load. Offline entry tests pass. | |
+| 2026-11-01 | Atlas: fit the Surface globe to the center canvas aspect so narrow panels do not crop it after changing the selected world. | |
+| 2026-11-01 | Atlas: enable reversible wheel, pinch and keyboard zoom closer than the fitted globe while Surface is at its starting level; outward input returns to the fitted view before continuing Surface-to-Orbit-to-Atlas. Local interaction tests; no model calls, hosting, or submission. | |
+| 2026-11-01 | Atlas: focus a selected saved world's recorded place on Surface, show its name and coordinates, and carry that place into present-day branching context. Uses existing local coordinates; no external gazetteer or map service. | |
+| 2026-11-01 | Atlas: extend the Surface canvas across the viewport so close zoom is not cut off at the desktop canvas edges. | |
+| 2026-11-01 | Atlas: rotate the Surface globe vertically as well as horizontally when dragged, with pole limits. | |
+| 2026-11-01 | Atlas: center the Surface globe in the visible space between open side panels while retaining the full-width canvas. | |
+| 2026-11-01 | Restore saved replay histories alongside live continuations, preserving branch identity, ancestry, and read-only package data. | |
+| 2026-11-01 | Restore bounded source retrieval and evidence-linked briefs, preserving complete quoted units and uncertainty. | |
+| 2026-11-01 | Continue unsupported or ungrounded topics as explicitly unsourced speculation, without invented citations or additional proposal calls. | |

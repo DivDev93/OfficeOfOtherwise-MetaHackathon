@@ -1,0 +1,74 @@
+[
+  {
+    "file": "canopy-surface-1440.jpg",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "level": "surface",
+    "actual": "surface"
+  },
+  {
+    "file": "canopy-lift-1440.jpg",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "level": "lift",
+    "actual": "lift"
+  },
+  {
+    "file": "canopy-orbit-1440.jpg",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "level": "orbit",
+    "actual": "orbit"
+  },
+  {
+    "file": "canopy-atlas-1440.jpg",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "level": "atlas",
+    "actual": "atlas"
+  },
+  {
+    "file": "canopy-surface-390.jpg",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "level": "surface",
+    "actual": "surface"
+  },
+  {
+    "file": "canopy-lift-390.jpg",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "level": "lift",
+    "actual": "lift"
+  },
+  {
+    "file": "canopy-orbit-390.jpg",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "level": "orbit",
+    "actual": "orbit"
+  },
+  {
+    "file": "canopy-atlas-390.jpg",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "level": "atlas",
+    "actual": "atlas"
+  }
+]

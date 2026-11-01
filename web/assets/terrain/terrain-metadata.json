@@ -1,0 +1,137 @@
+{
+  "datasets": {
+    "globalElevation": {
+      "bounds": [
+        -180,
+        -90,
+        180,
+        90
+      ],
+      "cellSizeDegrees": 0.08333333333333333,
+      "compressedBytes": 14483344,
+      "compressedSha256": "dc89a1060c5f80e8cae3adfdcbb424da23de4b0c6bec165360a6c2a27619bea8",
+      "encoding": "gzip + signed int16 little-endian meters; value is rounded arithmetic mean of valid 5x5 NOAA one-minute cells.",
+      "file": "/assets/terrain/elevation-global-5min.i16.gz",
+      "height": 2160,
+      "registration": "pixel-center",
+      "resolutionLimit": "Illustrative global sea-level threshold layer; 5 arc-minute aggregation is not a hydrological reconstruction and does not model barriers, drainage, tides, or local datum differences.",
+      "uncompressedBytes": 18662400,
+      "uncompressedSha256": "d6846dae55b67f10235e99b57dbf14fb317ebb9dbe5c6189362c387e90d1d690",
+      "width": 4320
+    },
+    "landmassIds": {
+      "bounds": [
+        -180,
+        -90,
+        180,
+        90
+      ],
+      "cellSizeDegrees": 0.08333333333333333,
+      "centroids": {
+        "AFRICA": {
+          "latitude": 6.13539,
+          "longitude": 18.59748,
+          "method": "area-weighted spherical centroid of owned cells, including interior water"
+        },
+        "ANTARCTICA": {
+          "latitude": -74.1549,
+          "longitude": 77.64665,
+          "method": "area-weighted spherical centroid of owned cells, including interior water"
+        },
+        "AUSTRALIA": {
+          "latitude": -22.9397,
+          "longitude": 137.17529,
+          "method": "area-weighted spherical centroid of owned cells, including interior water"
+        },
+        "EURASIA": {
+          "latitude": 39.52139,
+          "longitude": 77.79153,
+          "method": "area-weighted spherical centroid of owned cells, including interior water"
+        },
+        "N_AMERICA": {
+          "latitude": 39.40524,
+          "longitude": -96.43041,
+          "method": "area-weighted spherical centroid of owned cells, including interior water"
+        },
+        "S_AMERICA": {
+          "latitude": -13.44787,
+          "longitude": -60.64345,
+          "method": "area-weighted spherical centroid of owned cells, including interior water"
+        }
+      },
+      "compressedBytes": 62821,
+      "compressedSha256": "a864a8fae79e080bf86dfb4bd75b99ac8dd82d4f681cbfadccd40e6e8f057b92",
+      "encoding": "gzip + unsigned byte IDs; 0 ocean/unknown, 1-6 per idLegend.",
+      "file": "/assets/terrain/landmass-global-5min.u8.gz",
+      "height": 2160,
+      "idLegend": {
+        "1": "AFRICA",
+        "2": "EURASIA",
+        "3": "N_AMERICA",
+        "4": "S_AMERICA",
+        "5": "AUSTRALIA",
+        "6": "ANTARCTICA"
+      },
+      "ownershipSemantics": "Landmass ownership for transformations, not a dry-land mask. Interior lake pixels receive their surrounding/nearest landmass; height data determines elevation and water level. IDs do not represent political borders or tectonic plates.",
+      "pixelCountsIncludingInteriorWater": {
+        "0": 6123725,
+        "1": 370998,
+        "2": 1060796,
+        "3": 557484,
+        "4": 225175,
+        "5": 115452,
+        "6": 877570
+      },
+      "registration": "pixel-center",
+      "sourceDataUsedOnlyForGeneration": "Natural Earth Admin 0 CONTINENT attribute plus lake polygon geometry; no country-level features or attributes are shipped.",
+      "uncompressedBytes": 9331200,
+      "uncompressedSha256": "8add5865eebf6616bb3a8a6e99ec5ff3ad719ec4eeb794d4302d5f6b3c056a91",
+      "width": 4320
+    },
+    "saharaElevation": {
+      "bounds": [
+        -18,
+        12,
+        36,
+        34
+      ],
+      "cellSizeDegrees": 0.016666666666666666,
+      "compressedBytes": 5224092,
+      "compressedSha256": "c5c42502d85898eccfc4ca9fb97e8124779947ffef1df8d615976001b3fe28a1",
+      "encoding": "gzip + signed int16 little-endian meters; NOAA one-minute values rounded to nearest meter.",
+      "file": "/assets/terrain/elevation-sahara-1min.i16.gz",
+      "height": 1320,
+      "registration": "pixel-center",
+      "resolutionLimit": "Coarse global-relief source; contours are illustrative, not a basin hydrology or lake reconstruction.",
+      "uncompressedBytes": 8553600,
+      "uncompressedSha256": "8dd8f363ae58dbc2a7377643a00c126ef728909d272675ccfd6bbbdfde9953f4",
+      "width": 3240
+    }
+  },
+  "encoding": "Gzip-compressed C-order binary; int16 is signed little-endian, u8 is unsigned; gzip header mtime is fixed to zero.",
+  "gridConvention": "WGS84 longitude/latitude, pixel centers, row-major north-to-south, columns west-to-east, longitude wraps at +/-180 degrees.",
+  "nodata": -32768,
+  "sources": {
+    "etopo2022": {
+      "citation": "NOAA National Centers for Environmental Information. 2022. ETOPO 2022 15 Arc-Second Global Relief Model. https://doi.org/10.25921/fd45-gt74 (60 arc-second supplied global extract).",
+      "license": "CC0 1.0 Public Domain Dedication (NOAA metadata).",
+      "sha256": "9d27d4b8ea8e76977e2988bca667d7c8fa68b927355feffcddd6b4875a7fd08e",
+      "title": "NOAA National Centers for Environmental Information, ETOPO 2022 60 Arc-Second Global Relief Model, ice-surface elevation",
+      "url": "https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO2022/data/60s/60s_surface_elev_gtif/ETOPO_2022_v1_60s_N90W180_surface.tif"
+    },
+    "naturalEarthAdmin0": {
+      "license": "Public domain; attribution optional.",
+      "sha256": "ce1ac7036499a0edd641fbc093cd209a98f96a49d2eca8480aaacad35138a7f6",
+      "title": "Natural Earth 1:10m Admin 0 Countries, v5.1.1",
+      "url": "https://naciscdn.org/naturalearth/10m/cultural/ne_10m_admin_0_countries.zip"
+    },
+    "naturalEarthLakes": {
+      "license": "Public domain; attribution optional.",
+      "sha256": "0803a06f9c3cb4671d89b68c48b142aad9366ba40f665245e12a913fbc61722a",
+      "title": "Natural Earth 1:10m Lakes, v5.0.0",
+      "url": "https://naciscdn.org/naturalearth/10m/physical/ne_10m_lakes.zip"
+    }
+  },
+  "version": 1,
+  "verticalReference": "Meters relative to EGM2008 geoid (EPSG:3855); EGM2008 is an approximate mean-sea-level reference, and some shallow-water source areas may use different vertical datums."
+}

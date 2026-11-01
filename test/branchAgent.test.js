@@ -40,9 +40,22 @@ test('happy path: proposes, filters, reviews, ranks and picks the hero with a fu
   assert.deepEqual(out.rejected.map(r => r.branch.id), ['b4']);       // keyword layer caught the siege
   assert.equal(out.hero.branchId, 'b1');
   assert.equal(out.hero.subject, 'brass steam engine');
-  assert.deepEqual(out.trace.map(t => t.step).sort(), ['policy:branches', 'policy:prompt', 'propose', 'review']);
+  assert.deepEqual(out.trace.map(t => t.step).sort(), ['policy:branches', 'policy:image', 'policy:prompt', 'propose', 'review']);
   assert.equal(client.calls[0].model, 'muse-wonder-1.0');
   assert.ok(out.costUsd > 0);
+});
+
+test('review image prompt is checked and rejected wording falls back to the checked branch scene', async () => {
+  const client = fakeClient({ propose: JSON.stringify([BRANCHES[0]]), review: { ...REVIEW, hero: { id: 'b1', imagePrompt: 'A soldier beside an engine.', subject: 'engine' } } });
+  const classifyPrompt = async text => /soldier/i.test(text)
+    ? { verdict: 'block', category: 'war', reason: 'war imagery' }
+    : { verdict: 'allow', category: null, reason: '' };
+  const policy = createTopicPolicy({ classifyPrompt, classifyBranches: async () => ({ verdict: 'allow' }) });
+  const out = await createBranchAgent({ client, policy }).run({ divergence: 'What if the Library of Alexandria never burned?' });
+  assert.equal(out.status, 'ok');
+  assert.equal(out.hero.imagePrompt, BRANCHES[0].scene);
+  assert.ok(out.trace.some(item => item.step === 'policy:image' && item.allowed === false));
+  assert.ok(out.trace.some(item => item.step === 'policy:image-fallback' && item.allowed === true));
 });
 
 test('blocked divergence spends nothing on generation and returns a reframe', async () => {
@@ -339,4 +352,22 @@ test('geography free text cannot bypass keyword or model policy, including inher
   const blocked = await createBranchAgent({ client: noCalls, policy: allowAll }).run({ divergence: 'A greener Sahara', continuation: inherited });
   assert.equal(blocked.status, 'blocked');
   assert.equal(noCalls.calls.length, 0);
+});
+
+test('branch schema accepts optional Atlas theme and question divergence metadata while old fixtures still infer defaults', async () => {
+  const themed = { ...BRANCHES[0], theme: 'science-medicine' };
+  const client = fakeClient({ propose: JSON.stringify([themed]), review: { scores: [{ id: 'b1', score: 8, boldness: 0.8, note: 'strong' }], hero: REVIEW.hero } });
+  const out = await createBranchAgent({ client, policy: allowAll }).run({
+    divergence: 'What if the Library of Alexandria never burned?', divergenceYear: -300, divergencePlace: { name: 'Alexandria', lat: 31.2, lon: 29.9 },
+  });
+  assert.equal(out.branches[0].theme, 'science-medicine');
+  assert.equal(out.branches[0].boldness, 0.8);
+  assert.deepEqual(out.question, { divergenceYear: -300, divergencePlace: { name: 'Alexandria', lat: 31.2, lon: 29.9 } });
+  assert.ok(client.calls.every(call => call.input.includes('"divergenceYear":-300')));
+
+  const legacyClient = fakeClient({ propose: JSON.stringify([BRANCHES[0]]), review: REVIEW });
+  const legacyOut = await createBranchAgent({ client: legacyClient, policy: allowAll }).run({ divergence: 'What if the Library of Alexandria never burned?' });
+  assert.equal(legacyOut.branches[0].theme, 'science-medicine');
+  assert.equal(legacyOut.branches[0].boldness, 0.9);
+  assert.equal('question' in legacyOut, false);
 });

@@ -38,13 +38,15 @@ export async function runHarness(options) {
   let branch;
   try {
     throwIfAborted();
-    branch = from ? JSON.parse(readFileSync(from, 'utf8')) : await agent.run({ divergence, count: 3, onStep: emit, signal, ...(context ? { continuation: context } : {}) });
+    branch = from ? JSON.parse(readFileSync(from, 'utf8')) : await agent.run({ divergence, count: 3, runId, onStep: emit, signal, ...(context ? { continuation: context } : {}) });
   } catch (error) {
     trace.push(...apiCalls, { step: 'agent', error: error.message });
     persistTrace();
     throw error;
   }
-  if (!branch || !['ok', 'blocked', 'empty'].includes(branch.status)) throw new Error('Invalid saved branch status');
+  if (!branch || !['ok', 'blocked', 'empty', 'evidence_unavailable', 'ungrounded'].includes(branch.status)) throw new Error('Invalid saved branch status');
+  if (branch.runId && branch.runId !== runId) throw new Error('Branch evidence run ID does not match its saved run');
+  if (!branch.runId) branch.runId = runId;
   const branchContext = context ?? normalizeContinuation(branch.continuation);
   if (branchContext) branch = { ...branch, continuation: branchContext };
   // Validate persisted structured state too; saved renders must use the same
