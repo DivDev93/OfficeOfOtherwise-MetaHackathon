@@ -198,3 +198,5 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: keep crowded Orbit child labels visible in a scrollable fallback where a control-clear slot exists. | |
 | 2026-11-01 | Atlas round 3: try broader safe corner radii on settled Atlas routes while retaining crossing and node-clearance checks. | |
 | 2026-11-01 | Atlas round 3: apply axis changes immediately under reduced motion without blanking the canvas; preserve normal animated transitions. | |
+| 2026-11-01 | Atlas: require visible world anchors before accepting hits from the 44px selection target, preventing clicks through Earth. | |
+| 2026-11-01 | Improve concurrent spend-ledger test diagnostics while preserving its reservation assertions. | |

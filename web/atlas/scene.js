@@ -2225,7 +2225,7 @@ export function createAtlasScene(container, {
       const center = hitWorldPosition(entry, state).applyMatrix4(atlasGroup.matrixWorld);
       const cameraSpace = center.clone().applyMatrix4(camera.matrixWorldInverse);
       const viewDepth = -cameraSpace.z;
-      if (viewDepth <= 0) continue;
+      if (viewDepth <= 0 || !targetVisiblePastEarth(center, state)) continue;
       const radius = worldRadiusForScreenPixels(viewDepth, camera.fov, Math.max(1, bounds.height), 44);
       const point = raycaster.ray.intersectSphere(new THREE.Sphere(center, radius), new THREE.Vector3());
       if (!point) continue;

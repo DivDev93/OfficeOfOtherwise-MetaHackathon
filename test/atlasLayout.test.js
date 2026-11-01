@@ -274,6 +274,16 @@ test('negative-latitude/longitude surface markers remain on the unit Earth and c
   assert.match(source, /surfacePinInstances\.setColorAt/, 'each tangent marker still receives its world color');
 });
 
+test('world hit candidates require visible anchors before applying the inflated pointer target', () => {
+  const source = readFileSync(new URL('../web/atlas/scene.js', import.meta.url), 'utf8');
+  const hitWorldTarget = source.match(/function hitWorldTarget\(event\) \{([\s\S]*?)\n  \}\n  function hitWorld\(/)?.[1];
+  assert.ok(hitWorldTarget, 'the active world hit-test function is present');
+  assert.match(hitWorldTarget, /if \(viewDepth <= 0 \|\| !targetVisiblePastEarth\(center, state\)\) continue;/,
+    'hidden anchors are culled even when the 44px selection sphere reaches in front of Earth');
+  assert.ok(hitWorldTarget.indexOf('targetVisiblePastEarth(center, state)') < hitWorldTarget.indexOf('raycaster.ray.intersectSphere'),
+    'anchor visibility is checked before the inflated sphere can produce a hit');
+});
+
 test('surface arc interpolation stays finite for coincident, near-coincident and antipodal nodes', () => {
   const cases = [
     [{ x: 0, y: 1, z: 0 }, { x: 0, y: 1, z: 0 }, 0.5],
