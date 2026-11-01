@@ -30,4 +30,6 @@ At 375px, the Other questions control was checked against saved data: opening it
 
 `atlas-hit-world-{1440,375}.png`, `atlas-hit-chip-{1440,375}.png`, and `orbit-hit-cluster-{1440,375}.png` show a local in-memory fixture after real pointer moves near a target edge. The world and chip previews reported offsets of approximately 21.7–21.9 CSS pixels from their projected centers; the Orbit cluster expanded at an approximately 28px horizontal offset. These sample single directions; they are not exhaustive 44px-boundary or overlap proofs. No saved runs or model calls were used.
 
+`orbit-crowded-dock-fixture.png` shows a forced blocked-lane case in a local synthetic 375×812 viewport with 36 explored direct children: the visible scrollable dock contained 36 unique label buttons. It does not verify a generated-story selection. `atlas-curves-1440.png` and `atlas-curves-375.png` show the saved story after trying broader safe route-corner radii; many routes retain orthogonal segments when a larger curve would conflict. Transition crossings remain unresolved.
+
 In the recorded local replay at 1440×900, successive 120-pixel wheel inputs reached 10, 19, 29, 38, 48, 57 (Orbit), 67, 76, 86, 95 and 100 (Atlas). The reverse pass reached 90, 81, 71, 62, 57 (Orbit), 47, 38, 28, 19, 9 and 0 (Surface). Both passes left the Orbit stop on the next input.

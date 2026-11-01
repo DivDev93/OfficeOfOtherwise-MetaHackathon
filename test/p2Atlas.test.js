@@ -515,6 +515,8 @@ test('nested gutters preserve the equal-year and backward-time 20-world fixture'
     'safe edges use smoother direct cubics');
   assert.ok(layout.parentChildPaths.some(path => path.routeCornerRadius > 0.22),
     'remaining gutter routes use a larger safe corner radius where spacing permits');
+  assert.ok(layout.parentChildPaths.some(path => path.routeType === 'nested-prefix-gutter' && path.routeCornerRadius >= 1.1),
+    'widely spaced gutter turns use the larger adaptive radius when the exact route remains clear');
   assert.ok(Math.max(...layout.parentChildPaths.filter(path => path.routeType === 'nested-prefix-gutter')
     .map(largestGradualTurnSweep)) > 1.0,
     'the exact rendered polyline contains multi-segment rounded turns instead of square bus corners');
