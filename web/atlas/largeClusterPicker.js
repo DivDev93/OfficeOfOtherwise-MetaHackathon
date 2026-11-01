@@ -271,10 +271,28 @@ export function createLargeClusterPicker({
     const ok = visible && Number.isFinite(Number(x)) && Number.isFinite(Number(y));
     trigger.hidden = !ok;
     if (ok) {
-      const width = Math.max(0, Number(container.clientWidth) || 0);
-      const height = Math.max(0, Number(container.clientHeight) || 0);
-      const centerX = width >= size ? Math.max(size / 2, Math.min(width - size / 2, Number(x))) : width / 2;
-      const centerY = height >= size ? Math.max(size / 2, Math.min(height - size / 2, Number(y))) : height / 2;
+      const bounds = container.getBoundingClientRect?.();
+      const width = Math.max(0, Number(bounds?.width) || Number(container.clientWidth) || 0);
+      const height = Math.max(0, Number(bounds?.height) || Number(container.clientHeight) || 0);
+      const viewport = document.defaultView || globalThis;
+      const viewportWidth = Number(viewport.innerWidth);
+      const viewportHeight = Number(viewport.innerHeight);
+      const left = Number(bounds?.left) || 0;
+      const top = Number(bounds?.top) || 0;
+      // The trigger layer clips to the scene container, which may itself extend
+      // beyond a phone viewport. Clamp to the part both surfaces can display.
+      const clampCenter = (value, extent, origin, viewportExtent) => {
+        const half = size / 2;
+        let min = half, max = extent - half;
+        if (Number.isFinite(viewportExtent)) {
+          min = Math.max(min, half - origin);
+          max = Math.min(max, viewportExtent - half - origin);
+        }
+        if (max < min) return Math.max(0, Math.min(extent, value));
+        return Math.max(min, Math.min(max, value));
+      };
+      const centerX = clampCenter(Number(x), width, left, viewportWidth);
+      const centerY = clampCenter(Number(y), height, top, viewportHeight);
       trigger.style.left = `${centerX - size / 2}px`;
       trigger.style.top = `${centerY - size / 2}px`;
       const tooltipWidth = Math.min(240, Math.max(120, width - 16));

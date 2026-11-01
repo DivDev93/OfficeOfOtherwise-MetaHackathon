@@ -15,6 +15,8 @@ class FakeElement {
     this.listeners = new Map();
     this.style = {};
     this.dataset = {};
+    this.clientWidth = 0;
+    this.clientHeight = 0;
     this.hidden = false;
     this.disabled = false;
     this.textContent = '';
@@ -48,6 +50,7 @@ class FakeElement {
   focus() { this.ownerDocument.activeElement = this; this.dispatch('focus'); }
   click(detail = 0) { return this.dispatch('click', { detail }); }
   contains(other) { return this === other || this.children.some(child => child.contains(other)); }
+  getBoundingClientRect() { return this.rect || { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight }; }
   remove() {
     if (!this.parentElement) return;
     this.parentElement.children = this.parentElement.children.filter(child => child !== this);
@@ -59,6 +62,7 @@ function fakeDocument() {
   const listeners = new Map();
   const document = {
     activeElement: null,
+    defaultView: { innerWidth: 375, innerHeight: 812 },
     createElement(tag) { return new FakeElement(document, tag); },
     addEventListener(type, listener) { const list = listeners.get(type) || []; list.push(listener); listeners.set(type, list); },
     removeEventListener(type, listener) { listeners.set(type, (listeners.get(type) || []).filter(item => item !== listener)); },
@@ -403,4 +407,29 @@ test('large picker previews on hover/focus, opens only on explicit activation, p
   assert.equal(document.body.children.length, 0);
   assert.equal(document.listenerCount('keydown'), 0);
   assert.equal(document.listenerCount('pointerdown'), 0);
+});
+
+test('paged Orbit target stays fully inside the phone viewport when its scene extends past the right edge', () => {
+  const { worlds, cluster } = largeWorldFixture();
+  const document = fakeDocument();
+  const container = document.createElement('div');
+  container.clientWidth = 400; container.clientHeight = 812;
+  container.rect = { left: -18, top: 0, width: 400, height: 812, right: 382, bottom: 812 };
+  const picker = createLargeClusterPicker({ container, document });
+  picker.setClusters([cluster], worlds);
+  const projectedAnchor = { x: 384, y: 260 };
+  picker.setPosition(cluster.id, { ...projectedAnchor, visible: true });
+
+  const trigger = picker.getTrigger(cluster.id);
+  const left = Number.parseFloat(trigger.style.left);
+  const top = Number.parseFloat(trigger.style.top);
+  const viewportLeft = container.rect.left + left;
+  const viewportTop = container.rect.top + top;
+  assert.equal(left + 29, 364, 'the hit target is translated into the visible container/viewport intersection');
+  assert.ok(viewportLeft >= 0 && viewportLeft + 58 <= document.defaultView.innerWidth);
+  assert.ok(viewportTop >= 0 && viewportTop + 58 <= document.defaultView.innerHeight);
+  assert.equal(picker.hitTestCandidate(left + 29, top + 29)?.cluster.id, cluster.id,
+    'the clamped screen target still resolves to the original cluster');
+  assert.deepEqual(projectedAnchor, { x: 384, y: 260 }, 'the projected scene anchor is not rewritten by target clamping');
+  picker.destroy();
 });
