@@ -1,0 +1,101 @@
+{
+  "evidenceType": "single-fresh-interactive-session",
+  "sourceRevision": "0254325e230aaf0089fd11e4267213a1eadf5255",
+  "recordingAttempts": {
+    "complete": 1,
+    "partial": 2,
+    "partialAttemptCauses": [
+      "recorder-control-busy",
+      "text-encoding"
+    ],
+    "partialAttemptClassification": "recorder-only; not classified as model outcomes"
+  },
+  "completeCapture": {
+    "sessionFailureField": null,
+    "telemetryStartedAt": "2026-10-31T15:15:03.450Z",
+    "telemetryEndedAt": "2026-10-31T15:18:43.839Z",
+    "telemetryEventWindowSeconds": 220.389,
+    "videoContainerSeconds": 225.48,
+    "videoWidth": 1920,
+    "videoHeight": 1080,
+    "videoFrameRate": "25/1"
+  },
+  "timingInterpretation": {
+    "sampleCount": 1,
+    "measure": "ISO milestone wall-clock difference to UI scene-ready confirmation",
+    "notMeasured": [
+      "first-pixel time",
+      "provider or model request latency",
+      "population percentile",
+      "completion of every descendant task"
+    ],
+    "historicalFixedCohortIncludesThisSession": false
+  },
+  "milestones": [
+    {
+      "interaction": "root-submit-to-root-scene-ready",
+      "startId": "fresh-root-submit",
+      "startAt": "2026-10-31T15:15:04.206Z",
+      "readyId": "root-scene-ready",
+      "readyAt": "2026-10-31T15:16:16.232Z",
+      "elapsedSeconds": 72.026
+    },
+    {
+      "interaction": "root-submit-to-root-scene-and-automatic-children-ready",
+      "startId": "fresh-root-submit",
+      "startAt": "2026-10-31T15:15:04.206Z",
+      "readyId": "root-event-scene-and-autochildren-ready",
+      "readyAt": "2026-10-31T15:17:20.395Z",
+      "elapsedSeconds": 136.189
+    },
+    {
+      "interaction": "choose-B-to-B-scene-ready",
+      "startId": "choose-child-B",
+      "startAt": "2026-10-31T15:17:23.439Z",
+      "readyId": "child-B-scene-ready",
+      "readyAt": "2026-10-31T15:17:39.627Z",
+      "elapsedSeconds": 16.188
+    },
+    {
+      "interaction": "choose-B-to-B-scene-and-automatic-children-ready",
+      "startId": "choose-child-B",
+      "startAt": "2026-10-31T15:17:23.439Z",
+      "readyId": "child-B-scene-and-new-autochildren-ready",
+      "readyAt": "2026-10-31T15:18:16.509Z",
+      "elapsedSeconds": 53.07
+    },
+    {
+      "interaction": "choose-C-to-matching-scene-ready",
+      "startId": "choose-grandchild-C",
+      "startAt": "2026-10-31T15:18:19.554Z",
+      "readyId": "grandchild-C-scene-ready",
+      "readyAt": "2026-10-31T15:18:21.261Z",
+      "elapsedSeconds": 1.707,
+      "interpretation": "saved-scene UI readiness only; generation timing unknown"
+    },
+    {
+      "interaction": "choose-D-to-sibling-scene-ready",
+      "startId": "choose-sibling-D",
+      "startAt": "2026-10-31T15:18:28.053Z",
+      "readyId": "sibling-D-scene-ready",
+      "readyAt": "2026-10-31T15:18:28.494Z",
+      "elapsedSeconds": 0.441,
+      "interpretation": "saved-scene UI readiness only; generation timing unknown"
+    }
+  ],
+  "storyPath": {
+    "root": "800 BCE · Fezzan Reed Boat Lake Routes",
+    "childB": "620 BCE · Marker Carvers Teach Channel Reading",
+    "grandchildC": "480 BCE · Flood Calendars Guide Lakeside Planting",
+    "alternateD": "340 BCE · Sealed Pots For Lake Grain"
+  },
+  "endState": {
+    "childBAutomaticChildrenReady": true,
+    "grandchildCSceneReady": true,
+    "backtrackToRootObserved": true,
+    "siblingDSceneReady": true,
+    "allDescendantTasksComplete": false,
+    "note": "D descendants and another event task remained processing at capture end."
+  },
+  "publication": "local evidence artifact; main v3 placeholder review pending; no publication claim"
+}

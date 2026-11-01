@@ -1,0 +1,402 @@
+{
+  "schemaVersion": 1,
+  "sourceFileCount": 579,
+  "generatedFrom": "saved-local-traces-and-task-metadata",
+  "privacy": "Aggregated counts and durations only; run/task IDs, prompts, paths, hashes, costs, outputs, and asset contents excluded.",
+  "cohort": {
+    "scope": "Available captured local run and task records; copies across snapshots deduplicated by run ID or task identity.",
+    "uniqueRunRecords": 86,
+    "copiedTraceRecordsExcluded": 103,
+    "excludedHumanNamedFixtures": 3,
+    "excludedPackagedNamedReplayDirectories": 4,
+    "runsByType": {
+      "root": {
+        "savedBranchRecords": 29,
+        "branchEvidenceStates": {
+          "branchOkNoRecordedStageError": 24,
+          "branchBlocked": 1,
+          "branchArtifactMissing": 1,
+          "branchOkWithRecordedStageError": 1,
+          "branchStatusOther": 2
+        }
+      },
+      "continuation": {
+        "savedBranchRecords": 57,
+        "branchEvidenceStates": {
+          "branchOkNoRecordedStageError": 47,
+          "branchOkWithRecordedStageError": 2,
+          "branchArtifactMissing": 8
+        }
+      }
+    },
+    "tasksByType": {
+      "continuation": {
+        "recordedTasks": 52,
+        "succeeded": 46,
+        "failed": 2,
+        "incomplete": 1,
+        "dispatchUnknown": 4,
+        "empty": 0,
+        "completeOverInProgress": 0,
+        "recordedStatuses": {
+          "complete": 46,
+          "in-progress": 1,
+          "uncertain": 3,
+          "failed": 2
+        }
+      },
+      "eventScene": {
+        "recordedTasks": 56,
+        "succeeded": 50,
+        "failed": 0,
+        "incomplete": 1,
+        "dispatchUnknown": 6,
+        "empty": 0,
+        "completeOverInProgress": 2,
+        "recordedStatuses": {
+          "complete": 50,
+          "uncertain": 5,
+          "in-progress": 1
+        }
+      },
+      "eventCutout": {
+        "recordedTasks": 4,
+        "succeeded": 4,
+        "failed": 0,
+        "incomplete": 0,
+        "dispatchUnknown": 0,
+        "empty": 3,
+        "completeOverInProgress": 0,
+        "recordedStatuses": {
+          "empty": 3,
+          "complete": 1
+        }
+      }
+    },
+    "note": "These are saved task statuses, not request-attempt or dispatch counts. In-progress and uncertain outcomes cannot be resolved from metadata; completeOverInProgress counts identities where a complete record superseded a stale in-progress record. Archived continuation reservations are excluded because they record pre-dispatch release."
+  },
+  "durations": [
+    {
+      "runType": "continuation",
+      "stage": "image",
+      "model": "muse-image-1.0",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "reviewFlag": "sub-second-span-cache-unverified",
+      "n": 1,
+      "minMs": 83,
+      "medianMs": 83,
+      "p90Ms": 83,
+      "maxMs": 83
+    },
+    {
+      "runType": "continuation",
+      "stage": "image",
+      "model": "muse-image-1.0",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 48,
+      "minMs": 11799,
+      "medianMs": 25033,
+      "p90Ms": 39495,
+      "maxMs": 82237
+    },
+    {
+      "runType": "continuation",
+      "stage": "policy:branches",
+      "model": "muse-spark-1.3",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 49,
+      "minMs": 3028,
+      "medianMs": 5513,
+      "p90Ms": 9018,
+      "maxMs": 23711
+    },
+    {
+      "runType": "continuation",
+      "stage": "policy:prompt",
+      "model": "muse-spark-1.3",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 49,
+      "minMs": 1279,
+      "medianMs": 4196,
+      "p90Ms": 20197,
+      "maxMs": 40980
+    },
+    {
+      "runType": "continuation",
+      "stage": "propose",
+      "model": "muse-wonder-1.0",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 49,
+      "minMs": 24087,
+      "medianMs": 33681,
+      "p90Ms": 49042,
+      "maxMs": 51706
+    },
+    {
+      "runType": "continuation",
+      "stage": "review",
+      "model": "muse-wonder-1.0",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 49,
+      "minMs": 5442,
+      "medianMs": 9649,
+      "p90Ms": 13765,
+      "maxMs": 25702
+    },
+    {
+      "runType": "continuation",
+      "stage": "segment",
+      "model": "sam-3.1",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "reviewFlag": "sub-second-span-cache-unverified",
+      "n": 1,
+      "minMs": 13,
+      "medianMs": 13,
+      "p90Ms": 13,
+      "maxMs": 13
+    },
+    {
+      "runType": "continuation",
+      "stage": "segment",
+      "model": "sam-3.1",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 53,
+      "minMs": 2370,
+      "medianMs": 4196,
+      "p90Ms": 8119,
+      "maxMs": 27252
+    },
+    {
+      "runType": "continuation",
+      "stage": "topic-policy",
+      "model": "muse-spark-1.3",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 302,
+      "minMs": 1277,
+      "medianMs": 3916,
+      "p90Ms": 6960,
+      "maxMs": 40978
+    },
+    {
+      "runType": "root",
+      "stage": "evidence:retrieve",
+      "model": "unlabeled",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 5,
+      "minMs": 7009,
+      "medianMs": 14010,
+      "p90Ms": 14024,
+      "maxMs": 14024
+    },
+    {
+      "runType": "root",
+      "stage": "image",
+      "model": "muse-image-1.0",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 1,
+      "minMs": 14335,
+      "medianMs": 14335,
+      "p90Ms": 14335,
+      "maxMs": 14335
+    },
+    {
+      "runType": "root",
+      "stage": "image",
+      "model": "muse-image-1.0",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 24,
+      "minMs": 10400,
+      "medianMs": 14267,
+      "p90Ms": 24100,
+      "maxMs": 26496
+    },
+    {
+      "runType": "root",
+      "stage": "policy:branches",
+      "model": "muse-spark-1.3",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 13,
+      "minMs": 3390,
+      "medianMs": 5174,
+      "p90Ms": 5677,
+      "maxMs": 7064
+    },
+    {
+      "runType": "root",
+      "stage": "policy:branches",
+      "model": "muse-wonder-1.0",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 12,
+      "minMs": 3546,
+      "medianMs": 9547,
+      "p90Ms": 11554,
+      "maxMs": 11554
+    },
+    {
+      "runType": "root",
+      "stage": "policy:prompt",
+      "model": "muse-spark-1.3",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 16,
+      "minMs": 2046,
+      "medianMs": 4178,
+      "p90Ms": 9970,
+      "maxMs": 17920
+    },
+    {
+      "runType": "root",
+      "stage": "policy:prompt",
+      "model": "muse-wonder-1.0",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 12,
+      "minMs": 4094,
+      "medianMs": 5056,
+      "p90Ms": 5093,
+      "maxMs": 7248
+    },
+    {
+      "runType": "root",
+      "stage": "policy:reuse",
+      "model": "muse-wonder-1.0",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 8,
+      "minMs": 2654,
+      "medianMs": 5296,
+      "p90Ms": 6445,
+      "maxMs": 6445
+    },
+    {
+      "runType": "root",
+      "stage": "propose",
+      "model": "muse-wonder-1.0",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 26,
+      "minMs": 16121,
+      "medianMs": 31253,
+      "p90Ms": 55795,
+      "maxMs": 60392
+    },
+    {
+      "runType": "root",
+      "stage": "review",
+      "model": "muse-wonder-1.0",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 25,
+      "minMs": 6333,
+      "medianMs": 16512,
+      "p90Ms": 25096,
+      "maxMs": 35582
+    },
+    {
+      "runType": "root",
+      "stage": "segment",
+      "model": "sam-3.1",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 28,
+      "minMs": 2075,
+      "medianMs": 4490,
+      "p90Ms": 7024,
+      "maxMs": 7866
+    },
+    {
+      "runType": "root",
+      "stage": "topic-policy",
+      "model": "muse-spark-1.3",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 82,
+      "minMs": 2045,
+      "medianMs": 3835,
+      "p90Ms": 5466,
+      "maxMs": 17917
+    },
+    {
+      "runType": "root",
+      "stage": "topic-policy",
+      "model": "muse-wonder-1.0",
+      "instrumentation": "application-measured-elapsed-span",
+      "outcome": "no-error-recorded",
+      "cacheStatus": "cache-status-unknown",
+      "n": 32,
+      "minMs": 2121,
+      "medianMs": 5020.5,
+      "p90Ms": 7247,
+      "maxMs": 11541
+    }
+  ],
+  "recordedStageErrorRecords": [
+    {
+      "runType": "continuation",
+      "reasonCategory": "branch-agent-stage",
+      "records": 8
+    },
+    {
+      "runType": "continuation",
+      "reasonCategory": "image-stage",
+      "records": 1
+    },
+    {
+      "runType": "continuation",
+      "reasonCategory": "segmentation-stage",
+      "records": 1
+    },
+    {
+      "runType": "root",
+      "reasonCategory": "branch-agent-stage",
+      "records": 1
+    },
+    {
+      "runType": "root",
+      "reasonCategory": "image-stage",
+      "records": 1
+    }
+  ],
+  "limitations": [
+    "A branch status of ok certifies the branch-generation artifact only. It does not establish that image, segmentation, or all later work completed; branchOkWithRecordedStageError is reported separately.",
+    "Durations are application-measured elapsed spans around work, including client and local parsing overhead; they are not provider-reported model latency. Concurrent spans are not summed.",
+    "Cache state is unknown unless an explicit cacheHit/cached marker exists in the saved span; no cache markers were observed in this cohort.",
+    "No persisted event-scene or event-cutout duration field was found, so those task types have status counts only.",
+    "The available captures may omit runs or earlier records; this is a scoped saved-record cohort, not a global reliability estimate."
+  ]
+}
