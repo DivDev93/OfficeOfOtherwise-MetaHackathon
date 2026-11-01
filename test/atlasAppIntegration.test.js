@@ -76,7 +76,8 @@ test('Orbit compact panels expose a selected-world card and accessible controls'
   assert.match(css, /\.has-story \.hero-panel\{transition:width \.24s ease,top \.24s ease,right \.24s ease,bottom \.24s ease,left \.24s ease,height \.24s ease,opacity \.18s ease\}/, 'the panel geometry transition remains active when leaving Orbit');
   assert.match(css, /position:absolute;top:0;left:0;width:min\(320px,max\(270px,calc\(34vw - 12px\)\)\);height:100%;max-width:none;max-height:none/, 'the full-width rail content keeps its layout while the rail clips closed');
   assert.match(css, /transition:opacity \.16s ease \.12s,transform \.2s ease \.08s,visibility 0s linear \.08s/, 'rail content appears after the compact strip fades');
-  assert.match(css, /transition:opacity \.12s ease \.2s,visibility 0s linear \.2s/, 'the compact strip returns after the rail closes');
+  assert.match(css, /transition:top \.24s ease,left \.24s ease,opacity \.12s ease \.2s,visibility 0s linear \.2s/, 'the compact strip returns after the rail closes and its fixed position animates');
+  assert.match(css, /top:max\(112px,calc\(100dvh - 131px\)\);bottom:auto;left:calc\(min\(320px,max\(270px,calc\(34vw - 12px\)\)\) \+ 26px\)/, 'desktop compact controls slide beside the expanded rail without an auto-position jump');
   assert.match(css, /atlas-panels-open:has\(#atlas-scene\[data-atlas-level="orbit"\]\) \.atlas-world-card,[\s\S]*?visibility:hidden;pointer-events:none;transform:translateY\(6px\)/, 'the phone tree sheet clears the selected-world card before it appears');
   assert.match(css, /\.exploration-rail,\.exploration-rail>\*,\.atlas-compact-controls,\.atlas-compact-controls>\*,\.hero-panel,\.hero-panel>\*,\.geography-panel,\.map-panel>#atlas-scene,\.atlas-toolbar\{transition:none!important;animation:none!important\}/, 'reduced-motion users get immediate panel changes');
   assert.match(css, /prefers-reduced-motion:reduce/);

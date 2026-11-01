@@ -161,3 +161,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: add compact, collision-aware phone edge labels for visible Orbit children. | |
 | 2026-11-01 | Atlas round 3: refreshed desktop and phone Orbit captures after checking ancestry and child edge markers. | |
 | 2026-11-01 | Atlas round 3: catch coarse wheel movement at the Orbit resting point in both directions; verified the reverse path locally. | |
+| 2026-11-01 | Atlas round 3: move compact desktop controls smoothly beside the expanded rail without covering its content. | |
