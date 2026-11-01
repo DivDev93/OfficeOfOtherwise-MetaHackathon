@@ -133,20 +133,39 @@ export function worldRadiusForScreenPixels(distance, fovDegrees, viewportHeight,
 }
 
 /** Resolve overlapping projected targets by anchor distance, then depth and stable ID. */
-export function nearestProjectedAnchorHit(hits = []) {
+export function nearestProjectedAnchorHit(hits = [], { excludeUnselectableClusters = false } = {}) {
   let best = null;
   for (const hit of Array.isArray(hits) ? hits : []) {
+    if (excludeUnselectableClusters && hit?.kind === 'cluster' && hit.cluster?.selectable === false) continue;
     const distanceSquared = Number(hit?.distanceSquared);
     const hitDistance = Number(hit?.hitDistance);
+    const priority = Number.isFinite(Number(hit?.priority)) ? Number(hit.priority) : 0;
     if (!Number.isFinite(distanceSquared) || distanceSquared < 0 || !Number.isFinite(hitDistance)) continue;
     const id = String(hit?.id ?? '');
     if (!best || distanceSquared < best.distanceSquared - 1e-6
-      || (Math.abs(distanceSquared - best.distanceSquared) <= 1e-6 && hitDistance < best.hitDistance - 1e-6)
-      || (Math.abs(distanceSquared - best.distanceSquared) <= 1e-6 && Math.abs(hitDistance - best.hitDistance) <= 1e-6 && id < best.id)) {
-      best = { hit, id, distanceSquared, hitDistance };
+      || (Math.abs(distanceSquared - best.distanceSquared) <= 1e-6 && priority < best.priority)
+      || (Math.abs(distanceSquared - best.distanceSquared) <= 1e-6 && priority === best.priority && hitDistance < best.hitDistance - 1e-6)
+      || (Math.abs(distanceSquared - best.distanceSquared) <= 1e-6 && priority === best.priority && Math.abs(hitDistance - best.hitDistance) <= 1e-6 && id < best.id)) {
+      best = { hit, id, distanceSquared, hitDistance, priority };
     }
   }
   return best?.hit || null;
+}
+
+/** Normalize a winning projected world hit for arbitration with other targets. */
+export function projectedWorldTarget(hit) {
+  if (!hit?.world) return null;
+  const distanceSquared = Number(hit.distanceSquared);
+  const hitDistance = Number(hit.hitDistance);
+  if (!Number.isFinite(distanceSquared) || distanceSquared < 0 || !Number.isFinite(hitDistance)) return null;
+  return { world: hit.world, distanceSquared, hitDistance };
+}
+
+/** Whether the current globe surface hides a target behind its near side. */
+export function targetOccludedByEarth(targetDistance, earthDistance, surfaceWeight) {
+  if (!(Number(surfaceWeight) > 0.15)) return false;
+  const target = Number(targetDistance), earth = Number(earthDistance);
+  return Number.isFinite(target) && Number.isFinite(earth) && target > earth + 1e-4;
 }
 
 /** Keep event pins as surface dots, then inflate them into mini-Earths only during Lift. */

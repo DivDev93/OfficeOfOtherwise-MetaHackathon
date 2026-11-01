@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { needsPagedClusterPicker, createLargeClusterPicker, visibleKeyboardNeighborEntries } from '../web/atlas/largeClusterPicker.js';
+import { nearestProjectedAnchorHit, projectedWorldTarget, targetOccludedByEarth } from '../web/atlasLayout.js';
 import { planWorldClusters } from '../web/atlas/clusters.js';
 
 class FakeElement {
@@ -159,6 +160,83 @@ test('large-cluster targets pass pointer gestures through to scene hit testing w
   const stylesheet = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
   assert.match(stylesheet.match(/\.atlas-large-cluster-trigger\{[^}]*\}/s)?.[0] || '', /pointer-events:none/, 'the overlay must let canvas drag and touch events through');
   picker.destroy();
+});
+
+test('overlapping paged-cluster and world targets resolve to the nearer projected anchor', () => {
+  const { worlds, cluster } = largeWorldFixture();
+  const document = fakeDocument();
+  const container = document.createElement('div');
+  container.clientWidth = 375; container.clientHeight = 812;
+  const picker = createLargeClusterPicker({ container, document });
+  picker.setClusters([cluster], worlds);
+  picker.setPosition(cluster.id, { x: 180, y: 240, visible: true });
+
+  // Synthetic projected location for a visible world marker overlaps the 58px
+  // cluster square. It remains a 44px-radius world hit, represented by the
+  // scene's projected-anchor distance record.
+  const world = worlds.find(item => item.id === 'saved::child-03');
+  const projectedWorld = { id: world.id, x: 200, y: 240 };
+  const rawWorldHit = nearestProjectedAnchorHit([{ id: world.id, world, distanceSquared: 0, hitDistance: 1 }]);
+  assert.equal(rawWorldHit.world, world, 'nearestProjectedAnchorHit returns the winning hit record directly');
+  assert.equal(rawWorldHit.hit, undefined, 'the result is not wrapped in a `.hit` field');
+  const worldAtMarker = projectedWorldTarget(rawWorldHit);
+  assert.deepEqual(worldAtMarker, { world, distanceSquared: 0, hitDistance: 1 });
+  const clusterAtWorld = picker.hitTestCandidate(projectedWorld.x, projectedWorld.y);
+  assert.equal(clusterAtWorld.cluster.id, cluster.id);
+  assert.equal(clusterAtWorld.distanceSquared, 20 ** 2);
+  const clusterCandidate = { ...clusterAtWorld, id: `3:cluster:${cluster.id}`, kind: 'cluster', priority: 3, hitDistance: 2 };
+  const worldCandidate = { ...worldAtMarker, id: `0:world:${world.id}`, kind: 'world', priority: 0 };
+  assert.equal(nearestProjectedAnchorHit([clusterCandidate, worldCandidate]).kind, 'world',
+    'the visible world wins when the pointer is closer to its projected anchor');
+
+  const worldHitAtClusterCenter = { ...worldCandidate, distanceSquared: 20 ** 2 };
+  const clusterAtCenter = picker.hitTestCandidate(180, 240);
+  const clusterAtCenterCandidate = { ...clusterAtCenter, id: `3:cluster:${cluster.id}`, kind: 'cluster', priority: 3, hitDistance: 2 };
+  assert.equal(nearestProjectedAnchorHit([clusterAtCenterCandidate, worldHitAtClusterCenter]).kind, 'cluster',
+    'the cluster remains clickable when its own projected anchor is nearer');
+  assert.equal(nearestProjectedAnchorHit([clusterAtCenterCandidate, { ...worldHitAtClusterCenter, distanceSquared: clusterAtCenter.distanceSquared }]).kind, 'world',
+    'an exact projected tie follows the explicit world-first arbitration policy');
+  assert.equal(nearestProjectedAnchorHit([clusterAtCenterCandidate]).kind, 'cluster',
+    'the cluster remains pointer reachable outside the 44px world target');
+
+  const question = { id: '1:question:q1', kind: 'question', priority: 1, distanceSquared: 4, hitDistance: 1 };
+  const presentEarth = { id: '2:present-earth', kind: 'present', priority: 2, distanceSquared: 25, hitDistance: 1 };
+  const ordinaryCluster = { id: '3:cluster:small', kind: 'cluster', priority: 3, distanceSquared: 100, hitDistance: 1 };
+  assert.equal(nearestProjectedAnchorHit([clusterCandidate, question, presentEarth, ordinaryCluster]), question,
+    'a closer question chip wins inside the paged square');
+  assert.equal(nearestProjectedAnchorHit([clusterAtCenterCandidate, { ...question, distanceSquared: 4 ** 2 }]), clusterAtCenterCandidate,
+    'a closer paged marker still wins when the chip is farther away');
+  assert.equal(nearestProjectedAnchorHit([clusterCandidate, ordinaryCluster]).id, ordinaryCluster.id,
+    'a closer nonpaged cluster remains selectable inside the paged square');
+
+  assert.equal(targetOccludedByEarth(8, 4, 1), true, 'a far-side Surface cluster behind the globe is culled');
+  assert.equal(targetOccludedByEarth(3, 4, 1), false, 'a front-side Surface cluster remains visible');
+  assert.equal(targetOccludedByEarth(8, 4, 0), false, 'the globe does not occlude Orbit/Atlas targets when the surface is absent');
+  picker.destroy();
+});
+
+test('generation-pending clusters remain hover targets but never win activation arbitration', () => {
+  const pending = {
+    id: '3:cluster:generation-pending',
+    kind: 'cluster',
+    cluster: { id: 'generation-pending', kind: 'generation-pending', selectable: false },
+    distanceSquared: 0,
+    hitDistance: 1,
+  };
+  const pageTarget = {
+    id: '3:cluster:orbit-overflow',
+    kind: 'cluster',
+    cluster: { id: 'orbit-overflow', kind: 'orbit-overflow', selectable: true },
+    distanceSquared: 16,
+    hitDistance: 2,
+  };
+
+  assert.equal(nearestProjectedAnchorHit([pageTarget, pending]), pending,
+    'hover arbitration can keep the nearer pending cloud for fan expansion');
+  assert.equal(nearestProjectedAnchorHit([pageTarget, pending], { excludeUnselectableClusters: true }), pageTarget,
+    'activation arbitration ignores pending clusters and keeps the selectable target');
+  assert.equal(nearestProjectedAnchorHit([pending], { excludeUnselectableClusters: true }), null,
+    'a pending-only hit cannot activate anything');
 });
 
 test('keyboard graph candidates omit hidden clustered worlds while retaining visible children', () => {

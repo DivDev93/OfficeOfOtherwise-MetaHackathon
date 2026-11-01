@@ -23,7 +23,7 @@ import {
   pinScaleAtPresentation, pinAnchorRadiusAtPresentation,
   altitudeForZoom, atlasPresentationState, atlasZoomState, clampAtlasLevel, createWorldRegistry,
   layoutAtlasWorlds, layoutOrbitNeighborhood, measuredFps, surfaceFacingOrientation,
-  worldRadiusForScreenPixels, nearestProjectedAnchorHit, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds, slerpUnitVector,
+  worldRadiusForScreenPixels, nearestProjectedAnchorHit, projectedWorldTarget, targetOccludedByEarth, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds, slerpUnitVector,
   cappedTextureSize, allowEarthBodySelection, fitCenteredCameraDistance,
   appendContinuousFrame, stableWorldId, localQuaternionForWorldFacing, isSurfaceNormalVisible,
 } from '../atlasLayout.js';
@@ -1196,11 +1196,12 @@ export function createAtlasScene(container, {
     for (const sprite of clusterSprites.values()) {
       const cluster = sprite.userData.cluster;
       if (!needsPagedClusterPicker(cluster)) continue;
-      const point = projectPoint(sprite.getWorldPosition(new THREE.Vector3()));
+      const worldPoint = sprite.getWorldPosition(new THREE.Vector3());
+      const point = projectPoint(worldPoint);
       largeClusterPicker?.setPosition(cluster.id, {
         x: point.x - containerBounds.left,
         y: point.y - containerBounds.top,
-        visible: sprite.material.opacity > 0.04 && point.visible,
+        visible: sprite.material.opacity > 0.04 && point.visible && targetVisiblePastEarth(worldPoint, state),
       });
     }
     const labelEarthCenter = earthMesh.getWorldPosition(new THREE.Vector3());
@@ -1797,7 +1798,23 @@ export function createAtlasScene(container, {
     return nearestDirectionalNeighbor({ id: origin.id, x: originAnchor.projectedX ?? 0, y: originAnchor.projectedY ?? 0 }, points, key)?.entry || null;
   }
 
-  function hitWorld(event) {
+  function projectedPointDepth(point) {
+    const projected = point.clone().project(camera);
+    pointer.set(projected.x, projected.y);
+    raycaster.setFromCamera(pointer, camera);
+    return {
+      distance: point.distanceTo(raycaster.ray.origin),
+      earthDistance: raycaster.intersectObject(earthMesh, false)[0]?.distance ?? Number.POSITIVE_INFINITY,
+    };
+  }
+
+  function targetVisiblePastEarth(point, state = atlasPresentationState(zoom, motionReduced).state) {
+    if (state.surface <= 0.15) return true;
+    const depth = projectedPointDepth(point);
+    return !targetOccludedByEarth(depth.distance, depth.earthDistance, state.surface);
+  }
+
+  function hitWorldTarget(event) {
     const bounds = eventPoint(event);
     scene.updateMatrixWorld(true); camera.updateMatrixWorld(true);
     const state = atlasPresentationState(zoom, motionReduced).state;
@@ -1827,24 +1844,43 @@ export function createAtlasScene(container, {
       hits.push({ id, distanceSquared: dx * dx + dy * dy, hitDistance, world: byId.get(id) || null });
     }
     const best = nearestProjectedAnchorHit(hits);
-    if (best?.world) return best.world;
-    if (allowEarthBodySelection(zoom) && currentEarthHit && currentId) return byId.get(currentId) || null;
+    const bestWorld = projectedWorldTarget(best);
+    if (bestWorld) return { ...bestWorld, id: `0:world:${stableWorldId(bestWorld.world)}`, kind: 'world', priority: 0 };
+    if (allowEarthBodySelection(zoom) && currentEarthHit && currentId) {
+      const projected = earthMesh.getWorldPosition(new THREE.Vector3()).project(camera);
+      const anchorX = bounds.left + (projected.x + 1) * 0.5 * bounds.width;
+      const anchorY = bounds.top + (1 - projected.y) * 0.5 * bounds.height;
+      const dx = event.clientX - anchorX, dy = event.clientY - anchorY;
+      return { world: byId.get(currentId) || null, distanceSquared: dx * dx + dy * dy, hitDistance: currentEarthHit.distance,
+        id: `0:world:${currentId}`, kind: 'world', priority: 0 };
+    }
     return null;
+  }
+  function hitWorld(event) {
+    return hitWorldTarget(event)?.world || null;
   }
 
   function virtualPresentEarth() {
     return { ...PRESENT_DAY_REFERENCE };
   }
   function hitPresentEarth(event) {
-    if (!p2Renderer.presentEarth.visible || atlasPresentationState(zoom, motionReduced).state.atlas <= 0.15) return false;
-    eventPoint(event); scene.updateMatrixWorld(true); camera.updateMatrixWorld(true);
+    if (!p2Renderer.presentEarth.visible || atlasPresentationState(zoom, motionReduced).state.atlas <= 0.15) return null;
+    scene.updateMatrixWorld(true); camera.updateMatrixWorld(true);
     const center = p2Renderer.presentEarth.getWorldPosition(new THREE.Vector3());
     const cameraSpace = center.clone().applyMatrix4(camera.matrixWorldInverse);
     const viewDepth = -cameraSpace.z;
-    if (viewDepth <= 0) return false;
+    if (viewDepth <= 0 || !targetVisiblePastEarth(center)) return null;
+    eventPoint(event);
     const bounds = renderer.domElement.getBoundingClientRect();
     const radius = Math.max(0.36, worldRadiusForScreenPixels(viewDepth, camera.fov, Math.max(1, bounds.height), 44));
-    return Boolean(raycaster.ray.intersectSphere(new THREE.Sphere(center, radius), new THREE.Vector3()));
+    const point = raycaster.ray.intersectSphere(new THREE.Sphere(center, radius), new THREE.Vector3());
+    if (!point) return null;
+    const projected = center.clone().project(camera);
+    const x = bounds.left + (projected.x + 1) * 0.5 * bounds.width;
+    const y = bounds.top + (1 - projected.y) * 0.5 * bounds.height;
+    const dx = event.clientX - x, dy = event.clientY - y;
+    return { id: '2:present-earth', kind: 'present', priority: 2, world: virtualPresentEarth(),
+      distanceSquared: dx * dx + dy * dy, hitDistance: point.distanceTo(raycaster.ray.origin) };
   }
   function hitQuestionChip(event) {
     if (atlasPresentationState(zoom, motionReduced).state.atlas <= 0.15) return null;
@@ -1852,11 +1888,18 @@ export function createAtlasScene(container, {
     let best = null, bestDistance = 22;
     for (const { chip, sprite } of p2Renderer.getQuestionChipTargets()) {
       if (!chip || !sprite.visible) continue;
+      const point = sprite.getWorldPosition(new THREE.Vector3());
+      if (!targetVisiblePastEarth(point)) continue;
       const screen = sprite.getWorldPosition(new THREE.Vector3()).project(camera);
       const x = bounds.left + (screen.x + 1) * 0.5 * bounds.width;
       const y = bounds.top + (1 - screen.y) * 0.5 * bounds.height;
       const distance = Math.hypot(event.clientX - x, event.clientY - y);
-      if (distance <= bestDistance) { bestDistance = distance; best = { chip, x, y }; }
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        const depth = projectedPointDepth(point);
+        best = { id: `1:question:${chip.questionId}`, kind: 'question', priority: 1, chip, x, y,
+          distanceSquared: distance * distance, hitDistance: depth.distance };
+      }
     }
     return best;
   }
@@ -1882,20 +1925,53 @@ export function createAtlasScene(container, {
     return true;
   }
 
-  function hitPagedClusterTarget(event) {
+  function hitPagedClusterCandidate(event) {
     const containerBounds = container.getBoundingClientRect();
-    return largeClusterPicker?.hitTest(event.clientX - containerBounds.left, event.clientY - containerBounds.top) || null;
+    const hit = largeClusterPicker?.hitTestCandidate(event.clientX - containerBounds.left, event.clientY - containerBounds.top) || null;
+    if (!hit?.cluster) return null;
+    const sprite = [...clusterSprites.values()].find(item => item.userData.cluster?.id === hit.cluster.id);
+    if (!sprite || sprite.material.opacity <= 0.04) return null;
+    scene.updateMatrixWorld(true); camera.updateMatrixWorld(true);
+    const point = sprite.getWorldPosition(new THREE.Vector3());
+    if (!targetVisiblePastEarth(point)) return null;
+    const depth = projectedPointDepth(point);
+    return { ...hit, id: `3:cluster:${hit.cluster.id}`, kind: 'cluster', priority: 3, hitDistance: depth.distance };
+  }
+
+  function hitClusterTarget(event, { excludePaged = false } = {}) {
+    const bounds = eventPoint(event);
+    const active = [...clusterSprites.values()].filter(sprite => sprite.visible && sprite.material.opacity > 0.05);
+    const earthDistance = raycaster.intersectObject(earthMesh, false)[0]?.distance ?? Number.POSITIVE_INFINITY;
+    const state = atlasPresentationState(zoom, motionReduced).state;
+    const boundsHits = raycaster.intersectObjects(active, false);
+    const hits = [];
+    for (const intersection of boundsHits) {
+      const cluster = intersection.object.userData.cluster;
+      if (!cluster || (excludePaged && needsPagedClusterPicker(cluster))) continue;
+      if (state.surface > 0.15 && intersection.distance >= earthDistance - 1e-4) continue;
+      const center = intersection.object.getWorldPosition(new THREE.Vector3()).project(camera);
+      const screenX = bounds.left + (center.x + 1) * 0.5 * bounds.width;
+      const screenY = bounds.top + (1 - center.y) * 0.5 * bounds.height;
+      const dx = event.clientX - screenX, dy = event.clientY - screenY;
+      hits.push({ id: `3:cluster:${cluster.id}`, cluster, kind: 'cluster', priority: 3,
+        distanceSquared: dx * dx + dy * dy, hitDistance: intersection.distance });
+    }
+    return nearestProjectedAnchorHit(hits);
   }
 
   function hitCluster(event) {
-    const overlayHit = hitPagedClusterTarget(event);
-    if (overlayHit) return overlayHit;
-    const bounds = eventPoint(event);
-    pointer.set(bounds.x, bounds.y);
-    raycaster.setFromCamera(pointer, camera);
-    const active = [...clusterSprites.values()].filter(sprite => sprite.visible && sprite.material.opacity > 0.05);
-    const hit = raycaster.intersectObjects(active, false)[0]?.object;
-    return hit?.userData.cluster || null;
+    return hitClusterTarget(event)?.cluster || null;
+  }
+
+  function nearestPagedPointerTarget(event, pagedClusterHit, { activation = false } = {}) {
+    const candidates = [
+      pagedClusterHit,
+      hitWorldTarget(event),
+      hitQuestionChip(event),
+      hitPresentEarth(event),
+      hitClusterTarget(event, { excludePaged: true }),
+    ].filter(Boolean);
+    return nearestProjectedAnchorHit(candidates, { excludeUnselectableClusters: activation });
   }
 
   function fanCenterForCluster(cluster) {
@@ -1967,11 +2043,21 @@ export function createAtlasScene(container, {
       if (event.pointerType === 'touch') event.preventDefault?.();
       return;
     }
-    const pagedCluster = hitPagedClusterTarget(event);
-    const reference = pagedCluster ? null : hitPresentEarth(event);
-    const chipHit = reference || pagedCluster ? null : hitQuestionChip(event);
-    const cluster = pagedCluster || (reference || chipHit ? null : hitCluster(event));
-    const world = reference || chipHit || cluster ? null : hitWorld(event), id = world ? stableWorldId(world) : null;
+    const pagedClusterHit = hitPagedClusterCandidate(event);
+    let reference = null, chipHit = null, cluster = null, world = null;
+    if (pagedClusterHit) {
+      const target = nearestPagedPointerTarget(event, pagedClusterHit);
+      if (target?.kind === 'present') reference = target;
+      else if (target?.kind === 'question') chipHit = target;
+      else if (target?.kind === 'cluster') cluster = target.cluster;
+      else if (target?.kind === 'world') world = target.world;
+    } else {
+      reference = hitPresentEarth(event);
+      chipHit = reference ? null : hitQuestionChip(event);
+      cluster = reference || chipHit ? null : hitCluster(event);
+      world = reference || chipHit || cluster ? null : hitWorld(event);
+    }
+    const id = world ? stableWorldId(world) : null;
     if (cluster?.id) {
       if (needsPagedClusterPicker(cluster)) largeClusterPicker?.preview(cluster.id);
       else largeClusterPicker?.preview(null);
@@ -2017,10 +2103,29 @@ export function createAtlasScene(container, {
     const moved = Math.hypot(event.clientX - drag.x, event.clientY - drag.y);
     drag = null;
     if (moved < 5) {
-      const pagedCluster = hitPagedClusterTarget(event);
-      if (pagedCluster) {
-        largeClusterPicker?.open(pagedCluster.id, { focus: true });
-        return;
+      const pagedClusterHit = hitPagedClusterCandidate(event);
+      if (pagedClusterHit) {
+        const target = nearestPagedPointerTarget(event, pagedClusterHit, { activation: true });
+        if (target?.kind === 'cluster') {
+          if (needsPagedClusterPicker(target.cluster)) largeClusterPicker?.open(target.cluster.id, { focus: true });
+          else {
+            openClusterFan(target.cluster);
+            setZoom(target.cluster.level === 'surface' ? Math.max(zoom, 0.3) : Math.max(zoom, 0.68));
+          }
+          return;
+        }
+        if (target?.kind === 'world' && target.world) {
+          explicitEnter(target.world, projectedAnchor(stableWorldId(target.world), 'pointer', event.clientX, event.clientY));
+          return;
+        }
+        if (target?.kind === 'question') {
+          expandQuestionChip(target.chip, questionAnchor(questionForChip(target.chip), 'pointer', event.clientX, event.clientY, target.x, target.y));
+          return;
+        }
+        if (target?.kind === 'present' && target.world) {
+          onEnter(target.world, { source: 'pointer', worldId: 'present-day-earth', clientX: event.clientX, clientY: event.clientY });
+          return;
+        }
       }
       const chipHit = hitQuestionChip(event);
       if (chipHit) {

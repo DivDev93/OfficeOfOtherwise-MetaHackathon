@@ -289,7 +289,7 @@ export function createLargeClusterPicker({
     }
   }
 
-  function hitTest(x, y) {
+  function hitTestCandidate(x, y) {
     const pointX = Number(x), pointY = Number(y);
     if (!Number.isFinite(pointX) || !Number.isFinite(pointY)) return null;
     let best = null;
@@ -303,11 +303,15 @@ export function createLargeClusterPicker({
       const dx = pointX - (left + size / 2), dy = pointY - (top + size / 2);
       const distance = dx * dx + dy * dy;
       if (distance < bestDistance) {
-        best = clusters.get(id) || null;
+        best = { cluster: clusters.get(id) || null, distanceSquared: distance, centerX: left + size / 2, centerY: top + size / 2 };
         bestDistance = distance;
       }
     }
     return best;
+  }
+
+  function hitTest(x, y) {
+    return hitTestCandidate(x, y)?.cluster || null;
   }
 
   function onDocumentPointerDown(event) {
@@ -350,6 +354,7 @@ export function createLargeClusterPicker({
     close,
     preview,
     hitTest,
+    hitTestCandidate,
     isOpen,
     getTrigger: id => triggers.get(String(id)) || null,
     destroy() {
