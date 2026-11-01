@@ -83,7 +83,7 @@ test('direct-child edge markers are opt-in and still obey the Unfolded inclusion
   assert.equal(candidate.text, '→ 2003 · River Canopy');
 });
 
-test('crowded direct-child labels use collision-free edge slots and omit impossible density', () => {
+test('crowded direct-child labels use compact collision-free edge slots', () => {
   const bounds = { left: 10, top: 8, right: 365, bottom: 220 };
   const centerControls = { x: 187.5, y: 108, width: 355, height: 112 };
   const children = ['a', 'b', 'c'].map(id => ({
@@ -93,14 +93,65 @@ test('crowded direct-child labels use collision-free edge slots and omit impossi
   }));
   const placed = placeScreenLabels(children, bounds, [], [centerControls]);
 
-  assert.equal(placed.length, 2, 'only the two collision-free edge rows outside the reserved controls fit');
+  assert.equal(placed.length, 3, 'each direct child fits in a compact edge lane outside the reserved controls');
   assert.ok(placed.every(label => label.edgeFallbackPlacement));
-  assert.ok(placed.every(label => label.x === 122 || label.x === 253), 'fallbacks sit in left/right edge lanes');
+  assert.equal(placed.find(label => label.id === 'a').width, 220, 'the first available fallback retains its full-width title');
+  assert.equal(placed.find(label => label.id === 'b').width, 220, 'later rows keep full-width titles while any full slot remains');
+  assert.equal(placed.find(label => label.id === 'c').width, 119, 'a half-width sidecar is used only after no full-width slot remains');
   assert.ok(placed.every(label => label.y < centerControls.y - centerControls.height / 2
     || label.y > centerControls.y + centerControls.height / 2));
   assert.ok(placed.every(label => label.text.length <= 32 && label.fullText));
   for (let i = 0; i < placed.length; i++) {
     assert.ok(![centerControls, ...placed.filter((_, j) => i !== j)].some(other =>
+      Math.abs(other.x - placed[i].x) < (other.width + placed[i].width) / 2 + 3
+      && Math.abs(other.y - placed[i].y) < (other.height + placed[i].height) / 2 + 3));
+  }
+});
+
+test('42 admitted direct children fit when mobile edge lanes have no node blockers', () => {
+  const bounds = { left: 10, top: 8, right: 365, bottom: 802 };
+  const headerAndToolbar = { x: 187.5, y: 85, width: 355, height: 154 };
+  const bottomControls = { x: 187.5, y: 780, width: 355, height: 44 };
+  const children = Array.from({ length:42 }, (_, index) => ({
+    id: `child-${index}`, text: `→ ${1980 + index} · Canopy Child ${index}`,
+    fullText: `Canopy Child ${index}`, x:187.5, y:405, width:220, height:18,
+    priority:85, kind:'world', edgeFallback:true,
+  }));
+  const placed = placeScreenLabels(children, bounds, [], [headerAndToolbar, bottomControls]);
+
+  assert.equal(placed.length, children.length, 'none of the admitted direct children loses its label');
+  assert.deepEqual(new Set(placed.map(label => label.id)), new Set(children.map(child => child.id)));
+  assert.ok(placed.every(label => label.fullText), 'ellipsized labels retain the complete title for assistive technology and title hover');
+  for (let i = 0; i < placed.length; i++) {
+    assert.ok(placed[i].x - placed[i].width / 2 >= bounds.left);
+    assert.ok(placed[i].x + placed[i].width / 2 <= bounds.right);
+    assert.ok(placed[i].y - placed[i].height / 2 >= bounds.top);
+    assert.ok(placed[i].y + placed[i].height / 2 <= bounds.bottom);
+    assert.ok(![headerAndToolbar, bottomControls, ...placed.filter((_, j) => j !== i)].some(other =>
+      Math.abs(other.x - placed[i].x) < (other.width + placed[i].width) / 2 + 3
+      && Math.abs(other.y - placed[i].y) < (other.height + placed[i].height) / 2 + 3));
+  }
+});
+
+test('mobile edge labels route around projected node hit areas when enough slots remain', () => {
+  const bounds = { left: 10, top: 8, right: 365, bottom: 802 };
+  const headerAndToolbar = { x: 187.5, y: 85, width: 355, height: 154 };
+  const bottomControls = { x: 187.5, y: 780, width: 355, height: 44 };
+  const nodeRects = [
+    { x:28, y:220, width:44, height:44 },
+    { x:347, y:470, width:44, height:44 },
+    { x:30, y:640, width:44, height:44 },
+  ];
+  const children = Array.from({ length:32 }, (_, index) => ({
+    id: `blocked-child-${index}`, text: `→ ${1980 + index} · Canopy Child ${index}`,
+    fullText: `Canopy Child ${index}`, x:187.5, y:405, width:220, height:18,
+    priority:85, kind:'world', edgeFallback:true,
+  }));
+  const placed = placeScreenLabels(children, bounds, nodeRects, [headerAndToolbar, bottomControls]);
+
+  assert.equal(placed.length, children.length, 'labels still fit despite representative left/right projected node blockers');
+  for (let i = 0; i < placed.length; i++) {
+    assert.ok(![...nodeRects, headerAndToolbar, bottomControls, ...placed.filter((_, j) => j !== i)].some(other =>
       Math.abs(other.x - placed[i].x) < (other.width + placed[i].width) / 2 + 3
       && Math.abs(other.y - placed[i].y) < (other.height + placed[i].height) / 2 + 3));
   }

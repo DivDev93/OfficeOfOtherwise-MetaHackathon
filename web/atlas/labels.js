@@ -58,37 +58,39 @@ export function placeScreenLabels(candidates, bounds, nodeRects = [], reservedRe
     if (chosen) placed.push(chosen);
     else if (candidate.edgeFallback) fallback.push({ candidate, width, height });
   }
-  // Direct children remain discoverable in crowded mobile Orbit views when a
-  // collision-free label can fit in a viewport-edge lane.
+  // Direct children get the original full-width edge label first. A compact
+  // sidecar uses otherwise-unused row space when no full-width slot remains.
+  // Slots remain finite and must still clear projected node hit areas.
   const laneWidth = safe.right - safe.left;
+  const wideLaneWidth = Math.min(laneWidth - 4, Math.max(28, ...fallback.map(({ width }) => width)));
+  const compactLaneWidth = Math.min(wideLaneWidth, Math.max(28, laneWidth - wideLaneWidth - 16));
   for (const { candidate, width, height } of fallback) {
-    const leftX = safe.left + width / 2 + 2;
-    const rightX = safe.right - width / 2 - 2;
+    const fullWidth = Math.min(width, wideLaneWidth);
     const preferredSide = candidate.x >= (safe.left + safe.right) / 2 ? 'right' : 'left';
     const sides = preferredSide === 'right' ? ['right', 'left'] : ['left', 'right'];
     const firstY = safe.top + height / 2 + 2;
     const lastY = safe.bottom - height / 2 - 2;
-    const rowStep = height + 8;
-    let chosen = null;
-    for (let y = firstY; y <= lastY && !chosen; y += rowStep) {
-      for (const side of sides) {
-        const arrowed = /^[←→↑↖↗↙↘]\s/.test(candidate.text)
-          ? candidate.text
-          : `${side === 'left' ? '→' : '←'} ${shortEdgeTitle(candidate.text, 26)}`;
-        const rect = {
-          ...candidate,
-          text: shortEdgeTitle(arrowed, 32),
-          x: side === 'left' ? leftX : rightX,
-          y,
-          width: Math.min(width, laneWidth),
-          height,
-          edgeFallbackPlacement: true,
-        };
-        if ([...nodeRects, ...reservedRects, ...placed].some(other => overlaps(rect, other, 3))) continue;
-        chosen = rect;
-        break;
+    const rowStep = height + 6;
+    const findSlot = (slotWidth, compact) => {
+      for (let y = firstY; y <= lastY; y += rowStep) {
+        for (const side of sides) {
+          const x = side === 'left' ? safe.left + slotWidth / 2 + 2 : safe.right - slotWidth / 2 - 2;
+          const arrowed = /^[←→↑↖↗↙↘]\s/.test(candidate.text)
+            ? candidate.text
+            : `${side === 'left' ? '→' : '←'} ${candidate.text}`;
+          const maxChars = compact ? Math.max(8, Math.floor((slotWidth - 8) / 7.5)) : 32;
+          const rect = {
+            ...candidate,
+            text: shortEdgeTitle(arrowed, maxChars), x, y,
+            width: slotWidth, height, edgeFallbackPlacement:true,
+            ...(compact ? { edgeFallbackCompact:true } : {}),
+          };
+          if (![ ...nodeRects, ...reservedRects, ...placed ].some(other => overlaps(rect, other, 3))) return rect;
+        }
       }
-    }
+      return null;
+    };
+    const chosen = findSlot(fullWidth, false) || findSlot(compactLaneWidth, true);
     if (chosen) placed.push(chosen);
   }
   return placed;
