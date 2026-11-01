@@ -88,6 +88,9 @@ function rememberAtlasQuestionRoot(id) {
   while (atlasQuestionRootIds.size > ATLAS_QUESTION_ROOT_LIMIT) atlasQuestionRootIds.delete(atlasQuestionRootIds.values().next().value);
   try { sessionStorage.setItem(ATLAS_QUESTION_ROOT_KEY, JSON.stringify([...atlasQuestionRootIds])); } catch {}
 }
+function activeAtlasRootId(manifest) {
+  return manifest?.questionAttachment?.questionId || manifest?.continuation?.rootRunId || manifest?.id || null;
+}
 let surfaceGeography, surfaceGeographyRaw, surfaceMode = 'scenario', surfaceUnavailable = false;
 const geographyPreviewControls = createGeographyPreviewStore();
 let surfacePreviewKey = geographyPreviewKey('', '');
@@ -370,9 +373,7 @@ function renderStarMap(rootManifest) {
     ? starNodeId(atlasRunId, selectedBranchId)
     : atlasNodes.find(node => node.runId === atlasRunId && node.branchId === branchState.heroId)?.id
       || atlasNodes.find(node => node.role !== 'root-question' && node.runId === rootManifest?.id)?.id || null;
-  const activeQuestionId = currentManifest?.questionAttachment?.questionId
-    || currentManifest?.continuation?.rootRunId || rootManifest?.questionAttachment?.questionId
-    || rootManifest?.continuation?.rootRunId || rootManifest?.id || null;
+  const activeQuestionId = activeAtlasRootId(currentManifest) || activeAtlasRootId(rootManifest);
   const activeLineage = new Set(atlasNodes.find(node => node.id === currentWorldId)?.lineageIds || []);
   for (const node of atlasNodes) {
     node.otherTree = !!node.questionId && node.questionId !== activeQuestionId && !activeLineage.has(node.id) && !node.isExpansionPlaceholder;
@@ -442,7 +443,7 @@ function renderStarMap(rootManifest) {
         const questionId = manifest.questionAttachment?.questionId || manifest.continuation?.rootRunId || manifest.id;
         rememberAtlasQuestionRoot(questionId);
         if (currentRunId && !preserveGraphUntilReady) {
-          const activeRootId = currentManifest?.continuation?.rootRunId || currentManifest?.questionAttachment?.questionId || currentManifest?.id;
+          const activeRootId = activeAtlasRootId(currentManifest);
           const activeRoot = knownRunManifests.get(activeRootId) || currentManifest;
           renderStarMap(activeRoot);
           renderExplorationTree(true);

@@ -102,6 +102,8 @@ test('small phones keep Surface usable, zoom to Orbit on first zoom-out, and gat
   assert.match(app, /if \(signature !== atlasVisibleGraphSignature\)/, 'unchanged renders do not reset scene navigation or hover');
   assert.match(app, /\$\('atlas-other-questions'\)\?\.addEventListener\('click'/);
   assert.match(css, /@media\(max-width:430px\)[\s\S]*\.atlas-other-questions-toggle\{position:absolute/);
+  assert.match(css, /\.map-panel\{[^}]*pointer-events:none/);
+  assert.match(css, /\.atlas-other-questions-toggle\{[^}]*pointer-events:auto/, 'the toggle opts back into hit testing inside the noninteractive map panel');
   assert.match(css, /\.map-panel>#atlas-scene\{inset:0;width:100%;\}/, 'the active Atlas remains full width on phones');
 });
 
@@ -109,4 +111,15 @@ test('Atlas graph signatures are recorded only after a controller receives the g
   assert.match(app, /function sendAtlasGraph\(graph\) \{\s*if \(!atlasController\) return false;\s*const sourceGraphSignature = JSON\.stringify\(graph\);\s*if \(sourceGraphSignature === atlasSourceGraphSignature\) return false;\s*atlasController\.setGraph\(graph\);\s*atlasSourceGraphSignature = sourceGraphSignature;/);
   assert.match(app, /const graph = \{ mapNodes, questions:\[\.\.\.questions\.values\(\)\][\s\S]*?\};\s*sendAtlasGraph\(graph\);/);
   assert.match(app, /renderStarMap\(continuation\.rootRunId \? knownRunManifests\.get\(continuation\.rootRunId\) \|\| currentManifest : currentManifest\);/);
+});
+
+test('background question hydration keeps the active question root stable', () => {
+  const helper = app.match(/function activeAtlasRootId\(manifest\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(helper, 'active question root resolver exists');
+  const activeRootId = new Function(`${helper}; return activeAtlasRootId;`)();
+  assert.equal(activeRootId({ questionAttachment:{ questionId:'attached-question' }, continuation:{ rootRunId:'continuation-root' }, id:'manifest' }), 'attached-question');
+  assert.equal(activeRootId({ continuation:{ rootRunId:'continuation-root' }, id:'manifest' }), 'continuation-root');
+  assert.match(app, /const activeQuestionId = activeAtlasRootId\(currentManifest\) \|\| activeAtlasRootId\(rootManifest\);/);
+  assert.match(app, /const activeRootId = activeAtlasRootId\(currentManifest\);\s*const activeRoot = knownRunManifests\.get\(activeRootId\) \|\| currentManifest;/, 'hydration refreshes the same question root used by the Atlas toggle');
+  assert.match(app, /if \(atlasActiveQuestionId && nextActiveQuestionId !== atlasActiveQuestionId\) atlasOtherQuestionsOpen = false;/, 'the toggle closes only when the selected question actually changes');
 });
