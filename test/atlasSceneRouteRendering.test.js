@@ -7,6 +7,21 @@ const scene = readFileSync(new URL('../web/atlas/scene.js', import.meta.url), 'u
 const p2Renderer = readFileSync(new URL('../web/atlas/p2Renderer.js', import.meta.url), 'utf8');
 const style = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
 
+test('reduced-motion axis changes swap immediately without blanking the canvas', () => {
+  const axisModeSwitch = scene.match(/function setAxisMode\(mode\) \{([\s\S]*?)\n  \}\n  function getAxisMode/)?.[1];
+  assert.ok(axisModeSwitch, 'the scene exposes its axis-mode switch');
+  const reducedMotionBranch = axisModeSwitch.match(/if \(motionReduced\) \{([\s\S]*?)\n    \}/)?.[1];
+  assert.ok(reducedMotionBranch, 'reduced motion has a dedicated axis-mode path');
+  assert.match(reducedMotionBranch, /axisTransition = null; axisMode = mode; axisFadeOpacity = 1; updateCanvasOpacity\(\)/,
+    'the reduced-motion path commits the new layout while keeping the canvas visible');
+  assert.match(reducedMotionBranch, /refreshAtlasTimeline\(\); applyZoom\(zoom, false\)/,
+    'the new axis layout is applied synchronously');
+  assert.doesNotMatch(reducedMotionBranch, /requestAnimationFrame|axisFadeOpacity = 0/,
+    'the reduced-motion path schedules no fade frames and never blanks the canvas');
+  assert.match(axisModeSwitch, /axisTransition = \{ from, to: atlasTimeline, fromTimeline, startedAt \};[\s\S]*applyZoom\(zoom, false, startedAt\)/,
+    'normal-motion axis changes retain their animated transition');
+});
+
 test('Atlas renders exact routed corners and preserves them through axis changes', () => {
   assert.match(scene, /transformAtlasEdgeShape/);
   assert.match(scene, /const directMorphActive = edgeState\.lift >= 0\.999;[\s\S]*if \(directMorphActive\) \{[\s\S]*routeFrom = worldPosition\(parent, atlasEdgeState,[\s\S]*orbitFrom = worldPosition\(parent, orbitEdgeState,/,

@@ -2083,12 +2083,8 @@ export function createAtlasScene(container, {
     if (!AXIS_MODES.includes(mode)) return false;
     if (mode === axisMode && !axisTransition) return true;
     if (motionReduced) {
-      axisTransition = null; axisMode = mode; axisFadeOpacity = 0; updateCanvasOpacity();
+      axisTransition = null; axisMode = mode; axisFadeOpacity = 1; updateCanvasOpacity();
       refreshAtlasTimeline(); applyZoom(zoom, false);
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        if (disposed) return;
-        axisFadeOpacity = 1; updateCanvasOpacity();
-      }));
       return true;
     }
     const startedAt = performance.now();
