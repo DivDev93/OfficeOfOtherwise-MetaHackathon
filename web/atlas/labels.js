@@ -59,19 +59,33 @@ export function placeScreenLabels(candidates, bounds, nodeRects = [], reservedRe
   return placed;
 }
 
-export function createWorldLabelCandidates(entries, { currentId, focusedId, project, measure, yearFirst = false }) {
+export function edgeMarker(point, bounds, text) {
+  if (!bounds || (point.x >= bounds.left && point.x <= bounds.right && point.y >= bounds.top && point.y <= bounds.bottom)) return null;
+  const dx = point.x < bounds.left ? -1 : point.x > bounds.right ? 1 : 0;
+  const dy = point.y < bounds.top ? -1 : point.y > bounds.bottom ? 1 : 0;
+  const arrow = dy < 0 ? (dx < 0 ? '↖' : dx > 0 ? '↗' : '↑') : dy > 0 ? (dx < 0 ? '↙' : dx > 0 ? '↘' : '↓') : dx < 0 ? '←' : '→';
+  return `${arrow} ${String(text).slice(0, 32)}`;
+}
+
+export function shortQuestionTitle(text, maxWords = 5) {
+  const words = String(text || 'Saved question').replace(/^what if\s+/i, '').trim().split(/\s+/);
+  return words.length > maxWords ? `${words.slice(0, maxWords).join(' ')}…` : words.join(' ');
+}
+
+export function createWorldLabelCandidates(entries, { currentId, focusedId, project, measure, yearFirst = false, include = () => false, bounds }) {
   const candidates = [];
   for (const entry of entries || []) {
-    if (!shouldShowWorldLabel(entry, currentId, focusedId)) continue;
+    if (!shouldShowWorldLabel(entry, currentId, focusedId) && !include(entry)) continue;
     const point = project(entry);
     if (!point || point.visible === false) continue;
-    const text = worldLabelText(entry.world, { yearFirst });
+    const fullText = worldLabelText(entry.world, { yearFirst });
+    const text = entry.lineage && entry.id !== currentId ? edgeMarker(point, bounds, fullText) || fullText : fullText;
     const size = measure(text);
     candidates.push({
       id: entry.id, text, x: point.x, y: point.y,
       width: size.width, height: size.height,
       priority: labelPriority({ id: entry.id, lineage: entry.lineage }, currentId, focusedId),
-      kind: 'world',
+      kind: 'world', fullText,
     });
   }
   return candidates;

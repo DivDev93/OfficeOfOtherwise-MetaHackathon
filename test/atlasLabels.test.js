@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorldLabelCandidates, placeScreenLabels, projectedSphereDiameterPixels, shouldShowWorldLabel, worldLabelText } from '../web/atlas/labels.js';
+import { createWorldLabelCandidates, edgeMarker, placeScreenLabels, projectedSphereDiameterPixels, shouldShowWorldLabel, worldLabelText } from '../web/atlas/labels.js';
+
+test('offscreen lineage has a directional marker and visible children can be labelled', () => {
+  const bounds = { left: 0, right: 300, top: 0, bottom: 200 };
+  assert.match(edgeMarker({ x: 130, y: -12 }, bounds, 'A long ancestor'), /^↑ /);
+  const entries = [{ id: 'ancestor', lineage: true, world: { title: 'Ancestor' } }, { id: 'child', world: { title: 'Child' } }];
+  const labels = createWorldLabelCandidates(entries, { currentId: 'current', bounds, include: e => e.id === 'child', project: e => ({ x: 100, y: e.id === 'ancestor' ? -5 : 100, visible: true }), measure: () => ({ width: 80, height: 18 }) });
+  assert.match(labels[0].text, /^↑ /);
+  assert.equal(labels[0].fullText, 'Ancestor');
+  assert.equal(labels[1].text, 'Child');
+});
 
 test('world label text is concise and names the year when present', () => {
   assert.equal(worldLabelText({ title: 'Green Sahara', year: 2100 }), 'Green Sahara · 2100');
