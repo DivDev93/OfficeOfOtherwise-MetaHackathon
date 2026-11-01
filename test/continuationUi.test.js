@@ -1326,7 +1326,7 @@ test('a stopped SSE continuation can be explicitly restarted without waiting for
   assert.equal(app.get('event-retry').hidden,true);
 });
 
-test('only a persisted budget-exhausted edge gets an explicit retry that carries the server revalidation flag', async () => {
+test('explicit re-entry retries a persisted budget-exhausted edge with the server revalidation flag', async () => {
   const root = run('root'); root.assets = ['hero.png'];
   root.continuation.children = [{branchId:'a',status:'failed',code:'budget_exhausted'}];
   const child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
@@ -1338,13 +1338,8 @@ test('only a persisted budget-exhausted edge gets an explicit retry that carries
   });
   await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false});
   app.get('access').value = 'fixture'; app.ui.activateBranch(choice);
-  for (let i=0;i<12;i++) await tick();
-  assert.equal(app.posts.filter(post => post.url === '/api/continue').length,0,'opening a failed edge does not retry it');
-  assert.equal(app.get('event-retry').hidden,false);
-  assert.match(app.get('event-progress').textContent,/spend limit ended this continuation attempt.*new attempt; this attempt and its saved artifacts are preserved/i);
-  app.get('event-retry').click();
   for (let i=0;i<20;i++) await tick();
-  assert.equal(app.posts.filter(post => post.url === '/api/continue').length,1,'only the explicit Try again click dispatches a retry');
+  assert.equal(app.posts.filter(post => post.url === '/api/continue').length,1,'explicit entry dispatches one retry');
   assert.equal(app.get('event-retry').hidden,true,'success clears the retry control');
 });
 
@@ -1375,6 +1370,33 @@ test('a terminal budget-exhausted SSE failure becomes retryable only after its e
   assert.equal(app.get('event-retry').hidden,true);
 });
 
+test('re-entering the same selected event retries terminal work once and keeps success deduped', async () => {
+  for(const failedStatus of ['failed','uncertain','retryable']) {
+    const root=run('root'); root.assets=['hero.png'];
+    const child=run('child',next,{rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
+    let attempts=0;
+    const app=harness({root,child},async(url,options)=>{
+      attempts++; assert.equal(url,'/api/continue');
+      if(attempts===1) return new Response(`event: error\ndata: ${JSON.stringify({status:failedStatus,message:'Exploration stopped'})}\n\n`,{headers:{'content-type':'text/event-stream'}});
+      assert.deepEqual(JSON.parse(options.body),{runId:'root',branchId:'a'},'the fresh manifest has no edge, so re-entry starts a new reservation without a stale retry flag');
+      return complete(child);
+    });
+    await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false}); app.get('access').value='fixture';
+    app.ui.activateBranch(choice);
+    for(let i=0;i<16;i++) await tick();
+    assert.equal(attempts,1,`${failedStatus} first attempt settles before retry`);
+    assert.equal(app.ui.eventWorkFor('root','a').consequenceStatus,failedStatus);
+    assert.equal(app.ui.eventWorkFor('root','a').interrupted,true,'terminal error state remains retryable on the work record');
+    app.ui.activateBranch(choice);
+    for(let i=0;i<20;i++) await tick();
+    assert.equal(attempts,2,`${failedStatus} selected-row re-entry dispatches one fresh attempt`);
+    assert.deepEqual(app.ui.eventWorkFor('root','a').consequenceStatus,'complete',JSON.stringify(app.ui.eventWorkFor('root','a')));
+    app.ui.activateBranch(choice);
+    for(let i=0;i<8;i++) await tick();
+    assert.equal(attempts,2,`${failedStatus} completed work remains deduplicated`);
+  }
+});
+
 test('terminal failed and uncertain edges retry only after explicit action; in-progress stays locked', async () => {
   for (const status of ['failed','uncertain']) {
     const root=run('root'); root.continuation.children=[{branchId:'a',runId:`old-${status}`,status}];
@@ -1399,23 +1421,29 @@ test('terminal failed and uncertain edges retry only after explicit action; in-p
   assert.equal(active.posts.filter(post=>post.url==='/api/continue').length,0);
 });
 
-test('explicit entry refreshes a stale manifest before deciding whether to retry a stopped attempt', async () => {
-  const root=run('stale-root'), refreshed={...root,continuation:{...root.continuation,children:[{branchId:'a',runId:'stopped-child',status:'uncertain'}]}};
-  const child=run('replacement-child',next,{rootRunId:'stale-root',parentRunId:'stale-root',parentBranchId:'a',path:[{runId:'stale-root',branchId:'a',...choice}]});
-  let manifestReads=0;
-  const app=harness({'stale-root':root,'replacement-child':child},async(url,options)=>{
-    assert.equal(url,'/api/continue');
-    assert.deepEqual(JSON.parse(options.body),{runId:'stale-root',branchId:'a',retryInterruptedAttempt:true});
-    return complete(child);
-  },false,'',undefined,undefined,false,undefined,undefined,undefined,undefined,null,async url=>{
-    if(url==='/runs/stale-root' && ++manifestReads>1) return Response.json(refreshed);
-    return null;
-  });
-  await tick(); await app.ui.loadRun('stale-root',{animate:false,autoConsequences:false});
-  app.get('access').value='fixture'; app.ui.activateBranch(choice);
-  for(let i=0;i<20;i++) await tick();
-  assert.ok(manifestReads>1,'explicit entry refreshes the cached parent manifest');
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'one entry recovers the terminal attempt');
+test('explicit entry refreshes stale terminal metadata before selecting the server retry path', async () => {
+  for(const freshChildren of [[],[{branchId:'a',runId:'budget-stopped',status:'failed',code:'budget_exhausted'}]]) {
+    const root=run('stale-root');
+    root.continuation.children=[{branchId:'a',runId:'old-uncertain',status:'uncertain'}];
+    const refreshed={...root,continuation:{...root.continuation,children:freshChildren}};
+    const child=run('replacement-child',next,{rootRunId:'stale-root',parentRunId:'stale-root',parentBranchId:'a',path:[{runId:'stale-root',branchId:'a',...choice}]});
+    let manifestReads=0;
+    const app=harness({'stale-root':root,'replacement-child':child},async(url,options)=>{
+      assert.equal(url,'/api/continue');
+      assert.deepEqual(JSON.parse(options.body),freshChildren.length
+        ? {runId:'stale-root',branchId:'a',retryBudgetFailure:true}
+        : {runId:'stale-root',branchId:'a'});
+      return complete(child);
+    },false,'',undefined,undefined,false,undefined,undefined,undefined,undefined,null,async url=>{
+      if(url==='/runs/stale-root' && ++manifestReads>1) return Response.json(refreshed);
+      return null;
+    });
+    await tick(); await app.ui.loadRun('stale-root',{animate:false,autoConsequences:false});
+    app.get('access').value='fixture'; app.ui.activateBranch(choice);
+    for(let i=0;i<20;i++) await tick();
+    assert.ok(manifestReads>1,'explicit entry refreshes the cached parent manifest');
+    assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'the same entry picks one retry path');
+  }
 });
 
 test('continuation retries only machine-marked pre-dispatch HTTP 429 responses with a bounded backoff', async () => {

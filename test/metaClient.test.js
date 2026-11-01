@@ -13,7 +13,7 @@ test('only budget refusal before any Meta dispatch is marked safe to retry', asy
   assert.equal(markUndispatchedBudgetError(error, client, start).continuationRetryable, true);
   assert.equal(client.dispatchCount(), 0);
 
-  const sent = createMetaClient({ apiKey: 'test-key', spendCapUsd: 1, fetch: async () => { throw new Error('network uncertain'); } });
+  const sent = createMetaClient({ apiKey: 'test-key', spendCapUsd: 0.15, fetch: async () => { throw new Error('network uncertain'); } });
   const before = sent.dispatchCount();
   await assert.rejects(sent.meteredPost('/images', { model: 'test' }, { costUsd: 0.1 }));
   assert.equal(sent.dispatchCount(), 1);
@@ -103,6 +103,44 @@ test('respond and metered image requests pass AbortSignal to fetch and keep disp
   await assert.rejects(pending, /Meta request stopped/);
   assert.equal(observedSignal.aborted, true);
   assert.equal(client.dispatchCount(), 1, 'an aborted dispatched call is not released as unspent');
+});
+
+test('aborted reservation stays held while a later call may use remaining cap', async () => {
+  let calls = 0;
+  const ledger = memoryLedger(40.6581);
+  const fetch = async (_url, init) => {
+    calls++;
+    if (calls === 1) return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+    return Response.json({ ok: true });
+  };
+  const client = createMetaClient({ ...base, fetch, spendCapUsd: 143.3, ledger });
+  const controller = new AbortController();
+  const uncertain = client.meteredPost('/images', {}, { costUsd: .247056, signal: controller.signal });
+  await new Promise(resolve => setImmediate(resolve)); controller.abort();
+  await assert.rejects(uncertain);
+  assert.equal(ledger.total(), 40.6581);
+  assert.equal(ledger.reserved(), .247056);
+  await client.meteredPost('/images', {}, { costUsd: .1 });
+  assert.equal(calls, 2);
+  assert.ok(Math.abs(ledger.reserved() - .247056) < 1e-12, 'unknown first charge remains held after later settlement');
+  assert.ok(Math.abs(ledger.total() - 40.7581) < 1e-12);
+});
+
+test('aborted held exposure still causes a real numerical cap refusal', async () => {
+  const ledger = memoryLedger();
+  const client = createMetaClient({ ...base, spendCapUsd: .1, ledger, fetch: async (_url, init) => new Promise((_, reject) => {
+    init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  }) });
+  const controller = new AbortController();
+  const pending = client.meteredPost('/images', {}, { costUsd: .06, signal: controller.signal });
+  await new Promise(resolve => setImmediate(resolve)); controller.abort(); await assert.rejects(pending);
+  await assert.rejects(client.meteredPost('/images', {}, { costUsd: .05 }), error => {
+    assert.ok(error instanceof SpendCapError);
+    assert.match(error.message, /spend cap reached/i);
+    assert.ok(Math.abs(error.spent - .06) < 1e-12);
+    return true;
+  });
+  assert.equal(ledger.reserved(), .06);
 });
 
 test('meteredPost charges the supplied per-call cost and respects the cap', async () => {
@@ -237,24 +275,29 @@ test('shared-client spend refusal is classified using only that invocation dispa
   assert.equal(first.spent(), 0.08); assert.equal(second.spent(), 0);
 });
 
-test('missing usage retains its reservation and blocks future calls', async () => {
+test('missing usage retains its reservation while later calls can use available headroom', async () => {
   const ledger = memoryLedger();
-  const fetch = fakeFetch([{ status: 200, body: { output_text: 'fixture' } }]);
+  const fetch = fakeFetch([{ status: 200, body: { output_text: 'fixture' } }, { status: 200, body: RESPONSE_FIXTURE }]);
   const client = createMetaClient({ ...base, ledger, fetch });
   await assert.rejects(client.respond({ model: 'muse-spark', input: 'x' }), /usage unavailable/);
   assert.equal(ledger.total(), 0);
-  assert.ok(ledger.reserved() > 0);
-  await assert.rejects(client.respond({ model: 'muse-spark', input: 'x' }), SpendCapError);
-  assert.equal(fetch.calls.length, 1);
+  const held = ledger.reserved(); assert.ok(held > 0);
+  await client.respond({ model: 'muse-spark-1.3', input: 'x' });
+  assert.ok(ledger.reserved() >= held);
+  assert.equal(fetch.calls.length, 2);
 });
 
-test('actual cost above reservation is retained and blocks future calls', async () => {
+test('actual cost above reservation is recorded and does not blanket-block later calls', async () => {
   const ledger = memoryLedger();
-  const fetch = fakeFetch([{ status: 200, body: { output_text: 'fixture', usage: { input_tokens: 1, output_tokens: 10000 } } }]);
+  const fetch = fakeFetch([
+    { status: 200, body: { output_text: 'fixture', usage: { input_tokens: 1, output_tokens: 10000 } } },
+    { status: 200, body: RESPONSE_FIXTURE },
+  ]);
   const client = createMetaClient({ ...base, ledger, fetch });
   const result = await client.respond({ model: 'muse-spark', input: 'x', maxOutputTokens: 1 });
   assert.equal(ledger.total(), result.costUsd);
-  await assert.rejects(client.respond({ model: 'muse-spark', input: 'x' }), SpendCapError);
+  await client.respond({ model: 'muse-spark-1.3', input: 'x' });
+  assert.equal(fetch.calls.length, 2);
 });
 
 test('rejects unsafe transport and never exposes upstream error content', async () => {
@@ -276,11 +319,15 @@ test('rejects unmetered tools and output limit overrides before making a request
   assert.equal(fetch.calls.length, 0);
 });
 
-test('invalid usage retains the reservation and stops further calls', async () => {
+test('invalid usage retains the reservation and does not blanket-block later calls', async () => {
   const ledger = memoryLedger();
-  const fetch = fakeFetch([{ status: 200, body: { usage: { input_tokens: 2, output_tokens: 1, input_tokens_details: { cached_tokens: 3 } } } }]);
+  const fetch = fakeFetch([
+    { status: 200, body: { usage: { input_tokens: 2, output_tokens: 1, input_tokens_details: { cached_tokens: 3 } } } },
+    { status: 200, body: RESPONSE_FIXTURE },
+  ]);
   const client = createMetaClient({ ...base, fetch, ledger });
   await assert.rejects(client.respond({ model: 'muse-wonder-1.0', input: 'x' }), /usage unavailable or invalid/);
-  assert.ok(ledger.reserved() > 0);
-  await assert.rejects(client.respond({ model: 'muse-wonder-1.0', input: 'x' }), SpendCapError);
+  const held = ledger.reserved(); assert.ok(held > 0);
+  await client.respond({ model: 'muse-spark-1.3', input: 'x' });
+  assert.ok(ledger.reserved() >= held);
 });

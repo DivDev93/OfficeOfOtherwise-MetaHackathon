@@ -6,10 +6,10 @@ function validate(state) {
   if (!state || !Number.isFinite(state.totalUsd) || state.totalUsd < 0 || !Array.isArray(state.entries) || (state.reservations !== undefined && (!state.reservations || typeof state.reservations !== 'object' || Array.isArray(state.reservations)))) throw new Error('Invalid spend ledger');
   for (const entry of state.entries) if (!Number.isFinite(entry.usd) || entry.usd < 0 || typeof entry.at !== 'string') throw new Error('Invalid spend ledger entry');
   state.reservations ??= {};
-  for (const r of Object.values(state.reservations)) if (!Number.isFinite(r.usd) || r.usd < 0 || typeof r.day !== 'string') throw new Error('Invalid spend reservation');
+  for (const r of Object.values(state.reservations)) if (!Number.isFinite(r.usd) || r.usd < 0 || typeof r.day !== 'string' || (r.maxUsd !== undefined && (!Number.isFinite(r.maxUsd) || r.maxUsd < r.usd))) throw new Error('Invalid spend reservation');
   return state;
 }
-function totalReserved(state) { return Object.values(state.reservations).reduce((sum, r) => sum + r.usd, 0); }
+function totalReserved(state) { return Object.values(state.reservations).reduce((sum, r) => sum + (r.maxUsd ?? r.usd), 0); }
 function dailySpent(state, day) { return state.entries.filter(e => e.at?.slice(0, 10) === day && e.label !== 'chronos-3d').reduce((sum, e) => sum + e.usd, 0) + totalReserved(state); }
 function operations(transact) {
   return {
@@ -28,19 +28,18 @@ function operations(transact) {
     reserveMeta({ estimateUsd, capUsd, dailyCapUsd, day = new Date().toISOString().slice(0, 10) }) { return transact(true, state => {
       if (![estimateUsd, capUsd].every(x => Number.isFinite(x) && x >= 0) || (dailyCapUsd !== undefined && (!Number.isFinite(dailyCapUsd) || dailyCapUsd < 0))) throw new Error('Invalid Meta reservation');
       const spent = state.totalUsd + totalReserved(state);
-      if (state.budgetUncertain) return { refused: true, spent, cap: capUsd };
       if (spent + estimateUsd > capUsd) return { refused: true, spent, cap: capUsd };
       const daily = dailySpent(state, day);
       if (dailyCapUsd !== undefined && daily + estimateUsd > dailyCapUsd) return { refused: true, spent: daily, cap: dailyCapUsd };
-      const id = randomUUID(); state.reservations[id] = { usd: estimateUsd, day }; return { id };
+      const id = randomUUID(); state.reservations[id] = { usd: estimateUsd, maxUsd: estimateUsd, day }; return { id };
     }); },
     settleMeta(id, entry) { transact(true, state => {
       const reservation = state.reservations[id]; if (!reservation || !Number.isFinite(entry.usd) || entry.usd < 0) throw new Error('Invalid Meta settlement');
       state.totalUsd += entry.usd; state.entries.push({ ...entry, at: new Date().toISOString(), reservationDay: reservation.day });
-      if (entry.usd > reservation.usd) state.budgetUncertain = true;
+      if (entry.usd > reservation.usd) state.budgetUncertain = true; // historical diagnostic; actual spend is recorded above
       delete state.reservations[id];
     }); },
-    markMetaUncertain(id) { transact(true, state => { if (!state.reservations[id]) throw new Error('Invalid Meta reservation'); state.budgetUncertain = true; }); },
+    markMetaUncertain(id) { transact(true, state => { const reservation = state.reservations[id]; if (!reservation) throw new Error('Invalid Meta reservation'); reservation.maxUsd ??= reservation.usd; reservation.uncertain = true; state.budgetUncertain = true; }); },
   };
 }
 /** Memory implementation is shared between clients that share the same instance. */

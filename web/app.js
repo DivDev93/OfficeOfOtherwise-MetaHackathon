@@ -1405,12 +1405,19 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
   const existingEdge = ownerChildren.find(item => item.branchId === branch.id);
   const existingWork = eventWork.get(eventKey(runId, branch.id));
   const allowGeneration = serviceMode === 'live-enabled' && hasLiveAccess();
+  const explicitEntry = !background && !sceneOnly;
   if (!background && !sceneOnly) enterNode(runId, branch.id);
   const requestController = activeExpansion?.key === eventKey(runId, branch.id) ? activeExpansion.controller : null;
   let work = eventWork.get(key);
   const promoteScenePrefetch = !!work?.sceneOnlyPrefetch && !sceneOnly && !background;
   const promoteSavedSceneCheck = !!work?.sceneCheckOnly && !sceneOnly;
-  if (work && !retry && !work.interrupted && !promoteScenePrefetch && !promoteSavedSceneCheck) {
+  const explicitRetry = explicitEntry && retry;
+  const terminalWorkStatus = ['failed', 'retryable', 'uncertain'].includes(work?.consequenceStatus);
+  const explicitInterruptedReentry = explicitEntry && work?.interrupted
+    && (terminalWorkStatus || ['not-started', 'needs-access'].includes(work?.consequenceStatus)
+      || !work?.consequenceStatus && !work?.childRunId && !work?.children?.length);
+  const terminalWorkCanRetry = explicitEntry && !work?.childrenRunning && !work?.childrenQueued && terminalWorkStatus;
+  if (work && !explicitRetry && !explicitInterruptedReentry && !terminalWorkCanRetry && !promoteScenePrefetch && !promoteSavedSceneCheck) {
     if (!background && runId === currentRunId) renderEventWork(); return;
   }
   if ((work?.childrenRunning || work?.childrenQueued) && !promoteScenePrefetch) return;
@@ -1419,11 +1426,11 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
   work.interrupted = false; work.retryable = false;
   if (sceneOnly) work.sceneOnlyPrefetch = true;
   else if (!background) work.sceneOnlyPrefetch = false;
-  const knownEdge = ownerChildren.find(item => item.branchId === branch.id);
-  const explicitEntry = !background && !sceneOnly;
-  const budgetRetryEligible = work.budgetFailureRetryable || (['failed', 'retryable'].includes(knownEdge?.status) && knownEdge?.code === 'budget_exhausted');
-  const budgetRetryRequested = retry && budgetRetryEligible;
-  const interruptedRetryEligible = work.failedAttemptRetryable || (['failed', 'uncertain'].includes(knownEdge?.status) && knownEdge?.code !== 'budget_exhausted');
+  let knownEdge = ownerChildren.find(item => item.branchId === branch.id);
+  let budgetRetryEligible = work.budgetFailureRetryable || (['failed', 'retryable'].includes(knownEdge?.status) && knownEdge?.code === 'budget_exhausted');
+  let budgetRetryRequested = explicitEntry && allowGeneration && budgetRetryEligible;
+  let retryableWorkRetryRequested = explicitEntry && allowGeneration && work.consequenceStatus === 'retryable' && !knownEdge;
+  let interruptedRetryEligible = work.failedAttemptRetryable || (['failed', 'uncertain'].includes(knownEdge?.status) && knownEdge?.code !== 'budget_exhausted');
   let interruptedRetryRequested = explicitEntry && allowGeneration && interruptedRetryEligible;
   work.consequenceStatus = knownEdge?.status || (work.childRunId ? 'complete' : sceneOnly ? 'not-started' : 'queued');
   work.budgetFailureRetryable = budgetRetryEligible && !budgetRetryRequested;
@@ -1436,7 +1443,7 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
     const savedPreview = localEventThumbnail(runId, branch.id, ownerManifest);
     if (savedPreview) { work.sceneUrl = savedPreview; work.sceneMessage = ''; work.sceneRetryable = false; work.sceneMissing = false; work.sceneInProgress = false; work.sceneLoading = false; }
   }
-  let savedChild = ownerChildren.find(item => item.branchId === branch.id);
+  let savedChild = knownEdge;
   const ownerPath = ownerManifest?.continuation?.path || (runId === currentRunId ? continuation.path : []);
   const entryAction = continuationAction({runId, branchId:branch.id, children:savedChild ? [savedChild] : [], path:ownerPath, mode:serviceMode, access:allowGeneration});
   let continuationDispatched = false;
@@ -1475,7 +1482,9 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
       }
       if (!work.childRunId) {
         let manifest = runId === currentRunId ? currentManifest : knownRunManifests.get(runId);
-        if (!manifest || (explicitEntry && !savedChild && !work.childRunId)) {
+        const refreshTerminalState = explicitEntry && !work.childRunId
+          && (terminalWorkCanRetry || ['failed', 'retryable', 'uncertain'].includes(knownEdge?.status));
+        if (!manifest || (explicitEntry && !savedChild && !work.childRunId) || refreshTerminalState) {
           const manifestResponse = await fetch(`/runs/${encodeURIComponent(runId)}`);
           if (!manifestResponse.ok) throw new Error('Could not check saved consequences');
           manifest = await manifestResponse.json();
@@ -1484,8 +1493,18 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
             if (runId === currentRunId) { currentManifest = manifest; continuation = manifest.continuation || continuation; }
           }
         }
-        savedChild = manifest.continuation?.children?.find(item => item.branchId === branch.id) || savedChild;
-        if (explicitEntry && allowGeneration && ['failed', 'uncertain'].includes(savedChild?.status) && savedChild?.code !== 'budget_exhausted') interruptedRetryRequested = true;
+        const manifestChild = manifest.continuation?.children?.find(item => item.branchId === branch.id) || null;
+        if (refreshTerminalState) {
+          knownEdge = manifestChild;
+          savedChild = manifestChild;
+          budgetRetryEligible = ['failed', 'retryable'].includes(savedChild?.status) && savedChild?.code === 'budget_exhausted';
+          budgetRetryRequested = explicitEntry && allowGeneration && budgetRetryEligible;
+          interruptedRetryEligible = ['failed', 'uncertain'].includes(savedChild?.status) && savedChild?.code !== 'budget_exhausted';
+          interruptedRetryRequested = explicitEntry && allowGeneration && interruptedRetryEligible;
+          retryableWorkRetryRequested = explicitEntry && allowGeneration && (work.consequenceStatus === 'retryable' && !savedChild || savedChild?.status === 'retryable' && savedChild?.code !== 'budget_exhausted');
+          work.budgetFailureRetryable = budgetRetryEligible && !budgetRetryRequested;
+          work.failedAttemptRetryable = interruptedRetryEligible && !interruptedRetryRequested;
+        } else savedChild = manifestChild || savedChild;
         if (savedChild?.status === 'complete' && savedChild.runId) {
           const response = await fetch(`/runs/${encodeURIComponent(savedChild.runId)}/branch.json`);
           if (!response.ok) throw new Error('Could not load saved consequences');
@@ -1495,7 +1514,7 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
           prefetchEventScenes(work.children, savedChild.runId, childManifest); refresh();
           return;
         }
-        if (savedChild?.status && !budgetRetryRequested && !interruptedRetryRequested) {
+        if (savedChild?.status && !budgetRetryRequested && !interruptedRetryRequested && !retryableWorkRetryRequested) {
           work.consequenceStatus = savedChild.status;
           if (savedChild.status === 'in-progress') work.childrenMessage = 'This consequence is still being saved';
           else if (['failed', 'retryable'].includes(savedChild.status) && savedChild.code === 'budget_exhausted') {
@@ -1505,9 +1524,10 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
             work.failedAttemptRetryable = true; work.childrenRetryable = true; work.retryable = true;
             work.childrenMessage = 'This attempt stopped without saved consequences. Try again starts a new attempt; the prior attempt and artifacts are preserved.';
           } else work.childrenMessage = savedChild.status === 'in-progress' ? 'This consequence is still being saved' : 'This saved attempt needs review';
+          if (['failed', 'retryable', 'uncertain'].includes(savedChild.status)) work.interrupted = true;
           refresh(); return;
         }
-        const action = continuationAction({runId, branchId:branch.id, children:savedChild && !budgetRetryRequested && !interruptedRetryRequested ? [savedChild] : [], path:ownerPath, mode:serviceMode, access:allowGeneration});
+        const action = continuationAction({runId, branchId:branch.id, children:savedChild && !budgetRetryRequested && !interruptedRetryRequested && !retryableWorkRetryRequested ? [savedChild] : [], path:ownerPath, mode:serviceMode, access:allowGeneration});
         if (action.type === 'generate') {
           if (requestController?.signal.aborted) {
             work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = false;
@@ -1518,7 +1538,8 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
             work.childrenRetryable = false; work.consequenceStatus = 'complete';
             work.childrenMessage = work.children.length ? '' : 'Saved consequences are already available'; refresh(); return;
           }
-          const reservation = reserveExpansion(runId, branch.id, { allowDuplicate:budgetRetryRequested || interruptedRetryRequested });
+          const terminalRetryWithoutEdge = refreshTerminalState && !savedChild;
+          const reservation = reserveExpansion(runId, branch.id, { allowDuplicate:budgetRetryRequested || interruptedRetryRequested || retryableWorkRetryRequested || terminalRetryWithoutEdge });
           if (!reservation.allowed) {
             work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = false;
             if (reservation.duplicate) {
@@ -1598,6 +1619,7 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
         : error.message || 'Could not load this event';
       if (continuationDispatched && !['retryable', 'failed', 'in-progress', 'complete'].includes(work.consequenceStatus)) work.consequenceStatus = 'uncertain';
       work.childrenRetryable = !continuationDispatched || work.consequenceStatus === 'retryable' || work.budgetFailureRetryable || work.failedAttemptRetryable;
+      work.interrupted = ['failed', 'retryable', 'uncertain'].includes(work.consequenceStatus);
     } finally {
       work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = !!(work.sceneQueued || work.sceneRunning);
       work.retryable = !!(work.sceneRetryable || work.childrenRetryable); refresh();

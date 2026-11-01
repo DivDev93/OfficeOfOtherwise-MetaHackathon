@@ -56,12 +56,13 @@ test('voice reservations enforce total/daily caps before fetch and reject invali
   assert.equal(calls, 0);
 });
 
-test('timeout, cancellation, provider errors and malformed responses are redacted, never retried, and freeze uncertain spend', async () => {
+test('voice failures retain their reservation without blocking a fresh request when cap headroom remains', async () => {
   const audio = await wav();
   for (const kind of ['timeout', 'cancel', 'http', 'json', 'shape']) {
     const ledger = memoryLedger(), controller = new AbortController(); let calls = 0, sentSignal;
     const client = createMetaClient({ apiKey: 'fixture', env: {}, ledger, fetch: async (_url, init) => {
       calls++; sentSignal = init.signal;
+      if (calls > 1) return ok(responseFixture);
       if (kind === 'cancel') queueMicrotask(() => controller.abort());
       if (['timeout', 'cancel'].includes(kind)) return new Promise(() => {});
       if (kind === 'http') return { ok: false, status: 429 };
@@ -71,13 +72,26 @@ test('timeout, cancellation, provider errors and malformed responses are redacte
     await assert.rejects(createMetaVoice({ client })({ audio, signal: controller.signal, timeoutMs: 10 }), { message: 'Meta transcription failed' });
     if (['timeout', 'cancel'].includes(kind)) assert.equal(sentSignal.aborted, true);
     assert.equal(calls, 1); assert(Math.abs(ledger.reserved() - .0001) < 1e-12);
-    await assert.rejects(createMetaVoice({ client })({ audio }), SpendCapError);
-    await client.waitForIdle(); assert.equal(calls, 1);
+    await createMetaVoice({ client })({ audio });
+    assert.equal(calls, 2, `${kind}: a fresh request should use available cap headroom`);
+    assert(Math.abs(ledger.reserved() - .0001) < 1e-12, `${kind}: keep the unresolved first reservation held`);
+    await client.waitForIdle();
   }
   const cancelled = new AbortController(); cancelled.abort();
   const ledger = memoryLedger(); const client = createMetaClient({ apiKey: 'fixture', env: {}, ledger });
   await assert.rejects(createMetaVoice({ client })({ audio, signal: cancelled.signal }));
   assert.equal(ledger.reserved(), 0);
+});
+
+test('a retained failed voice reservation still refuses a request beyond the numeric cap', async () => {
+  const audio = await wav(); const ledger = memoryLedger(); let calls = 0;
+  const client = createMetaClient({ apiKey: 'fixture', env: {}, ledger, spendCapUsd: .00015, fetch: async () => {
+    calls++; return { ok: false, status: 503 };
+  } });
+  await assert.rejects(createMetaVoice({ client })({ audio }), { message: 'Meta transcription failed' });
+  assert.equal(calls, 1); assert(Math.abs(ledger.reserved() - .0001) < 1e-12);
+  await assert.rejects(createMetaVoice({ client })({ audio }), SpendCapError);
+  assert.equal(calls, 1, 'numeric cap refusal happens before the second paid request');
 });
 
 async function serverFixture(t, options = {}) {
