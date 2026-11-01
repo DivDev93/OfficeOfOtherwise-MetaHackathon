@@ -269,10 +269,16 @@ export async function createAtlasController({
   if (!toolbar) { toolbar = documentObject.createElement('div'); toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', 'Atlas controls'); container.parentElement?.insertBefore(toolbar, container); }
   toolbar.replaceChildren?.(); toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', 'Atlas controls');
   const makeButton = (label, ariaLabel) => { const button = documentObject.createElement('button'); button.type = 'button'; button.textContent = label; button.setAttribute('aria-label', ariaLabel); button.style.minWidth = '44px'; button.style.minHeight = '44px'; toolbar.append(button); return button; };
-  const zoomOut = makeButton('−', 'Zoom out one atlas step'), zoomIn = makeButton('+', 'Zoom in one atlas step');
+  const zoomOut = makeButton('−', 'Zoom out'), zoomIn = makeButton('+', 'Zoom in');
   const zoomInput = documentObject.createElement('input'); zoomInput.type = 'range'; zoomInput.min = '0'; zoomInput.max = '100'; zoomInput.step = '1'; zoomInput.value = '0';
-  zoomInput.setAttribute('aria-label', 'Atlas zoom');
-  const zoomLabel = documentObject.createElement('label'); zoomLabel.textContent = 'Zoom'; zoomLabel.append(zoomInput); toolbar.append(zoomLabel);
+  zoomInput.setAttribute('aria-label', 'Zoom (left: surface, right: atlas)');
+  const zoomLabel = documentObject.createElement('label'); zoomLabel.textContent = 'Zoom (left: surface, right: atlas)'; zoomLabel.append(zoomInput); toolbar.append(zoomLabel);
+  const updateZoomControls = value => {
+    const zoom = Math.max(0, Math.min(1, Number(value) || 0));
+    zoomInput.value = String(Math.round(zoom * 100));
+    zoomOut.disabled = zoom >= 1;
+    zoomIn.disabled = zoom <= 0;
+  };
   const surface = makeControl(documentObject, 'input', 'Labelled pins (surface)', toolbar).control;
   surface.type = 'range'; surface.min = '0'; surface.max = '7'; surface.step = '1'; surface.value = String(SURFACE_LABEL_LEVEL); surface.setAttribute('aria-valuetext', `${SURFACE_LABEL_LEVEL} labelled pins`);
   const unfold = makeControl(documentObject, 'input', 'Unfolded worlds (orbit)', toolbar).control;
@@ -340,7 +346,8 @@ export async function createAtlasController({
         return true;
       },
       onMetrics,
-      onLevelChange: level => { zoomInput.value = String(Math.round((Number(level?.zoom ?? sceneApi?.getZoom?.() ?? 0)) * 100)); onLevelChange(level); },
+      onZoomChange: zoom => updateZoomControls(zoom),
+      onLevelChange: level => { updateZoomControls(Number(level?.zoom ?? sceneApi?.getZoom?.() ?? 0)); onLevelChange(level); },
       surfaceLabelLevel: SURFACE_LABEL_LEVEL,
       orbitLevel: ORBIT_UNFOLDED_LEVEL,
       reducedMotion: Boolean(reducedMotion),
@@ -353,10 +360,10 @@ export async function createAtlasController({
   scene.setOrbitLevel?.(ORBIT_UNFOLDED_LEVEL);
   scene.setTravelMode?.(viewOptions.travelMode);
   scene.setGhostTrail?.(false);
-  const syncZoom = value => { const zoom = Math.max(0, Math.min(1, Number(value) || 0)); zoomInput.value = String(Math.round(zoom * 100)); scene.setZoom?.(zoom); };
-  zoomInput.value = String(Math.round((Number(scene.getZoom?.()) || 0) * 100));
-  zoomOut.addEventListener('click', () => syncZoom((Number(scene.getZoom?.()) || 0) - 0.08));
-  zoomIn.addEventListener('click', () => syncZoom((Number(scene.getZoom?.()) || 0) + 0.08));
+  const syncZoom = value => { const zoom = Math.max(0, Math.min(1, Number(value) || 0)); updateZoomControls(zoom); scene.setZoom?.(zoom); };
+  updateZoomControls(Number(scene.getZoom?.()) || 0);
+  zoomOut.addEventListener('click', () => syncZoom((Number(scene.getZoom?.()) || 0) + 0.08));
+  zoomIn.addEventListener('click', () => syncZoom((Number(scene.getZoom?.()) || 0) - 0.08));
   zoomInput.addEventListener('input', () => syncZoom(Number(zoomInput.value) / 100));
   surface.addEventListener('input', () => { const value = Math.max(0, Math.min(7, Number(surface.value) | 0)); surface.value = String(value); surface.setAttribute('aria-valuetext', `${value} labelled pins`); scene.setSurfaceLabelLevel?.(value); });
   unfold.addEventListener('input', () => { const value = Math.max(0, Math.min(7, Number(unfold.value) | 0)); unfold.value = String(value); unfold.setAttribute('aria-valuetext', `${value} unfolded worlds`); scene.setOrbitLevel?.(value); });

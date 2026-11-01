@@ -234,9 +234,19 @@ test('toolbar has real labelled controls, preview never enters, and only explici
   assert.equal(scene.travelMode, 'threads'); assert.equal(scene.ghost, false);
   assert.equal(byText(toolbar, 'Labelled pins (surface)').children[0].value, '3');
   assert.equal(byText(toolbar, 'Unfolded worlds (orbit)').children[0].value, '2');
-  assert.equal(byLabel(toolbar, 'Atlas zoom').type, 'range');
-  toolbar.children.find(element => element.tagName === 'button' && element.textContent === '+').dispatch('click');
-  assert.equal(scene.zoom, .08, 'zoom plus button changes camera zoom');
+  const zoomSlider = byLabel(toolbar, 'Zoom (left: surface, right: atlas)');
+  assert.equal(zoomSlider.type, 'range');
+  const zoomIn = byLabel(toolbar, 'Zoom in'), zoomOut = byLabel(toolbar, 'Zoom out');
+  assert.equal(zoomIn.disabled, true, 'zoom in is disabled at surface');
+  zoomOut.dispatch('click');
+  assert.equal(scene.zoom, .08, 'minus moves out toward the atlas');
+  zoomIn.dispatch('click');
+  assert.equal(scene.zoom, 0, 'plus moves in toward the surface');
+  scene.zoom = 1; zoomOut.dispatch('click');
+  assert.equal(scene.zoom, 1, 'zoom out is disabled at the atlas end');
+  assert.equal(zoomOut.disabled, true);
+  scene.zoom = 0.4; zoomSlider.value = '65'; zoomSlider.dispatch('input');
+  assert.equal(scene.zoom, .65, 'slider moves left-to-right from surface to atlas');
   assert.equal(api.getAttachmentIntent().mode, 'current-world');
   assert.equal(api.getAttachmentIntent().parentId, world.id);
   // Invoking the controller API represents an explicit user entry action.
