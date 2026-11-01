@@ -1186,9 +1186,10 @@ export function createAtlasScene(container, {
       sprite.position.copy(surfacePoint.lerp(orbitPoint, state.lift).lerp(atlasPoint, state.atlas));
       const visibleAlpha = clusterOpacityAtPresentation(cluster, cluster.level, state, currentId);
       sprite.material.opacity = visibleAlpha;
-      const distance = sprite.position.distanceTo(camera.position);
+      const worldCenter = sprite.getWorldPosition(new THREE.Vector3());
+      const viewDepth = -worldCenter.applyMatrix4(camera.matrixWorldInverse).z;
       const diameter = cluster.level === 'surface' ? 48 : 58;
-      const size = 2 * worldRadiusForScreenPixels(distance, camera.fov, Math.max(1, renderer.domElement.clientHeight), diameter);
+      const size = 2 * worldRadiusForScreenPixels(viewDepth, camera.fov, Math.max(1, renderer.domElement.clientHeight), diameter);
       sprite.scale.set(size, size, 1);
     }
     const labelBounds = renderer.domElement.getBoundingClientRect();

@@ -26,4 +26,6 @@ At 375px, the Other questions control was checked against saved data: opening it
 
 `wheel-roundtrip-timed.webm` and `wheel-roundtrip-timed.json` record a later local desktop wheel journey from 0 to 100 and back to 0. The receipt includes each wheel delta, resulting slider value, and browser frame timestamp. Three buffered frames from an earlier capture were excluded; the remaining capture gaps were not shortened. The WebM uses the encoder's 25 Hz time base, so timestamps are approximate to 40 ms; it does not prove every intermediate frame was captured.
 
+`cluster-hit-1440.png` and `cluster-hit-375.png` show a separate synthetic Surface fixture after hovering approximately 22 CSS pixels to the right of its cluster center. The fan opened at both sizes. This samples one boundary direction and does not establish the hit size of every Atlas or Orbit node.
+
 In the recorded local replay at 1440×900, successive 120-pixel wheel inputs reached 10, 19, 29, 38, 48, 57 (Orbit), 67, 76, 86, 95 and 100 (Atlas). The reverse pass reached 90, 81, 71, 62, 57 (Orbit), 47, 38, 28, 19, 9 and 0 (Surface). Both passes left the Orbit stop on the next input.

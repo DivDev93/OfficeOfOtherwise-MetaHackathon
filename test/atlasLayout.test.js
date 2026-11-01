@@ -200,6 +200,18 @@ test('overlapping 44px hits belong to the nearest projected anchor with determin
   assert.equal(nearestProjectedAnchorHit([]), null);
 });
 
+test('screen-pixel hit sizing uses transformed world camera depth for rotated surface clusters', () => {
+  const fov = 38, height = 600, cameraDistance = 3, localZ = 1.17, pitch = Math.PI / 4;
+  const viewDepth = cameraDistance - localZ * Math.cos(pitch);
+  const radius = worldRadiusForScreenPixels(viewDepth, fov, height, 48);
+  const projectedDiameter = 2 * radius * height / (2 * viewDepth * Math.tan(fov * Math.PI / 360));
+  assert.ok(Math.abs(projectedDiameter - 48) < 1e-9);
+  const staleLocalDistance = cameraDistance - localZ;
+  const incorrectlySizedRadius = worldRadiusForScreenPixels(staleLocalDistance, fov, height, 48);
+  const rotatedDiameter = 2 * incorrectlySizedRadius * height / (2 * viewDepth * Math.tan(fov * Math.PI / 360));
+  assert.ok(rotatedDiameter < 44, `the old local-coordinate sizing shrinks the 48px target to ${rotatedDiameter.toFixed(1)}px`);
+});
+
 test('surface labels stay on current, ranked direct children, arrived parent, and explicit ghosts', () => {
   const worlds = [
     { id: 'root', parentId: null, score: 100 },

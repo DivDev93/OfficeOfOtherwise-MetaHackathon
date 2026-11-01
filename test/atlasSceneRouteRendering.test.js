@@ -67,6 +67,13 @@ test('node hit ownership uses the nearest projected anchor after existing ray an
     'overlapping candidates are owned by nearest screen anchor, with depth then stable ID ties');
 });
 
+test('Orbit and Atlas cluster hit planes use world-space camera depth for their CSS-pixel size', () => {
+  assert.match(scene, /const worldCenter = sprite\.getWorldPosition\(new THREE\.Vector3\(\)\);\s*const viewDepth = -worldCenter\.applyMatrix4\(camera\.matrixWorldInverse\)\.z;[\s\S]*const diameter = cluster\.level === 'surface' \? 48 : 58;[\s\S]*worldRadiusForScreenPixels\(viewDepth/,
+    'rotated cluster sprites retain their intended 48px Surface or 58px Orbit/Atlas raycast plane, including off-axis targets');
+  assert.doesNotMatch(scene, /const distance = sprite\.position\.distanceTo\(camera\.position\);[\s\S]{0,180}cluster\.level === 'surface'/,
+    'cluster sizing does not use local coordinates or radial distance in place of projected camera depth');
+});
+
 test('Orbit ancestor labels reserve top chrome and move edge markers below it', () => {
   assert.match(scene, /\.site-header \.brand, \.site-header \.header-actions, \.panel-head, #chronicle, \.atlas-world-details, #atlas-toolbar/,
     'page header, Atlas title, and zoom controls are measured as label obstacles');
