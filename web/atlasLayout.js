@@ -168,6 +168,20 @@ export function targetOccludedByEarth(targetDistance, earthDistance, surfaceWeig
   return Number.isFinite(target) && Number.isFinite(earth) && target > earth + 1e-4;
 }
 
+/** Distance along a pointer ray where it reaches the target's camera-depth plane. */
+export function pointerRayDistanceAtTargetDepth(target, rayOrigin, rayDirection, cameraForward) {
+  const vector = value => value && [value.x, value.y, value.z].every(component => Number.isFinite(Number(component)))
+    ? { x:Number(value.x), y:Number(value.y), z:Number(value.z) }
+    : null;
+  const point = vector(target), origin = vector(rayOrigin), direction = vector(rayDirection), forward = vector(cameraForward);
+  if (!point || !origin || !direction || !forward) return null;
+  const depth = (point.x - origin.x) * forward.x + (point.y - origin.y) * forward.y + (point.z - origin.z) * forward.z;
+  const rayDepthRate = direction.x * forward.x + direction.y * forward.y + direction.z * forward.z;
+  if (!(depth > 0) || !(rayDepthRate > 1e-8)) return null;
+  const distance = depth / rayDepthRate;
+  return Number.isFinite(distance) && distance > 0 ? distance : null;
+}
+
 /** Keep event pins as surface dots, then inflate them into mini-Earths only during Lift. */
 export function surfacePinScale(lift) {
   const progress = clamp(Number(lift) || 0, 0, 1);

@@ -13,6 +13,7 @@ import {
   ATLAS_PIN_GEOMETRY_RADIUS, ATLAS_PIN_SCALE_GAIN, LIFTED_PIN_SCALE, SURFACE_PIN_SCALE,
   atlasPinScale, pinAnchorRadiusAtPresentation, pinScaleAtPresentation,
   surfacePinAnchorRadius, surfacePinScale,
+  pointerRayDistanceAtTargetDepth, targetOccludedByEarth,
 } from '../web/atlasLayout.js';
 
 test('normalized zoom and camera altitude are continuous inverses', () => {
@@ -184,6 +185,21 @@ test('44 CSS-pixel pin targets and arrow navigation use projected screen coordin
   assert.equal(allowEarthBodySelection(0.56), false);
   assert.equal(allowEarthBodySelection(0.57), true);
   assert.equal(allowEarthBodySelection(1), true);
+});
+
+test('question-chip occlusion uses the actual off-center pointer ray depth', () => {
+  const origin = { x:0, y:0, z:0 };
+  const forward = { x:0, y:0, z:-1 };
+  const rayDirection = { x:0.1, y:0, z:-Math.sqrt(0.99) };
+  const target = { x:0, y:0, z:-10 };
+  const targetDistance = pointerRayDistanceAtTargetDepth(target, origin, rayDirection, forward);
+
+  assert.ok(targetDistance > 10, 'an off-center ray reaches the target depth farther along the ray than the center ray');
+  assert.equal(targetOccludedByEarth(10, 10.02, 1), false, 'the chip center appears in front of the globe');
+  assert.equal(targetOccludedByEarth(targetDistance, 10.02, 1), true, 'the actual pointer ray reaches Earth before the chip depth');
+  assert.equal(targetOccludedByEarth(targetDistance, 10.02, 0), false, 'Orbit and Atlas do not apply globe occlusion');
+  assert.equal(pointerRayDistanceAtTargetDepth(target, origin, rayDirection, { x:0, y:0, z:1 }), null,
+    'a target behind the camera has no forward pointer-ray depth');
 });
 
 test('overlapping 44px hits belong to the nearest projected anchor with deterministic depth and ID ties', () => {

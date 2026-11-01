@@ -23,7 +23,7 @@ import {
   pinScaleAtPresentation, pinAnchorRadiusAtPresentation,
   altitudeForZoom, atlasPresentationState, atlasZoomState, clampAtlasLevel, createWorldRegistry,
   layoutAtlasWorlds, layoutOrbitNeighborhood, measuredFps, surfaceFacingOrientation,
-  worldRadiusForScreenPixels, nearestProjectedAnchorHit, projectedWorldTarget, targetOccludedByEarth, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds, slerpUnitVector,
+  worldRadiusForScreenPixels, nearestProjectedAnchorHit, projectedWorldTarget, targetOccludedByEarth, pointerRayDistanceAtTargetDepth, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds, slerpUnitVector,
   cappedTextureSize, allowEarthBodySelection, fitCenteredCameraDistance,
   appendContinuousFrame, stableWorldId, localQuaternionForWorldFacing, isSurfaceNormalVisible,
 } from '../atlasLayout.js';
@@ -2278,12 +2278,19 @@ export function createAtlasScene(container, {
   }
   function hitQuestionChip(event) {
     if (atlasPresentationState(zoom, motionReduced).state.atlas <= 0.15) return null;
-    const bounds = renderer.domElement.getBoundingClientRect();
+    const bounds = eventPoint(event);
+    const pointerRayOrigin = raycaster.ray.origin.clone();
+    const pointerRayDirection = raycaster.ray.direction.clone();
+    const pointerEarthDistance = raycaster.intersectObject(earthMesh, false)[0]?.distance ?? Number.POSITIVE_INFINITY;
+    const cameraForward = camera.getWorldDirection(new THREE.Vector3());
+    const state = atlasPresentationState(zoom, motionReduced).state;
     let best = null, bestDistance = 22;
     for (const { chip, sprite } of p2Renderer.getQuestionChipTargets()) {
       if (!chip || !sprite.visible) continue;
       const point = sprite.getWorldPosition(new THREE.Vector3());
       if (!targetVisiblePastEarth(point)) continue;
+      const pointerTargetDistance = pointerRayDistanceAtTargetDepth(point, pointerRayOrigin, pointerRayDirection, cameraForward);
+      if (pointerTargetDistance == null || targetOccludedByEarth(pointerTargetDistance, pointerEarthDistance, state.surface)) continue;
       const screen = sprite.getWorldPosition(new THREE.Vector3()).project(camera);
       const x = bounds.left + (screen.x + 1) * 0.5 * bounds.width;
       const y = bounds.top + (1 - screen.y) * 0.5 * bounds.height;
