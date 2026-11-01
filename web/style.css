@@ -156,6 +156,8 @@ body:not(.has-story) .geography-panel{display:none}
 .activity-indicator{display:inline-block;flex:0 0 auto;width:13px;height:13px;border:2px solid #e5c07b50;border-top-color:var(--gold);border-radius:50%;vertical-align:-2px;animation:activity-spin .85s linear infinite}
 .activity-indicator[hidden],.stage-loading[hidden],.model-loading[hidden],.model-error[hidden]{display:none}
 .stage-loading{position:absolute;z-index:6;top:50%;left:50%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:10px;max-width:calc(100% - 28px);padding:10px 14px;border:1px solid #e5c07b66;border-radius:8px;background:rgba(8,6,7,.86);box-shadow:var(--shadow);color:var(--paper);font-size:10px;pointer-events:none}
+#chronicle-stage.has-scene-action{height:168px;min-height:168px;padding:10px 14px}
+#event-scene-action.stage-scene-action{position:absolute;z-index:5;top:calc(50% + 20px);left:50%;transform:translateX(-50%);white-space:nowrap}
 .event-progress-row{display:flex;align-items:center;gap:8px;min-height:20px}.event-progress-row p{margin:0}
 #view-loading-indicator{margin-right:7px;vertical-align:-2px}.model-loading strong .activity-indicator{margin-right:7px}
 @keyframes activity-spin{to{transform:rotate(360deg)}}

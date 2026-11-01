@@ -1121,6 +1121,7 @@ function setView(view, userSelected = false) {
   else if (hasCutout && selectedHasAssets) $('cutout-image').src = asset('cutout.png');
   view = availableView(view, {image:imageAvailable, cutout:cutoutAvailable, model:modelAvailable && !!modelApi});
   activeView = view;
+  updateSceneAction(selectedEvent);
   $('event-progress').textContent = [selectedEvent?.sceneLoading && view === 'scene' ? '' : selectedEvent?.sceneMessage, selectedEvent?.childrenMessage, selectedEvent?.cutoutMessage].filter(Boolean).join(' · ');
   $('event-loading-indicator').hidden = !selectedEvent?.childrenLoading || !selectedEvent?.running;
   $('scene-view').disabled = !imageAvailable; $('cutout-view').disabled = !selectedBranchId; $('model-button').disabled = !selectedBranchId;
@@ -1235,6 +1236,16 @@ function setEvidenceOpen(open) {
   button.textContent = open ? 'Hide evidence brief' : 'Evidence & brief';
   panel.hidden = !open;
 }
+function updateSceneAction(work = eventWork.get(eventKey(currentRunId, selectedBranchId))) {
+  const button = $('event-scene-action');
+  if (!button) return;
+  const canGenerate = serviceMode === 'live-enabled' && hasLiveAccess();
+  const available = work && !work.sceneUrl && (work.sceneRetryable || work.sceneMissing && canGenerate);
+  button.hidden = !available || activeView !== 'scene' || work.sceneQueued || work.sceneRunning;
+  $('chronicle-stage')?.classList.toggle('has-scene-action', !button.hidden);
+  button.textContent = work?.sceneMissing && canGenerate ? 'Generate scene' : 'Retry scene';
+  button.setAttribute('aria-label', `${work?.sceneMissing && canGenerate ? 'Generate' : 'Retry'} scene for ${work?.title || 'this event'}`);
+}
 async function loadEvidenceForBranch(runId, branch) {
   const request = ++evidenceRequest;
   const button = $('evidence-toggle'), panel = $('evidence-panel'), content = $('evidence-content');
@@ -1265,20 +1276,17 @@ function renderEventWork() {
   const selected = branchState.branches.find(branch => branch.id === selectedBranchId);
   const savedChild = continuation.children?.find(item => item.branchId === selectedBranchId);
   const list = $('event-children'); list.replaceChildren();
-  if (!work) { $('event-loading-indicator').hidden = true; renderExplorationTree(); return; }
+  if (!work) { $('event-loading-indicator').hidden = true; updateSceneAction(null); $('event-retry').hidden = true; renderExplorationTree(); return; }
   setView(activeView);
   const sceneProgress = work.sceneMessage || (work.sceneRetryable ? 'Scene unavailable · saved consequences remain available' : '');
   $('event-progress').textContent = [work.sceneLoading && activeView === 'scene' ? '' : sceneProgress, work.childrenMessage, work.cutoutMessage].filter(Boolean).join(' · ');
   $('event-loading-indicator').hidden = !work.childrenLoading || !work.running;
   if (!work.sceneUrl && work.sceneMessage) setStageMessage(work.sceneMessage + '.');
-  const hasSavedChildren = !!work.childRunId || !!work.children?.length;
-  const canGenerateScene = serviceMode === 'live-enabled' && hasLiveAccess();
-  const retrySceneOnly = (work.sceneRetryable || work.sceneMissing && canGenerateScene)
-    && (hasSavedChildren || !work.childrenRetryable && !work.budgetFailureRetryable);
-  const retryConsequences = work.childrenRetryable && !hasSavedChildren;
-  $('event-retry').hidden = !(retrySceneOnly || retryConsequences) || work.running;
-  $('event-retry').textContent = retrySceneOnly ? (work.sceneMissing && canGenerateScene ? 'Generate scene' : 'Retry scene') : 'Try again';
-  $('event-retry').setAttribute('aria-label', retrySceneOnly ? `${work.sceneMissing && canGenerateScene ? 'Generate' : 'Retry'} scene for ${work.title || 'this event'}` : `Try this event again`);
+  const retryConsequences = work.childrenRetryable && !work.childRunId && !work.children?.length;
+  updateSceneAction(work);
+  $('event-retry').hidden = !retryConsequences || work.childrenQueued || work.childrenRunning;
+  $('event-retry').textContent = 'Try again';
+  $('event-retry').setAttribute('aria-label', 'Try this event again');
   if (work.sceneUrl && isSelected(work.runId, work.branchId)) {
     if (activeView === 'scene') setView('scene');
   }
@@ -1336,7 +1344,7 @@ function queueSceneTask(runId, branch, work, access, allowGeneration, refresh, r
         }
       }
     } catch (error) {
-      work.sceneMessage = error.message || 'Could not load scene'; work.sceneRetryable = true;
+      work.sceneMessage = error.message || 'Could not load scene'; work.sceneRetryable = true; work.sceneMissing = false;
       if (work.sceneOnlyPrefetch) work.sceneOnlyComplete = true;
     } finally {
       work.sceneLoading = false; work.sceneQueued = false; work.sceneRunning = false; work.running = !!(work.childrenQueued || work.childrenRunning);
@@ -1344,7 +1352,7 @@ function queueSceneTask(runId, branch, work, access, allowGeneration, refresh, r
     }
   });
   work.sceneTaskPromise = task.catch(error => {
-    work.sceneLoading = false; work.sceneQueued = false; work.sceneRunning = false; work.sceneRetryable = true; work.retryable = true;
+    work.sceneLoading = false; work.sceneQueued = false; work.sceneRunning = false; work.sceneRetryable = true; work.sceneMissing = false; work.retryable = true;
     work.sceneMessage = error?.message || 'Could not load scene'; work.running = !!(work.childrenQueued || work.childrenRunning); refresh(); return false;
   });
   return work.sceneTaskPromise;
@@ -1589,15 +1597,14 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
 $('event-retry').addEventListener('click', () => {
   const branch = branchState.branches.find(item => item.id === selectedBranchId), work = eventWork.get(eventKey(currentRunId, selectedBranchId));
   if (!branch || !work) return;
-  if ((work.sceneRetryable || work.sceneMissing && serviceMode === 'live-enabled' && hasLiveAccess())
-      && (!!work.childRunId || !!work.children?.length || !work.childrenRetryable && !work.budgetFailureRetryable)) {
-    if (work.sceneQueued || work.sceneRunning) return;
-    const runId = currentRunId;
-    const refresh = () => { if (isSelected(runId, branch.id)) renderEventWork(); else renderBranches(); };
-    queueSceneTask(runId, branch, work, $('access').value, serviceMode === 'live-enabled' && hasLiveAccess(), refresh, true, false);
-    return;
-  }
   activateBranch(branch, true);
+});
+$('event-scene-action').addEventListener('click', () => {
+  const branch = branchState.branches.find(item => item.id === selectedBranchId), work = eventWork.get(eventKey(currentRunId, selectedBranchId));
+  if (!branch || !work || work.sceneQueued || work.sceneRunning) return;
+  const runId = currentRunId;
+  const refresh = () => { if (isSelected(runId, branch.id)) renderEventWork(); else renderBranches(); };
+  queueSceneTask(runId, branch, work, $('access').value, serviceMode === 'live-enabled' && hasLiveAccess(), refresh, true, false);
 });
 async function restoreSelectedConsequences(runId, branch) {
   const saved = continuation.children?.find(item => item.branchId === branch?.id && item.status === 'complete' && item.runId);
@@ -1778,7 +1785,7 @@ function renderHeroModels() {
     card.append(model, role, metrics); host.append(card);
   }
 }
-function reset({ preservePanel = false, preserveExpansion = false } = {}) { evidenceRequest++; $('evidence-toggle').hidden = true; $('evidence-content').replaceChildren(); $('evidence-panel').hidden = true; $('evidence-toggle').setAttribute('aria-expanded', 'false'); savedPreview.clear(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; geographyPreviewControls.clear(); showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasSourceGraphSignature = ''; atlasVisibleGraphSignature = ''; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
+function reset({ preservePanel = false, preserveExpansion = false } = {}) { evidenceRequest++; $('evidence-toggle').hidden = true; $('evidence-content').replaceChildren(); $('evidence-panel').hidden = true; $('evidence-toggle').setAttribute('aria-expanded', 'false'); updateSceneAction(null); $('event-retry').hidden = true; savedPreview.clear(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; geographyPreviewControls.clear(); showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasSourceGraphSignature = ''; atlasVisibleGraphSignature = ''; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
 function setBranch(data, event = 'complete', preferredBranchId = '') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchState.phase === 'final' ? (continuation.path?.length ? 'POSSIBLE CONSEQUENCE' : 'SELECTED EVENT') : branchPhaseLabel(branchState.phase);

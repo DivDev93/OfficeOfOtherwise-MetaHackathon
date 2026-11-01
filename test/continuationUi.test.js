@@ -1056,7 +1056,7 @@ test('GET-only saved-scene hydration exposes Generate scene when the restored ev
   assert.ok(sceneChecks.some(([runId,branchId])=>runId==='restored-missing-root' && branchId==='alt'), 'restore checks the missing scene with GET');
   app.ui.selectBranch(alternate);
   assert.equal(app.ui.state().selectedWork.sceneMissing,true);
-  assert.equal(app.get('event-retry').textContent,'Generate scene');
+  assert.equal(app.get('event-scene-action').textContent,'Generate scene');
   assert.equal(app.posts.length,0,'restoring and selecting the event never dispatches generation');
 });
 
@@ -1710,12 +1710,12 @@ test('scene retry remains available after saved children complete and cannot re-
   },false,'',undefined,undefined,true,()=>++sceneChecks<3?Response.json({error:'Scene service unavailable'},{status:503}):Response.json({status:'missing'}));
   await tick(); await app.ui.loadRun('scene-retry-root',{animate:false,autoConsequences:false}); app.get('access').value='fixture';
   app.ui.activateBranch(alternate);
-  for(let i=0;i<24 && app.get('event-retry').hidden;i++) await tick();
+  for(let i=0;i<24 && app.get('event-scene-action').hidden;i++) await tick();
   assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1);
   assert.equal(app.get('event-children').children.length,1,'the selected event has saved consequences');
-  assert.equal(app.get('event-retry').textContent,'Retry scene',JSON.stringify(app.ui.state().selectedWork));
+  assert.equal(app.get('event-scene-action').textContent,'Retry scene',JSON.stringify(app.ui.state().selectedWork));
   assert.match(app.get('event-progress').textContent,/Could not check this event’s scene/);
-  await app.get('event-retry').click();
+  await app.get('event-scene-action').click();
   for(let i=0;i<24 && sceneAttempts<2;i++) await tick();
   for(let i=0;i<12;i++) await tick();
   assert.equal(sceneAttempts,1,'the explicit retry remains scoped to saved scene availability');
@@ -1737,19 +1737,54 @@ test('a confirmed missing scene offers explicit generation while preserving save
   },false,'',undefined,undefined,true,()=>{sceneChecks++;return Response.json({status:'missing'});});
   await tick(); await app.ui.loadRun('missing-scene-root',{animate:false,autoConsequences:false});
   app.get('access').value='fixture'; app.ui.activateBranch(alternate);
-  for(let i=0;i<24 && app.get('event-retry').hidden;i++) await tick();
+  for(let i=0;i<24 && app.get('event-scene-action').hidden;i++) await tick();
   assert.ok(sceneChecks>0,'entry checks for the saved scene');
   assert.equal(app.posts.some(post=>post.url==='/api/event-scene'),false,'entry does not generate the missing scene automatically');
   assert.equal(app.posts.some(post=>post.url==='/api/continue'),false,'the saved child is restored without another continuation');
   assert.equal(app.get('event-children').children.length,1);
-  assert.equal(app.get('event-retry').textContent,'Generate scene');
-  app.get('event-retry').click(); app.get('event-retry').click();
+  assert.equal(app.get('event-scene-action').textContent,'Generate scene');
+  app.get('event-scene-action').click(); app.get('event-scene-action').click();
   for(let i=0;i<24 && !app.posts.some(post=>post.url==='/api/event-scene');i++) await tick();
   for(let i=0;i<12;i++) await tick();
   assert.equal(app.posts.filter(post=>post.url==='/api/event-scene').length,1,'rapid clicks share one in-flight scene request');
   assert.equal(app.posts.some(post=>post.url==='/api/continue'),false,'scene generation cannot re-expand saved children');
   assert.equal(app.get('event-children').children.length,1,'the saved consequence remains visible');
-  assert.equal(app.get('event-retry').hidden,true,'a completed scene clears the action');
+  assert.equal(app.get('event-scene-action').hidden,true,'a completed scene clears the action');
+});
+
+test('scene generation stays available during consequence work and both retries remain independent', async () => {
+  const alternate=branch('alt','Mammoth steppe',-4500), root=run('parallel-scene-root');
+  root.branch.branches.push(alternate); root.assets=['hero.png'];
+  let continuePosts=0, scenePosts=0, releaseContinue, releaseScene;
+  const pendingContinue=new Promise(resolve=>{releaseContinue=resolve;});
+  const pendingScene=new Promise(resolve=>{releaseScene=resolve;});
+  const failedContinuation=()=>new Response('event: error\ndata: {"status":"retryable","message":"Fixture continuation failure"}\n\n',{headers:{'content-type':'text/event-stream'}});
+  const app=harness({'parallel-scene-root':root},async url=>{
+    if(url==='/api/continue') { continuePosts++; return continuePosts===1 ? pendingContinue : failedContinuation(); }
+    assert.equal(url,'/api/event-scene'); scenePosts++;
+    return pendingScene;
+  },false,'',undefined,undefined,true,()=>Response.json({status:'missing'}));
+  await tick(); await app.ui.loadRun('parallel-scene-root',{animate:false,autoConsequences:false});
+  app.get('access').value='fixture'; app.ui.activateBranch(alternate);
+  for(let i=0;i<24 && app.get('event-scene-action').hidden;i++) await tick();
+  assert.equal(continuePosts,1,`the consequence request is still in flight: ${JSON.stringify({state:app.ui.state(),work:app.ui.eventWorkFor(root.id,'alt'),posts:app.posts})}`);
+  assert.equal(app.get('event-retry').hidden,true,'consequence retry waits for its active request');
+  assert.equal(app.get('event-scene-action').textContent,'Generate scene','missing scene action stays available during consequence work');
+  app.get('event-scene-action').click(); app.get('event-scene-action').click();
+  for(let i=0;i<24 && scenePosts===0;i++) await tick();
+  assert.equal(scenePosts,1,'two rapid clicks create only one scene POST');
+  assert.equal(continuePosts,1,'scene generation does not retry consequences');
+  releaseContinue(failedContinuation());
+  for(let i=0;i<24 && app.get('event-retry').hidden;i++) await tick();
+  assert.equal(app.get('event-retry').hidden,false,'failed consequences expose their own retry even while scene work is active');
+  assert.equal(app.get('event-scene-action').hidden,true,'the in-flight scene action cannot be submitted again');
+  releaseScene(Response.json({error:'Fixture scene failure'},{status:503}));
+  for(let i=0;i<24 && app.get('event-scene-action').hidden;i++) await tick();
+  assert.equal(app.get('event-retry').hidden,false,'failed consequences keep their own retry action');
+  assert.equal(app.get('event-scene-action').hidden,false,'scene retry remains available alongside consequence retry');
+  assert.equal(app.get('event-scene-action').textContent,'Retry scene','a failed scene remains independently retryable');
+  assert.equal(app.get('event-retry').textContent,'Try again','the consequence action remains separate from scene retry');
+  assert.equal(scenePosts,1,'showing both actions does not duplicate the scene request');
 });
 
 test('leaving an entered node aborts its in-flight continuation request', async () => {
