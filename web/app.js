@@ -9,10 +9,12 @@ import { loadLocalTerrain } from './terrainRaster.js';
 import { createSavedPreviewPopover } from './savedPreview.js';
 import { createAtlasController } from './atlas/controller.js';
 import { renderEvidencePanel } from './evidence.js';
+import { createLocalMetaKeySetup } from './localMetaKey.js';
 const $ = id => document.getElementById(id);
 const savedPreview = createSavedPreviewPopover(document.body, { document, viewport: () => ({ width:window.innerWidth || 1024, height:window.innerHeight || 768 }) });
 const voice = createVoiceInput({ prompt: $('prompt'), access: $('access'), controls: $('voice-controls'), record: $('voice-record'), stop: $('voice-stop'), cancel: $('voice-cancel'), message: $('voice-status') });
 let voiceEnabled = false, localReviewAccess = false;
+const localMetaKeySetup = createLocalMetaKeySetup({ details: $('meta-key-setup'), input: $('meta-key-input'), useButton: $('meta-key-use'), clearButton: $('meta-key-clear'), status: $('meta-key-status'), configStatus: $('meta-key-config-status'), fetchImpl: fetch, refreshServiceMode: loadServiceMode });
 const hasLiveAccess = () => localReviewAccess || !!$('access').value;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', atlasController = null, atlasInitPromise = null, atlasPreviewWorld = null, atlasAttachmentIntent = { mode:'current-world', parentId:null, divergenceYear:null }, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0;
@@ -1075,6 +1077,7 @@ async function loadServiceMode() {
     const response = await fetch('/health');
     if (!response.ok) throw new Error('Health endpoint unavailable');
     const health = await response.json();
+    localMetaKeySetup.setHealth(health);
     if (Number.isSafeInteger(health.expansionLimit) && health.expansionLimit > 0) expansionLimit = health.expansionLimit;
     if (Number.isSafeInteger(health.expansionUsed) && health.expansionUsed >= 0) serverExpansionUsed = health.expansionUsed;
     voiceEnabled = health.status === 'ok' && health.voiceEnabled === true;
@@ -1084,7 +1087,8 @@ async function loadServiceMode() {
     applyServiceMode(liveAccessMode(health));
     if (serverExpansionUsed >= expansionLimit) status(`This browser session reached its exploration limit (${expansionLimit}).`);
     if (localReviewAccess) refreshHistory().catch(() => {});
-  } catch { voiceEnabled = false; localReviewAccess = false; voice.setLocalAccess?.(false); voice.setEnabled(false); applyServiceMode('unknown'); }
+    return health;
+  } catch { localMetaKeySetup.setHealth(null); voiceEnabled = false; localReviewAccess = false; voice.setLocalAccess?.(false); voice.setEnabled(false); applyServiceMode('unknown'); return null; }
 }
 function setInvitationOpen(open) {
   if (open) {
@@ -1282,11 +1286,12 @@ function renderEventWork() {
   $('event-progress').textContent = [work.sceneLoading && activeView === 'scene' ? '' : sceneProgress, work.childrenMessage, work.cutoutMessage].filter(Boolean).join(' · ');
   $('event-loading-indicator').hidden = !work.childrenLoading || !work.running;
   if (!work.sceneUrl && work.sceneMessage) setStageMessage(work.sceneMessage + '.');
-  const retryConsequences = (work.childrenRetryable || work.budgetFailureRetryable || work.failedAttemptRetryable) && !work.childRunId && !work.children?.length;
+  const consequenceAction = selectedConsequenceAction(work, savedChild);
   updateSceneAction(work);
-  $('event-retry').hidden = !retryConsequences || work.childrenQueued || work.childrenRunning;
-  $('event-retry').textContent = 'Try again';
-  $('event-retry').setAttribute('aria-label', 'Try this event again');
+  $('event-retry').hidden = !consequenceAction;
+  $('event-retry').textContent = consequenceAction?.label || 'Explore what happens next';
+  $('event-retry').dataset.action = consequenceAction?.type || '';
+  $('event-retry').setAttribute('aria-label', consequenceAction?.label || 'Explore what happens next');
   if (work.sceneUrl && isSelected(work.runId, work.branchId)) {
     if (activeView === 'scene') setView('scene');
   }
@@ -1316,6 +1321,25 @@ function renderEventWork() {
     list.append(button);
   }
   renderBranches();
+}
+function selectedConsequenceAction(work, savedChild) {
+  if (!work || work.childrenQueued || work.childrenRunning || work.childrenLoading) return null;
+  if (savedChild?.status === 'complete' && savedChild.runId && !work.childRunId) return { type:'check', label:'Open saved paths' };
+  if (savedChild?.status === 'in-progress' || work.consequenceStatus === 'in-progress') return { type:'check', label:'Check progress' };
+  if (['limit-reached', 'session-limit-reached'].includes(work.consequenceStatus)) return { type:'browse', label:'Browse saved paths' };
+  if (serverExpansionUsed >= expansionLimit) return { type:'browse', label:'Browse saved paths' };
+  if (work.children?.length) return null;
+  if (work.consequenceStatus === 'complete' || work.childRunId) return { type:'browse', label:'Browse saved paths' };
+  if (serviceMode === 'live-enabled' && !hasLiveAccess()) return { type:'access', label:'Enter live access code' };
+  if (serviceMode !== 'live-enabled') {
+    if (serviceMode === 'unknown') return { type:'refresh', label:'Retry service check' };
+    const setupAvailable = !$('meta-key-setup').hidden;
+    return { type:'setup', label:setupAvailable ? 'Set up local Meta key' : 'Open local setup instructions' };
+  }
+  if (['failed', 'retryable', 'uncertain'].includes(work.consequenceStatus) || ['failed', 'retryable', 'uncertain'].includes(savedChild?.status)
+      || work.childrenRetryable || work.budgetFailureRetryable || work.failedAttemptRetryable) return { type:'retry', label:'Try again' };
+  if (['not-started', 'needs-access', undefined].includes(work.consequenceStatus)) return { type:'explore', label:'Explore what happens next' };
+  return null;
 }
 function queueSceneTask(runId, branch, work, access, allowGeneration, refresh, retry = false, background = false) {
   if (work.sceneUrl) return Promise.resolve(true);
@@ -1412,12 +1436,16 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
   const promoteScenePrefetch = !!work?.sceneOnlyPrefetch && !sceneOnly && !background;
   const promoteSavedSceneCheck = !!work?.sceneCheckOnly && !sceneOnly;
   const explicitRetry = explicitEntry && retry;
+  const explicitIdleEntry = explicitEntry && ['not-started', 'needs-access'].includes(work?.consequenceStatus)
+    && !work?.childRunId && !work?.children?.length;
   const terminalWorkStatus = ['failed', 'retryable', 'uncertain'].includes(work?.consequenceStatus);
   const explicitInterruptedReentry = explicitEntry && work?.interrupted
     && (terminalWorkStatus || ['not-started', 'needs-access'].includes(work?.consequenceStatus)
       || !work?.consequenceStatus && !work?.childRunId && !work?.children?.length);
   const terminalWorkCanRetry = explicitEntry && !work?.childrenRunning && !work?.childrenQueued && terminalWorkStatus;
-  if (work && !explicitRetry && !explicitInterruptedReentry && !terminalWorkCanRetry && !promoteScenePrefetch && !promoteSavedSceneCheck) {
+  const refreshInProgressWork = explicitEntry && (work?.consequenceStatus === 'in-progress' || existingEdge?.status === 'in-progress')
+    && !work?.childrenRunning && !work?.childrenQueued;
+  if (work && !explicitRetry && !explicitIdleEntry && !explicitInterruptedReentry && !terminalWorkCanRetry && !refreshInProgressWork && !promoteScenePrefetch && !promoteSavedSceneCheck) {
     if (!background && runId === currentRunId) renderEventWork(); return;
   }
   if ((work?.childrenRunning || work?.childrenQueued) && !promoteScenePrefetch) return;
@@ -1475,7 +1503,7 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
       if (savedChild?.status === 'complete' && savedChild.runId) {
         const response = await fetch(`/runs/${encodeURIComponent(savedChild.runId)}/branch.json`);
         if (!response.ok) throw new Error('Could not load saved consequences');
-        const child = await response.json(); work.childRunId = savedChild.runId; work.children = child.branches || []; work.childrenMessage = work.children.length ? '' : 'No consequences were saved'; work.childrenLoading = false; work.consequenceStatus = 'complete';
+        const child = await response.json(); work.childRunId = savedChild.runId; work.children = child.branches || []; work.childrenMessage = work.children.length ? '' : 'No further paths were saved for this event'; work.childrenLoading = false; work.consequenceStatus = 'complete';
         const childManifest = await treeManifest(savedChild.runId) || { id:savedChild.runId, branch:child, continuation:{rootRunId:savedChild.runId,children:[]} };
         knownRunManifests.set(savedChild.runId, childManifest);
         prefetchEventScenes(work.children, savedChild.runId, childManifest); refresh();
@@ -1483,7 +1511,7 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
       if (!work.childRunId) {
         let manifest = runId === currentRunId ? currentManifest : knownRunManifests.get(runId);
         const refreshTerminalState = explicitEntry && !work.childRunId
-          && (terminalWorkCanRetry || ['failed', 'retryable', 'uncertain'].includes(knownEdge?.status));
+          && (terminalWorkCanRetry || refreshInProgressWork || ['failed', 'retryable', 'uncertain', 'in-progress'].includes(knownEdge?.status));
         if (!manifest || (explicitEntry && !savedChild && !work.childRunId) || refreshTerminalState) {
           const manifestResponse = await fetch(`/runs/${encodeURIComponent(runId)}`);
           if (!manifestResponse.ok) throw new Error('Could not check saved consequences');
@@ -1505,10 +1533,15 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
           work.budgetFailureRetryable = budgetRetryEligible && !budgetRetryRequested;
           work.failedAttemptRetryable = interruptedRetryEligible && !interruptedRetryRequested;
         } else savedChild = manifestChild || savedChild;
+        if (refreshInProgressWork && !savedChild) {
+          work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = false;
+          work.consequenceStatus = 'not-started'; work.childrenRetryable = false; work.retryable = false; work.interrupted = false;
+          work.childrenMessage = 'No saved continuation was found. You can explore this event again.'; refresh(); return;
+        }
         if (savedChild?.status === 'complete' && savedChild.runId) {
           const response = await fetch(`/runs/${encodeURIComponent(savedChild.runId)}/branch.json`);
           if (!response.ok) throw new Error('Could not load saved consequences');
-          const child = await response.json(); work.childRunId = savedChild.runId; work.children = child.branches || []; work.childrenMessage = work.children.length ? '' : 'No consequences were saved'; work.childrenLoading = false; work.consequenceStatus = 'complete';
+          const child = await response.json(); work.childRunId = savedChild.runId; work.children = child.branches || []; work.childrenMessage = work.children.length ? '' : 'No further paths were saved for this event'; work.childrenLoading = false; work.consequenceStatus = 'complete';
           const childManifest = await treeManifest(savedChild.runId) || { id:savedChild.runId, branch:child, continuation:{rootRunId:savedChild.runId,children:[]} };
           knownRunManifests.set(savedChild.runId, childManifest);
           prefetchEventScenes(work.children, savedChild.runId, childManifest); refresh();
@@ -1589,7 +1622,7 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
           };
           while (true) { const {value, done} = await reader.read(); buffer += decoder.decode(value || new Uint8Array(), {stream:!done}); let match; while ((match = buffer.match(/\r?\n\r?\n/))) { accept(buffer.slice(0, match.index)); buffer = buffer.slice(match.index + match[0].length); } if (done) { if (buffer.trim()) accept(buffer); break; } }
           if (!completed) { work.consequenceStatus = ['retryable','failed','uncertain'].includes(failureStatus) ? failureStatus : 'uncertain'; throw new Error(failure || 'Consequences did not finish; check the saved world before retrying'); }
-          work.childRunId = completed.runId || completed.id; work.children = completed.branch?.branches || []; work.childrenMessage = work.children.length ? '' : 'No consequences were generated'; work.childrenLoading = false;
+          work.childRunId = completed.runId || completed.id; work.children = completed.branch?.branches || []; work.childrenMessage = work.children.length ? '' : 'No further paths were generated for this event'; work.childrenLoading = false;
           work.consequenceStatus = 'complete'; work.childrenRetryable = false; work.failedAttemptRetryable = false;
           work.budgetFailureRetryable = false;
           if (work.childRunId) {
@@ -1645,7 +1678,46 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
 $('event-retry').addEventListener('click', () => {
   const branch = branchState.branches.find(item => item.id === selectedBranchId), work = eventWork.get(eventKey(currentRunId, selectedBranchId));
   if (!branch || !work) return;
-  activateBranch(branch, true);
+  const action = $('event-retry').dataset.action;
+  if (action === 'setup') {
+    const setup = $('meta-key-setup');
+    if (!setup.hidden) {
+      setInvitationOpen(true); setup.open = true; setup.scrollIntoView({ behavior:'smooth', block:'nearest' }); $('meta-key-input').focus();
+    } else {
+      status('Fresh exploration needs the demo running locally with your own Meta API key.');
+      window.open('https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon#run-it-locally', '_blank', 'noopener,noreferrer');
+    }
+    return;
+  }
+  if (action === 'access') { setInvitationOpen(true); $('live-access').open = true; $('live-access').scrollIntoView({ behavior:'smooth', block:'nearest' }); $('access').focus(); return; }
+  if (action === 'browse') {
+    if (continuation.parentRunId && continuation.parentBranchId) void openAncestor(continuation.parentRunId, continuation.parentBranchId);
+    else {
+      setAtlasFocused(false);
+      document.body.classList.add('atlas-panels-open'); document.body.classList.remove('atlas-details-open');
+      syncAtlasCompactButtons(); $('exploration-tree').scrollIntoView({ behavior:'smooth', block:'nearest' });
+      status('Browse the saved paths in the exploration tree.');
+    }
+    return;
+  }
+  if (action === 'refresh') { void loadServiceMode().then(() => renderEventWork()); return; }
+  if (action === 'check') {
+    const savedChild = continuation.children?.find(item => item.branchId === branch.id && item.status === 'complete' && item.runId);
+    if (savedChild && !work.childRunId) {
+      work.childrenLoading = true; work.childrenQueued = false; work.childrenRunning = true; work.running = true;
+      work.childrenMessage = 'Loading saved paths'; renderEventWork();
+      void restoreSelectedConsequences(currentRunId, branch).catch(error => {
+        if (!isSelected(work.runId, work.branchId)) return;
+        work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = !!(work.sceneQueued || work.sceneRunning);
+        work.childrenMessage = 'Saved paths could not load. Open saved paths to try again.';
+        status(error.message || 'Could not load saved consequences'); renderEventWork();
+      });
+      return;
+    }
+    activateBranch(branch); return;
+  }
+  if (action === 'explore') { activateBranch(branch); return; }
+  if (action === 'retry') activateBranch(branch, true);
 });
 $('event-scene-action').addEventListener('click', () => {
   const branch = branchState.branches.find(item => item.id === selectedBranchId), work = eventWork.get(eventKey(currentRunId, selectedBranchId));
@@ -1664,7 +1736,7 @@ async function restoreSelectedConsequences(runId, branch) {
   const childManifest = await treeManifest(saved.runId) || { id: saved.runId, branch: child, continuation: { rootRunId: saved.runId, children: [] } };
   if (runId !== currentRunId || branch.id !== selectedBranchId) return;
   const key = eventKey(runId, branch.id), previous = eventWork.get(key) || {};
-  const work = { ...previous, runId, branchId: branch.id, childRunId: saved.runId, children: child.branches || [], sceneMessage: previous.sceneUrl ? '' : previous.sceneMessage || '', childrenMessage: child.branches?.length ? '' : 'No consequences were saved', consequenceStatus: 'complete' };
+  const work = { ...previous, runId, branchId: branch.id, childRunId: saved.runId, children: child.branches || [], childrenLoading:false, childrenQueued:false, childrenRunning:false, running:!!(previous.sceneQueued || previous.sceneRunning), sceneMessage: previous.sceneUrl ? '' : previous.sceneMessage || '', childrenMessage: child.branches?.length ? '' : 'No further paths were saved for this event', consequenceStatus: 'complete' };
   eventWork.set(key, work);
   prefetchEventScenes(work.children, saved.runId, childManifest);
   renderEventWork();
@@ -2020,11 +2092,27 @@ async function loadRun(id, { animate = true, autoConsequences = true, selectedBr
       selectBranch(selected, { persistLocation: false });
       if (continuation.children?.some(item => item.branchId === selected.id && item.status === 'complete')) {
         try { await restoreSelectedConsequences(id, selected); }
-        catch (error) { if (request === replayRequest) status(error.message || 'Could not load saved consequences'); }
+        catch (error) {
+          if (request === replayRequest) {
+            const key = eventKey(id, selected.id), work = eventWork.get(key) || { runId:id, branchId:selected.id, title:selected.title, children:[] };
+            work.consequenceStatus = 'complete'; work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = false;
+            work.childrenMessage = 'Saved paths could not load. Open saved paths to try again.';
+            eventWork.set(key, work); renderEventWork(); status(error.message || 'Could not load saved consequences');
+          }
+        }
       } else {
         const key = eventKey(id, selected.id), work = eventWork.get(key) || { runId: id, branchId: selected.id, title: selected.title, children: [] };
-        work.consequenceStatus = 'not-started'; work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.interrupted = true;
-        work.childrenMessage = serviceMode === 'replay-only' ? 'Not explored yet · run locally with your own Meta API key for fresh exploration' : 'Not explored yet';
+        const savedChild = continuation.children?.find(item => item.branchId === selected.id);
+        work.consequenceStatus = savedChild?.status || 'not-started'; work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false;
+        work.interrupted = ['failed', 'retryable', 'uncertain'].includes(savedChild?.status);
+        work.budgetFailureRetryable = ['failed', 'retryable'].includes(savedChild?.status) && savedChild?.code === 'budget_exhausted';
+        work.failedAttemptRetryable = ['failed', 'uncertain'].includes(savedChild?.status) && savedChild?.code !== 'budget_exhausted';
+        work.childrenRetryable = work.budgetFailureRetryable || work.failedAttemptRetryable || savedChild?.status === 'retryable';
+        work.childrenMessage = savedChild?.status === 'in-progress' ? 'This consequence is still being saved'
+          : ['failed', 'uncertain'].includes(savedChild?.status) ? 'This attempt stopped without saved consequences. Try this event again to continue.'
+            : ['failed', 'retryable'].includes(savedChild?.status) && savedChild?.code === 'budget_exhausted' ? 'The spend limit ended this attempt. Try this event again to start a new attempt.'
+              : savedChild?.status ? 'This saved attempt needs review'
+                : serviceMode === 'replay-only' ? 'Not explored yet · run locally with your own Meta API key for fresh exploration' : 'Not explored yet';
         eventWork.set(key, work);
         renderEventWork();
       }

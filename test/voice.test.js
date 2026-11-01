@@ -109,7 +109,7 @@ const post = async (url, { code = 'fixture-code', body, type = 'audio/wav', sign
 test('voice requires flag/code/metered runner, works in replay-only, and never invokes generation', async t => {
   let calls = 0;
   const url = await serverFixture(t, { transcribeAudio: fake(async () => { calls++; return responseFixture; }), runPipeline: () => { throw new Error('generation invoked'); } });
-  assert.deepEqual(await (await fetch(`${url}/health`)).json(), { status: 'ok', replayOnly: true, voiceEnabled: true, expansionLimit:20, expansionUsed:0 });
+  assert.deepEqual(await (await fetch(`${url}/health`)).json(), { status: 'ok', setupAvailable: false, metaKeyConfigured: false, metaKeyOverrideActive: false, replayOnly: true, localReviewAccess: false, voiceEnabled: true, expansionLimit:20, expansionUsed:0 });
   assert.equal((await post(url, { code: 'wrong' })).status, 403);
   assert.deepEqual(await (await post(url)).json(), { transcript: responseFixture.transcript });
   assert.equal(calls, 1);

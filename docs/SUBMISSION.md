@@ -62,7 +62,7 @@ The following figures are the Argon-reported pre-takeover sample from October 30
 ## Judge setup
 
 1. **Credential-free saved replay:** Clone the public repository. On Node `>= 22.9.0`, run `npm ci --ignore-scripts` and `npm run demo`, then open `http://127.0.0.1:3000`. This reads the packaged records and makes no model calls.
-2. **Fresh Meta exploration (optional):** Copy `.env.example` to an ignored local `.env`, set your own server-side `META_API_KEY`, review the configured `META_SPEND_CAP_USD` and optional `DEMO_DAILY_CAP_USD`, and run `npm run demo` on loopback. The key is not sent to the browser. No private Tattva credentials are included or needed for these Meta features.
+2. **Fresh Meta exploration (optional):** Run `npm run demo` on loopback, review `META_SPEND_CAP_USD` and optional `DEMO_DAILY_CAP_USD`, then enter your key in the page’s **Meta API setup** panel. The override stays in server memory for the session and is not persisted in browser storage or on disk; **Clear override** restores startup configuration, and restarting discards the override. A startup key can instead be set in the ignored server-side `.env`. No private Tattva credentials are included or needed for these Meta features.
 
 ## Release provenance
 

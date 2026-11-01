@@ -6,7 +6,7 @@ Judges clone the public repository and run `npm ci --ignore-scripts` followed by
 
 ## Fresh Meta exploration
 
-For local fresh branching, consequences, event scenes, SAM 3.1 cutouts, and optional voice transcription, a judge can place their own Meta Model API key in the ignored server-side `.env`, review the configured spend ceilings, and run `npm run demo` on loopback. The browser does not receive the Meta API key. See [the README setup](../README.md#run-it-locally).
+For local fresh branching, consequences, event scenes, SAM 3.1 cutouts, and optional voice transcription, start `npm run demo` on loopback and enter a key in the page’s **Meta API setup** panel, or configure a startup key in the ignored server-side `.env`. The UI override stays in server memory for that session; it is not persisted by the browser or written to disk. **Clear override** restores the startup configuration, and restarting discards the override. The key is not placed in URLs or logs. Review the configured spend ceilings before making calls. See [the README setup](../README.md#run-it-locally).
 
 ## SAM 3D Objects boundary
 

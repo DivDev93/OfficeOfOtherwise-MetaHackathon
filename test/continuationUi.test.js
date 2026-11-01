@@ -9,6 +9,7 @@ import * as geography from '../web/geography.js';
 import * as geographyControls from '../web/geographyControls.js';
 import * as geographyLabels from '../web/geographyLabels.js';
 import * as savedPreviews from '../web/savedPreview.js';
+import { createLocalMetaKeySetup } from '../web/localMetaKey.js';
 import { REGIONS, GEOGRAPHY_STYLES } from '../web/geographyRegions.js';
 
 const branch = (id, title, year = 500) => ({ id, title, year, summary: `${title} changes this world.`, place: { name: title, lat: 20, lon: year / 100 } });
@@ -76,10 +77,10 @@ function element() {
 }
 const textContentDeep = node => `${node?.textContent || ''}${(node?.children || []).map(textContentDeep).join('')}`;
 const findNode = (node, predicate) => predicate(node) ? node : (node?.children || []).map(child => findNode(child, predicate)).find(Boolean) || null;
-function harness(fixtures, onPost = async () => { throw new Error('Unexpected generation'); }, replayOnly = false, initialHash = '', onArchive = () => Response.json({ runs: [] }), onHistory = () => Response.json({runs: []}), localReview = false, onScene = () => Response.json({status:'missing'}), onCutout = () => Response.json({status:'missing'}), scheduleTimer = setTimeout, cancelTimer = clearTimeout, onHead = null, onGet = null) {
+function harness(fixtures, onPost = async () => { throw new Error('Unexpected generation'); }, replayOnly = false, initialHash = '', onArchive = () => Response.json({ runs: [] }), onHistory = () => Response.json({runs: []}), localReview = false, onScene = () => Response.json({status:'missing'}), onCutout = () => Response.json({status:'missing'}), scheduleTimer = setTimeout, cancelTimer = clearTimeout, onHead = null, onGet = null, setupAvailable = false) {
   const nodes = new Map(), get = id => { if (!nodes.has(id)) { const node = element(); if (id === 'root-generation-status') { node.hidden = true; node.setAttribute('role','status'); node.setAttribute('aria-live','polite'); } nodes.set(id, node); } return nodes.get(id); };
   const documentListeners = new Map(), document = { getElementById:get, createElement:element, createTextNode:text => ({ textContent:text }), querySelector:get, querySelectorAll:() => [], body:element(), addEventListener(type, callback) { documentListeners.set(type, callback); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; documentListeners.get('keydown')?.(event); return event; } };
-  const windowListeners = new Map(), window = { innerWidth:390, innerHeight:844, addEventListener(type, callback) { const callbacks = windowListeners.get(type) || []; callbacks.push(callback); windowListeners.set(type, callbacks); }, dispatch(type) { for (const callback of windowListeners.get(type) || []) callback(); } };
+  const windowListeners = new Map(), window = { innerWidth:390, innerHeight:844, opened:[], open(...args) { this.opened.push(args); }, addEventListener(type, callback) { const callbacks = windowListeners.get(type) || []; callbacks.push(callback); windowListeners.set(type, callbacks); }, dispatch(type) { for (const callback of windowListeners.get(type) || []) callback(); } };
   let reducedMotionMatches = false;
   const reducedMotionListeners = [];
   const reducedMotionQuery = { get matches() { return reducedMotionMatches; }, addEventListener(type, callback) { if (type === 'change') reducedMotionListeners.push(callback); } };
@@ -91,7 +92,7 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     if (onGet) { const override = await onGet(url); if (override) return override; }
     if (url.startsWith('/api/event-scene?')) return onScene(url);
     if (url.startsWith('/api/event-cutout?')) return onCutout(url);
-    if (url === '/health') return Response.json({ status: 'ok', replayOnly, expansionLimit:20, expansionUsed:0, ...(localReview ? { localReviewAccess: true } : {}) });
+    if (url === '/health') return Response.json({ status: 'ok', replayOnly, setupAvailable, metaKeyConfigured:false, metaKeyOverrideActive:false, voiceEnabled:false, expansionLimit:20, expansionUsed:0, ...(localReview ? { localReviewAccess: true } : {}) });
     if (url === '/runs') return onArchive();
     if (url === '/api/history') return onHistory();
     const match = url.match(/^\/runs\/([^/]+)(?:\/(.*))?$/);
@@ -99,7 +100,7 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     if (!fixture) return new Response('', { status: 404 });
     return Response.json(match[2] === 'branch.json' ? fixture.branch : match[2] === 'trace.json' ? { steps: [] } : fixture);
   };
-  const context = vm.createContext({ ...logic, ...geographyTexture, ...geography, ...geographyControls, ...geographyLabels, ...savedPreviews, REGIONS, GEOGRAPHY_STYLES,
+  const context = vm.createContext({ ...logic, ...geographyTexture, ...geography, ...geographyControls, ...geographyLabels, ...savedPreviews, createLocalMetaKeySetup, REGIONS, GEOGRAPHY_STYLES,
     loadLocalTerrain: async () => ({ width:1, height:1, elevation:new Int16Array([0]), landmass:new Uint8Array([1]) }), console, fetch, AbortController, TextDecoder, Uint8Array, URLSearchParams, setTimeout:scheduleTimer, clearTimeout:cancelTimer,
     createAtlasController(options) {
       const controller = {
@@ -129,6 +130,29 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const complete = fixture => new Response(`event: complete\ndata: ${JSON.stringify({ runId: fixture.id, branch: fixture.branch, continuation: fixture.continuation })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+
+test('local Meta key setup refreshes live feature mode and keeps the key out of browser storage', async () => {
+  const secret = 'fixture-only-meta-key';
+  let health = { status:'ok', replayOnly:true, voiceEnabled:false, localReviewAccess:false, setupAvailable:true, metaKeyConfigured:false, metaKeyOverrideActive:false, expansionLimit:20, expansionUsed:0 };
+  const app = harness({}, async (url, options) => {
+    health = { ...health, replayOnly:false, voiceEnabled:true, localReviewAccess:true, metaKeyConfigured:true, metaKeyOverrideActive:true };
+    return Response.json({ setupAvailable:true, metaKeyConfigured:true, metaKeyOverrideActive:true, replayOnly:false, localReviewAccess:true });
+  }, true, '', undefined, undefined, false, undefined, undefined, undefined, undefined, undefined, async url => url === '/health' ? Response.json(health) : null);
+  await tick();
+  assert.equal(app.get('meta-key-setup').hidden, false, 'setup appears on a local replay-only startup');
+  app.get('meta-key-input').value = secret;
+  app.get('meta-key-use').click();
+  assert.equal(app.get('meta-key-input').value, '', 'input clears before the request resolves');
+  await tick(); await tick();
+  assert.equal(app.posts.length, 1);
+  assert.equal(app.posts[0].url, '/api/local-meta-key');
+  assert.deepEqual(app.posts[0].body, { apiKey:secret });
+  assert.equal(app.get('live-submit').disabled, false, 'the refreshed health mode enables fresh exploration');
+  assert.match(app.get('service-mode').textContent, /local exploration/i);
+  assert.equal(app.get('meta-key-clear').disabled, false);
+  assert.match(app.get('meta-key-config-status').textContent, /local-session override is active/i);
+  assert.equal([...app.storage.values()].some(value => String(value).includes(secret)), false);
+});
 
 test('geography follows saved selection, survives pending continuation, toggles, and clears on legacy navigation despite late bytes', async () => {
   const condition = { id:'green-sahara',region:'sahara',kind:'vegetation',intensity:0.8,assumption:'Green landscape persists.',uncertainty:'Extent is illustrative.' };
@@ -985,6 +1009,172 @@ test('opening a live run waits for explicit entry, while replay mode stays read-
   assert.doesNotMatch(readFileSync(new URL('../web/index.html', import.meta.url), 'utf8'), /id="follow-selected"/);
 });
 
+test('restored idle hero has one explicit consequence action and only its direct children are entered', async () => {
+  const root = run('restored-root', choice), child = run('restored-child', next, {
+    rootRunId:'restored-root', parentRunId:'restored-root', parentBranchId:'a', path:[{runId:'restored-root',branchId:'a',...choice}],
+  });
+  root.assets = ['hero.png'];
+  let continuationCalls = 0;
+  const app = harness({[root.id]:root,[child.id]:child}, async (url, options) => {
+    assert.equal(url, '/api/continue'); continuationCalls++;
+    assert.deepEqual(JSON.parse(options.body), { runId:'restored-root', branchId:'a' });
+    return complete(child);
+  }, false, `#run=${root.id}`, undefined, undefined, true);
+  await tick(); await app.ui.loadRun(root.id, { animate:false, autoConsequences:false });
+  for (let i=0;i<10;i++) await tick();
+  assert.equal(continuationCalls, 0, 'restoring the selected hero does not start a continuation');
+  assert.equal(app.get('event-retry').hidden, false);
+  assert.equal(app.get('event-retry').textContent, 'Explore what happens next');
+  app.get('event-retry').click();
+  for (let i=0;i<24;i++) await tick();
+  assert.equal(continuationCalls, 1, 'one explicit CTA enters the selected event once');
+  assert.equal(app.get('event-children').children.length, 1, 'the selected event shows its immediate saved child');
+  assert.equal(app.get('event-retry').hidden, true, 'completed consequences are not offered for regeneration');
+  assert.equal(app.posts.some(post => post.url === '/api/continue' && post.body.runId === child.id), false, 'grandchildren are not generated by parent entry');
+});
+
+test('replay-only selected event CTA opens the local Meta setup instead of a generation spinner', async () => {
+  const root = run('replay-cta', choice); root.assets = ['hero.png'];
+  const app = harness({[root.id]:root}, undefined, true, `#run=${root.id}`, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, undefined, undefined, true);
+  await tick(); await app.ui.loadRun(root.id, { animate:false, autoConsequences:false });
+  for (let i=0;i<10;i++) await tick();
+  assert.equal(app.get('event-retry').hidden, false);
+  assert.equal(app.get('event-retry').textContent, 'Set up local Meta key');
+  app.get('event-retry').click();
+  assert.equal(app.get('meta-key-setup').open, true);
+  assert.equal(app.get('meta-key-input').focused, true);
+  assert.equal(app.ui.state().invitationOpen, true, 'the collapsed invitation panel opens before the setup field receives focus');
+  assert.equal(app.get('live-access').open, undefined, 'local Meta setup does not open the access-code disclosure');
+  assert.equal(app.posts.length, 0, 'opening setup makes no continuation request');
+  assert.equal(app.get('event-loading-indicator').hidden, true);
+});
+
+test('unavailable local setup CTA opens the documented local setup instructions', async () => {
+  const root = run('setup-help', choice); root.assets = ['hero.png'];
+  const app = harness({[root.id]:root}, undefined, true, `#run=${root.id}`, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, undefined, async url => url === '/health'
+      ? Response.json({status:'ok',replayOnly:true,setupAvailable:false,metaKeyConfigured:false,metaKeyOverrideActive:false,expansionLimit:20,expansionUsed:0}) : null);
+  await tick(); await app.ui.loadRun(root.id,{animate:false,autoConsequences:false});
+  assert.equal(app.get('event-retry').textContent,'Open local setup instructions');
+  app.get('event-retry').click();
+  assert.deepEqual(app.window.opened,[['https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon#run-it-locally','_blank','noopener,noreferrer']]);
+  assert.equal(app.posts.length,0,'setup guidance does not dispatch generation');
+});
+
+test('unknown service mode offers a health retry instead of mislabeling setup as unavailable', async () => {
+  const root = run('service-check',choice); root.assets=['hero.png'];
+  let healthReads=0;
+  const app=harness({[root.id]:root},undefined,true,`#run=${root.id}`,undefined,undefined,false,
+    undefined,undefined,undefined,undefined,null,async url=>{
+      if(url!=='/health') return null;
+      healthReads++;
+      return healthReads===1 ? new Response('',{status:503}) : Response.json({status:'ok',replayOnly:false,setupAvailable:false,metaKeyConfigured:true,metaKeyOverrideActive:false,localReviewAccess:false,voiceEnabled:false,expansionLimit:20,expansionUsed:0});
+    });
+  await tick(); await app.ui.loadRun(root.id,{animate:false,autoConsequences:false});
+  assert.equal(app.get('event-retry').textContent,'Retry service check');
+  app.get('event-retry').click();
+  for(let i=0;i<12 && app.get('event-retry').textContent==='Retry service check';i++) await tick();
+  assert.equal(healthReads,2);
+  assert.equal(app.get('event-retry').textContent,'Enter live access code','a successful health check reveals the real access action');
+  assert.equal(app.posts.length,0,'checking connection does not start exploration');
+});
+
+test('Open saved paths retries a failed read-only hydration without a continuation POST', async () => {
+  const root = run('saved-path-retry',choice), child = run('saved-child',next);
+  root.assets = ['hero.png']; root.continuation.children = [{branchId:'a',runId:child.id,status:'complete'}];
+  let childReads = 0;
+  let allowChildRead = false;
+  const app = harness({[root.id]:root,[child.id]:child},undefined,true,`#run=${root.id}`,undefined,undefined,false,
+    undefined,undefined,undefined,undefined,null,async url => {
+      if (url === `/runs/${child.id}/branch.json`) {
+        childReads++;
+        if (!allowChildRead) return new Response('',{status:503});
+      }
+      return null;
+    });
+  await tick(); await app.ui.loadRun(root.id,{animate:false,autoConsequences:false});
+  const readsBeforeAction = childReads;
+  assert.ok(readsBeforeAction >= 1,'restore performs a read-only hydration attempt');
+  assert.equal(app.get('event-retry').hidden,false);
+  assert.equal(app.get('event-retry').textContent,'Open saved paths');
+  allowChildRead = true;
+  app.get('event-retry').click();
+  for(let i=0;i<16 && !app.get('event-children').children.length;i++) await tick();
+  assert.ok(childReads > readsBeforeAction,'the action retries saved data hydration');
+  assert.equal(app.get('event-children').children.length,1);
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0,'saved-path recovery is read-only');
+});
+
+test('saved in-progress edge exposes Check progress and refreshes without resubmitting', async () => {
+  const root = run('checking-root', choice); root.assets = ['hero.png'];
+  const child = run('checking-child', next, {rootRunId:root.id,parentRunId:root.id,parentBranchId:'a',path:[{runId:root.id,branchId:'a',...choice}]});
+  root.continuation.children = [{branchId:'a',runId:child.id,status:'in-progress'}];
+  let manifestReads = 0;
+  let publishCompletion = false;
+  const app = harness({[root.id]:root,[child.id]:child}, async () => { assert.fail('a progress check cannot POST a continuation'); }, false, `#run=${root.id}`, undefined, undefined, true,
+    undefined, undefined, undefined, undefined, undefined, async url => {
+      if (url !== `/runs/${root.id}`) return null;
+      manifestReads++;
+      return Response.json(publishCompletion ? { ...root, continuation:{ ...root.continuation, children:[{branchId:'a',runId:child.id,status:'complete'}] } } : root);
+    });
+  await tick(); await app.ui.loadRun(root.id, {animate:false,autoConsequences:false});
+  assert.equal(app.get('event-retry').textContent, 'Check progress');
+  const readsBeforeAction = manifestReads; publishCompletion = true;
+  app.get('event-retry').click();
+  for (let i=0;i<24 && !app.get('event-children').children.length;i++) await tick();
+  assert.equal(manifestReads, readsBeforeAction + 1, 'the action refreshes the authoritative parent manifest');
+  assert.equal(app.get('event-children').children.length, 1, 'a newly completed child opens in the selected event');
+  assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 0);
+  assert.equal(app.get('event-retry').hidden, true);
+});
+
+test('a vanished in-progress reservation becomes a separate idle action, never an automatic resubmission', async () => {
+  const root = run('vanished-root', choice); root.assets = ['hero.png'];
+  root.continuation.children = [{branchId:'a',runId:'stale-child',status:'in-progress'}];
+  let manifestReads = 0;
+  let removeReservation = false;
+  const app = harness({[root.id]:root}, async () => { assert.fail('status refresh must not post a continuation'); }, false, `#run=${root.id}`, undefined, undefined, true,
+    undefined, undefined, undefined, undefined, undefined, async url => {
+      if (url !== `/runs/${root.id}`) return null;
+      manifestReads++;
+      return Response.json(removeReservation ? { ...root, continuation:{...root.continuation,children:[]} } : root);
+    });
+  await tick(); await app.ui.loadRun(root.id,{animate:false,autoConsequences:false});
+  assert.equal(app.get('event-retry').textContent,'Check progress');
+  const readsBeforeAction = manifestReads; removeReservation = true;
+  app.get('event-retry').click();
+  for(let i=0;i<16;i++) await tick();
+  assert.equal(manifestReads,readsBeforeAction + 1);
+  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0);
+  assert.equal(app.get('event-retry').textContent,'Explore what happens next');
+});
+
+test('session and depth limits offer saved-path navigation without bypassing limits; empty completion is explicit', async () => {
+  const root = run('at-session-limit',choice); root.assets=['hero.png'];
+  const health = url => url === '/health' ? Response.json({status:'ok',replayOnly:false,setupAvailable:false,metaKeyConfigured:true,metaKeyOverrideActive:false,localReviewAccess:true,voiceEnabled:false,expansionLimit:20,expansionUsed:20}) : null;
+  const capped = harness({[root.id]:root}, async () => { assert.fail('session cap must not be bypassed'); }, false, `#run=${root.id}`, undefined, undefined, true,
+    undefined, undefined, undefined, undefined, undefined, health);
+  await tick(); await capped.ui.loadRun(root.id,{animate:false,autoConsequences:false});
+  capped.get('event-retry').click(); for(let i=0;i<12;i++) await tick();
+  assert.equal(capped.get('event-retry').textContent,'Browse saved paths');
+  capped.get('event-retry').click();
+  assert.equal(capped.posts.filter(post=>post.url==='/api/continue').length,0);
+  assert.equal(capped.document.body.classList.contains('atlas-panels-open'),true,'browsing the root reveals its saved tree even in compact Atlas mode');
+  assert.match(capped.get('status').textContent,/Browse the saved paths/);
+
+  const child = run('empty-child',choice); child.branch.branches=[];
+  const completedRoot=run('empty-root',choice); completedRoot.assets=['hero.png'];
+  completedRoot.continuation.children=[{branchId:'a',runId:child.id,status:'complete'}];
+  const empty=harness({[completedRoot.id]:completedRoot,[child.id]:child});
+  await tick(); await empty.ui.loadRun(completedRoot.id,{animate:false,autoConsequences:false});
+  for(let i=0;i<16 && empty.get('event-retry').hidden;i++) await tick();
+  assert.match(empty.get('event-progress').textContent,/No further paths were saved for this event/);
+  assert.equal(empty.get('event-retry').textContent,'Browse saved paths');
+  empty.get('event-retry').click();
+  assert.equal(empty.posts.filter(post=>post.url==='/api/continue').length,0,'completed empty paths are not regenerated');
+});
+
 test('event fragment restores exact selection across reload without automatic expansion', async () => {
   const alternate = next;
   const root = run('root', choice);
@@ -1313,7 +1503,7 @@ test('a stopped SSE continuation can be explicitly restarted without waiting for
   const app=harness({root,child},async(url,options)=>{
     attempts++;
     if(attempts===1) return new Response('event: error\ndata: {"status":"uncertain","message":"Exploration stopped. Enter this event to try again."}\n\n',{headers:{'content-type':'text/event-stream'}});
-    assert.deepEqual(JSON.parse(options.body),{runId:'root',branchId:'a',retryInterruptedAttempt:true});
+    assert.deepEqual(JSON.parse(options.body),{runId:'root',branchId:'a'},'the fresh manifest has no terminal edge, so this is a new reservation');
     return complete(child);
   });
   await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false}); app.get('access').value='fixture'; app.ui.activateBranch(choice);
@@ -1323,7 +1513,7 @@ test('a stopped SSE continuation can be explicitly restarted without waiting for
   app.get('event-retry').click();
   for(let i=0;i<20;i++) await tick();
   assert.equal(attempts,2,'the user action starts one fresh attempt');
-  assert.equal(app.get('event-retry').hidden,true);
+  assert.equal(app.get('event-retry').hidden,true,'a nonempty completed continuation is shown as child events, without another action');
 });
 
 test('explicit re-entry retries a persisted budget-exhausted edge with the server revalidation flag', async () => {
@@ -1340,7 +1530,8 @@ test('explicit re-entry retries a persisted budget-exhausted edge with the serve
   app.get('access').value = 'fixture'; app.ui.activateBranch(choice);
   for (let i=0;i<20;i++) await tick();
   assert.equal(app.posts.filter(post => post.url === '/api/continue').length,1,'explicit entry dispatches one retry');
-  assert.equal(app.get('event-retry').hidden,true,'success clears the retry control');
+  assert.equal(app.get('event-retry').hidden,false,'a completed empty continuation offers navigation, not another generation');
+  assert.equal(app.get('event-retry').textContent,'Browse saved paths');
 });
 
 test('a terminal budget-exhausted SSE failure becomes retryable only after its explicit action', async () => {
@@ -1353,7 +1544,7 @@ test('a terminal budget-exhausted SSE failure becomes retryable only after its e
     assert.equal(url, '/api/continue');
     assert.deepEqual(JSON.parse(options.body), attempts === 1
       ? {runId:'root',branchId:'a'}
-      : {runId:'root',branchId:'a',retryBudgetFailure:true});
+      : {runId:'root',branchId:'a'},'a refreshed manifest without a terminal edge uses a new reservation');
     return attempts === 1
       ? new Response('event: error\ndata: {"step":"error","status":"failed","code":"budget_exhausted","error":"The spend cap stopped this continuation"}\n\n', {headers:{'content-type':'text/event-stream'}})
       : complete(child);
@@ -1365,9 +1556,10 @@ test('a terminal budget-exhausted SSE failure becomes retryable only after its e
   assert.equal(app.get('event-retry').hidden,false);
   assert.match(app.get('event-progress').textContent,/new attempt; this attempt and its saved artifacts are preserved/i);
   app.get('event-retry').click();
-  for (let i=0;i<20;i++) await tick();
+  for (let i=0;i<40 && app.ui.state().selectedWork.consequenceStatus !== 'complete';i++) await tick();
   assert.equal(attempts,2);
-  assert.equal(app.get('event-retry').hidden,true);
+  assert.equal(app.get('event-retry').hidden,false);
+  assert.equal(app.get('event-retry').textContent,'Browse saved paths');
 });
 
 test('re-entering the same selected event retries terminal work once and keeps success deduped', async () => {
@@ -1414,10 +1606,15 @@ test('terminal failed and uncertain edges retry only after explicit action; in-p
     assert.equal(app.posts[0].body.retryInterruptedAttempt,true);
   }
   const root=run('active'); root.continuation.children=[{branchId:'a',runId:'active-child',status:'in-progress'}];
-  const active=harness({root},async()=>{assert.fail('in-progress must never retry');});
-  await tick(); await active.ui.loadRun('active',{animate:false,autoConsequences:false}); active.ui.activateBranch(choice);
+  root.assets=['hero.png'];
+  const active=harness({active:root},async()=>{assert.fail('in-progress must never retry');});
+  await tick(); await active.ui.loadRun('active',{animate:false,autoConsequences:false});
+  for(let i=0;i<20 && active.get('event-retry').textContent!=='Check progress';i++) await tick();
+  assert.equal(active.get('event-retry').textContent,'Check progress','a persisted in-progress edge offers status refresh');
+  active.get('event-retry').click();
   for(let i=0;i<12;i++) await tick();
-  assert.equal(active.get('event-retry').hidden,true);
+  assert.equal(active.get('event-retry').hidden,false);
+  assert.equal(active.get('event-retry').textContent,'Check progress');
   assert.equal(active.posts.filter(post=>post.url==='/api/continue').length,0);
 });
 
@@ -1514,7 +1711,8 @@ test('capacity retry exhausts at a bounded two-minute budget and leaves the even
   for(let i=0;i<20 && attempts<11;i++) await tick();
   for(let i=0;i<10;i++) await tick();
   assert.equal(attempts,11,'manual retry succeeds after the bounded automatic retry budget');
-  assert.equal(app.get('event-retry').hidden,true,'successful consequences clear the retry control');
+  assert.equal(app.get('event-retry').hidden,false,'a completed empty continuation offers saved-path navigation');
+  assert.equal(app.get('event-retry').textContent,'Browse saved paths');
   const completedNode = findNode(app.get('exploration-tree-status'), item => item?.className === 'tree-branch' && item.children[0]?.dataset?.branchId === 'a');
   assert.equal(completedNode.dataset.state,'complete');
 });

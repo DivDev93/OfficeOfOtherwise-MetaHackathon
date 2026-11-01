@@ -660,3 +660,9 @@ body:has(#atlas-scene[data-atlas-level="surface"]) .map-panel>#atlas-scene{inset
 .evidence-block a{display:inline-block;color:var(--cyan);font-size:9px;line-height:1.4;overflow-wrap:anywhere}
 @media(max-width:700px){.evidence-panel{max-height:34dvh;padding:9px}.evidence-block p,.evidence-block li,.evidence-block blockquote{font-size:9px}}
 .workspace.hero-focus .evidence-toggle,.workspace.hero-focus .evidence-panel{display:none}
+.meta-key-setup{padding-top:8px;border-top:1px solid var(--line)}
+.meta-key-setup .input-row{align-items:stretch;gap:6px}
+.meta-key-setup .input-row input{min-width:0;flex:1;margin:4px 0;padding:8px;font-size:10px}
+.meta-key-actions{display:flex;justify-content:flex-end;margin-top:2px}
+.meta-key-setup small{display:block;margin-top:6px;line-height:1.45}
+.meta-key-setup #meta-key-status:empty{display:none}

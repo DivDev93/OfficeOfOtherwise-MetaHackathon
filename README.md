@@ -59,15 +59,14 @@ Without `META_API_KEY`, `npm run demo` starts cleanly in replay-only mode (`Show
 
 To enable fresh local branching, event continuations, event scene generation, SAM 3.1 cutouts, and voice prompt transcription with your own Meta Model API key:
 
-1. Copy `.env.example` to `.env` (in a new clone; preserve any existing `.env` and `out/spend.json`) and set `META_API_KEY` on the server. API keys stay strictly server-side and are never placed in browser storage, URLs, logs, or Git.
-2. Review `META_SPEND_CAP_USD` (cumulative ledger ceiling enforced across all calls via `out/spend.json`) and optional `DEMO_DAILY_CAP_USD` (defaults to `META_SPEND_CAP_USD` when unset). Do not delete or reset an existing `out/spend.json` ledger.
-3. Start the server on loopback:
+1. Review `META_SPEND_CAP_USD` (cumulative ledger ceiling enforced across all calls via `out/spend.json`) and optional `DEMO_DAILY_CAP_USD` (defaults to `META_SPEND_CAP_USD` when unset). Do not delete or reset an existing `out/spend.json` ledger.
+2. Start the server on loopback and open the local app. In **Meta API setup**, enter your own key and select **Use key**. The override stays in local server memory for that session; the browser does not persist it and it is not written to disk. **Clear override** restores startup configuration, and restarting discards the override. Alternatively, configure `META_API_KEY` in the ignored server-side `.env`. Preserve any existing `.env` and `out/spend.json`.
 
 ```bash
 npm run demo           # http://127.0.0.1:3000
 ```
 
-When `META_API_KEY` is configured and the server binds to loopback (`127.0.0.1`), `npm run demo` automatically enables local browser access (`localReviewAccess`), voice dictation (`DEMO_VOICE_ENABLED=true` by default), and persistent continuations under `out/`, governed by `META_SPEND_CAP_USD` and `DEMO_DAILY_CAP_USD`. If you set `DEMO_ACCESS_CODE` on a non-loopback host, enter that access code in the UI's **Access code** field.
+When a key is active and the server binds to loopback (`127.0.0.1`), the app enables local browser access (`localReviewAccess`), voice dictation (`DEMO_VOICE_ENABLED=true` by default), and persistent continuations under `out/`, governed by `META_SPEND_CAP_USD` and `DEMO_DAILY_CAP_USD`. If you set `DEMO_ACCESS_CODE` on a non-loopback host, enter that access code in the UI's **Access code** field. The local Meta key override is unavailable on hosted or remote origins.
 
 Fresh Meta image spend is reserved at `$0.01` per image by default. `.env.example` uses this application estimate; set `META_IMAGE_COST_USD` explicitly if you want a different conservative estimate. This is a ledger estimate, not a provider invoice.
 

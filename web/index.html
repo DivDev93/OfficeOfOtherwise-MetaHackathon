@@ -34,6 +34,7 @@
           </div>
           </details>
           <details id="live-access" hidden><summary>Access code</summary><label for="access">Demo access code</label><input id="access" type="password" autocomplete="off" placeholder="Required for voice or live generation"><small>Without a code, select a cached story below.</small></details>
+          <details id="meta-key-setup" class="meta-key-setup" hidden><summary>Meta API setup</summary><small id="meta-key-config-status" role="status" aria-live="polite"></small><label for="meta-key-input">Meta API key</label><div class="input-row"><input id="meta-key-input" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Paste your Meta API key"><button id="meta-key-use" class="outline" type="button">Use key</button></div><div class="meta-key-actions"><button id="meta-key-clear" class="outline" type="button" disabled>Clear override</button></div><small>This key stays in this local server’s memory for this session. It is not saved in the browser or to disk; restarting restores the server’s startup configuration.</small><small id="meta-key-status" role="status" aria-live="polite"></small></details>
         </form>
         <details class="starter-block" open><summary>Starting questions</summary><div class="chips starter-rows" aria-label="Suggested questions">
           <button type="button" data-run="alexandria" data-prompt="What if the Library of Alexandria never burned?"><span>01</span><span>Library of Alexandria · 300 BCE</span><b aria-hidden="true">↗</b></button>

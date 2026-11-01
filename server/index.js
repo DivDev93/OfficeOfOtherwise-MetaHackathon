@@ -58,16 +58,29 @@ function canonicalJson(value) {
   return value;
 }
 
-export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), evidencePath = resolve('demo/evidence/v1.json'), runPipeline, renderEventScene, segmentEventCutout, transcribeAudio, voiceTimeoutMs = 45_000, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now, importRunIds = [], maxContinuationDepth = MAX_CONTINUATION_DEPTH, maxConcurrentJobs = Number(env.DEMO_MAX_CONCURRENT_JOBS ?? 3), localReviewAccess = false, packagedReplayRoot = resolve(fileURLToPath(new URL('../demo/replay-history/', import.meta.url))) } = {}) {
+export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), evidencePath = resolve('demo/evidence/v1.json'), runPipeline, renderEventScene, segmentEventCutout, transcribeAudio, runnerFactories = {}, voiceTimeoutMs = 45_000, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now, importRunIds = [], maxContinuationDepth = MAX_CONTINUATION_DEPTH, maxConcurrentJobs = Number(env.DEMO_MAX_CONCURRENT_JOBS ?? 3), localReviewAccess = false, packagedReplayRoot = resolve(fileURLToPath(new URL('../demo/replay-history/', import.meta.url))) } = {}) {
   if (!Number.isInteger(maxConcurrentJobs) || maxConcurrentJobs < 1 || maxConcurrentJobs > 8) throw new RangeError('maxConcurrentJobs must be an integer from 1 to 8');
+  // Keep browser-entered Meta credentials in this server instance only. Never
+  // mutate process.env or the caller's configuration object.
+  const runtimeEnv = { ...env };
+  const bootMetaApiKey = runtimeEnv.META_API_KEY;
+  const bootModelApiKey = runtimeEnv.MODEL_API_KEY;
+  const bootReplayOnly = runtimeEnv.DEMO_REPLAY_ONLY;
+  const bootVoiceEnabled = runtimeEnv.DEMO_VOICE_ENABLED;
+  const bootLocalReviewAccess = localReviewAccess;
+  let localMetaKeyOverrideActive = false;
+  let localReviewAccessEnabled = localReviewAccess;
   let activeJobs = 0;
   const acquireJob = () => { if (activeJobs >= maxConcurrentJobs) return false; activeJobs++; return true; };
   const releaseJob = () => { activeJobs = Math.max(0, activeJobs - 1); };
   const activeContinuationAttempts = new Set();
   let voiceBusy = false, voiceRequests = [];
-  const voiceEnabled = env.DEMO_VOICE_ENABLED === 'true' && typeof env.DEMO_ACCESS_CODE === 'string' && env.DEMO_ACCESS_CODE.length > 0;
+  const hasMetaKey = () => ['META_API_KEY', 'MODEL_API_KEY'].some(name => typeof runtimeEnv[name] === 'string' && !!runtimeEnv[name].trim());
+  const replayOnly = () => runtimeEnv.DEMO_REPLAY_ONLY === 'true' || !hasMetaKey();
+  const voiceEnabled = () => runtimeEnv.DEMO_VOICE_ENABLED === 'true'
+    && (localReviewAccessEnabled || (typeof runtimeEnv.DEMO_ACCESS_CODE === 'string' && runtimeEnv.DEMO_ACCESS_CODE.length > 0));
   const requests = new Map();
-  const expansionLimit = configuredExpansionLimit(env);
+  const expansionLimit = configuredExpansionLimit(runtimeEnv);
   const liveRoots = new Map();
   const canonicalRoot = path => {
     const target = resolve(path);
@@ -232,21 +245,47 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
   for (const record of store.list()) liveRoots.set(record.id, liveRoot);
   function localBrowserAccess(req) {
     const address = server.address();
-    const host = address && typeof address === 'object' ? `127.0.0.1:${address.port}` : '';
-    const localPeer = ['127.0.0.1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+    const bindHost = address?.address === '::1' ? '[::1]' : address?.address === '127.0.0.1' ? '127.0.0.1' : '';
+    const host = address && typeof address === 'object' && bindHost ? `${bindHost}:${address.port}` : '';
+    const localPeer = ['127.0.0.1', '::ffff:127.0.0.1', '::1'].includes(req.socket.remoteAddress);
     const browserOrigin = req.headers.origin;
-    return localReviewAccess === true && address?.address === '127.0.0.1' && localPeer && req.headers.host === host
+    return localReviewAccessEnabled === true && !!bindHost && localPeer && req.headers.host === host
       && req.headers['sec-fetch-site'] === 'same-origin'
       && (req.method === 'GET' || req.method === 'HEAD' ? (!browserOrigin || browserOrigin === `http://${host}`) : browserOrigin === `http://${host}`);
   }
+  function localMetaSetupAccess(req, { allowMissingOrigin = false } = {}) {
+    const address = server.address();
+    const bindHost = address?.address === '::1' ? '[::1]' : address?.address === '127.0.0.1' ? '127.0.0.1' : '';
+    const host = address && typeof address === 'object' && bindHost ? `${bindHost}:${address.port}` : '';
+    const localPeer = ['127.0.0.1', '::ffff:127.0.0.1', '::1'].includes(req.socket.remoteAddress);
+    const expectedOrigin = `http://${host}`;
+    return !!bindHost && localPeer && req.headers.host === host
+      && req.headers['sec-fetch-site'] === 'same-origin'
+      && (req.headers.origin === expectedOrigin || (allowMissingOrigin && !req.headers.origin));
+  }
   function authorized(req) {
     if (localBrowserAccess(req)) return true;
-    const a = Buffer.from(typeof env.DEMO_ACCESS_CODE === 'string' ? env.DEMO_ACCESS_CODE : '');
+    const a = Buffer.from(typeof runtimeEnv.DEMO_ACCESS_CODE === 'string' ? runtimeEnv.DEMO_ACCESS_CODE : '');
     const b = Buffer.from(typeof req.headers['x-demo-access-code'] === 'string' ? req.headers['x-demo-access-code'] : '');
     return a.length > 0 && a.length === b.length && timingSafeEqual(a, b);
   }
   function sameOrigin(req) { return !req.headers.origin || [`http://${req.headers.host}`, `https://${req.headers.host}`].includes(req.headers.origin); }
-  const secrets = [env.DEMO_ACCESS_CODE, env.META_API_KEY, env.MODEL_API_KEY, env.CHRONOS_API_TOKEN, env.CHRONOS_API_BASE, env.CHRONOS_3D_ENDPOINT].filter(x => typeof x === 'string' && x.length > 0);
+  let secrets = [runtimeEnv.DEMO_ACCESS_CODE, runtimeEnv.META_API_KEY, runtimeEnv.MODEL_API_KEY, runtimeEnv.CHRONOS_API_TOKEN, runtimeEnv.CHRONOS_API_BASE, runtimeEnv.CHRONOS_3D_ENDPOINT].filter(x => typeof x === 'string' && x.length > 0);
+  function refreshSecrets() {
+    secrets = [runtimeEnv.DEMO_ACCESS_CODE, runtimeEnv.META_API_KEY, runtimeEnv.MODEL_API_KEY, runtimeEnv.CHRONOS_API_TOKEN, runtimeEnv.CHRONOS_API_BASE, runtimeEnv.CHRONOS_3D_ENDPOINT].filter(x => typeof x === 'string' && x.length > 0);
+  }
+  function localMetaSetupState(req) {
+    return { setupAvailable: localMetaSetupAccess(req, { allowMissingOrigin: req.method === 'GET' || req.method === 'HEAD' }), metaKeyConfigured: hasMetaKey(), metaKeyOverrideActive: localMetaKeyOverrideActive, replayOnly: replayOnly(), localReviewAccess: localBrowserAccess(req) };
+  }
+  function restoreEnvValue(name, value) {
+    if (value === undefined) delete runtimeEnv[name]; else runtimeEnv[name] = value;
+  }
+  async function createRunner(factoryName, options) {
+    if (typeof runnerFactories[factoryName] === 'function') return runnerFactories[factoryName]({ ...options, env: runtimeEnv });
+    if (factoryName === 'createDemoTranscriber') return createDemoTranscriber({ ...options, env: runtimeEnv });
+    const pipeline = await import('../src/demo/pipeline.js');
+    return pipeline[factoryName]({ ...options, env: runtimeEnv });
+  }
   function clean(value) {
     if (typeof value === 'string') return secrets.reduce((s, secret) => s.split(secret).join('[redacted]'), value);
     if (Array.isArray(value)) return value.map(clean);
@@ -389,6 +428,44 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       await ready;
       const url = new URL(req.url, 'http://localhost');
       const path = url.pathname;
+      if (path === '/api/local-meta-key' && (req.method === 'POST' || req.method === 'DELETE')) {
+        if (!localMetaSetupAccess(req)) return json(res, 403, { error: 'Local Meta key setup is unavailable.' });
+        if (activeJobs > 0 || voiceBusy) return json(res, 409, { error: 'Wait for active generation to finish before changing the Meta key.' });
+        if (req.method === 'POST') {
+          let body = '';
+          for await (const chunk of req) {
+            body += chunk;
+            if (Buffer.byteLength(body) > 4096) return json(res, 413, { error: 'Meta key request is too large.' });
+          }
+          let input;
+          try { input = JSON.parse(body); } catch { return json(res, 400, { error: 'Enter a valid Meta key.' }); }
+          const apiKey = typeof input?.apiKey === 'string' ? input.apiKey.trim() : '';
+          if (!input || Object.keys(input).some(key => key !== 'apiKey') || !apiKey || apiKey.length > 4096
+              || /[\u0000-\u001f\u007f]/.test(apiKey)) return json(res, 400, { error: 'Enter a valid Meta key.' });
+          if (activeJobs > 0 || voiceBusy) return json(res, 409, { error: 'Wait for active generation to finish before changing the Meta key.' });
+          const candidateEnv = { ...runtimeEnv, META_API_KEY: apiKey, DEMO_REPLAY_ONLY: 'false' };
+          delete candidateEnv.MODEL_API_KEY;
+          if (candidateEnv.DEMO_VOICE_ENABLED === undefined || !String(candidateEnv.DEMO_VOICE_ENABLED).trim()) candidateEnv.DEMO_VOICE_ENABLED = 'true';
+          try { validateStartupConfig({ env: candidateEnv, outputRoot: liveRoot }); }
+          catch { return json(res, 400, { error: 'Meta key configuration could not be applied.' }); }
+          restoreEnvValue('META_API_KEY', apiKey);
+          delete runtimeEnv.MODEL_API_KEY;
+          runtimeEnv.DEMO_REPLAY_ONLY = 'false';
+          if (candidateEnv.DEMO_VOICE_ENABLED !== runtimeEnv.DEMO_VOICE_ENABLED) runtimeEnv.DEMO_VOICE_ENABLED = candidateEnv.DEMO_VOICE_ENABLED;
+          localMetaKeyOverrideActive = true;
+          localReviewAccessEnabled = true;
+          refreshSecrets();
+        } else {
+          restoreEnvValue('META_API_KEY', bootMetaApiKey);
+          restoreEnvValue('MODEL_API_KEY', bootModelApiKey);
+          restoreEnvValue('DEMO_REPLAY_ONLY', bootReplayOnly);
+          restoreEnvValue('DEMO_VOICE_ENABLED', bootVoiceEnabled);
+          localMetaKeyOverrideActive = false;
+          localReviewAccessEnabled = bootLocalReviewAccess;
+          refreshSecrets();
+        }
+        return json(res, 200, localMetaSetupState(req));
+      }
       if (req.method === 'GET' && path === '/api/history') {
         if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.' });
         const records = new Map(store.list().map(record => [record.id, record]));
@@ -409,8 +486,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         res.setHeader('X-Content-Type-Options', 'nosniff');
         if (!expansionBudget.known(cookieId)) res.setHeader('Set-Cookie', `otherwise_session=${sessionId}; Path=/; HttpOnly; SameSite=Strict`);
         res.writeHead(200);
-        const replayOnly = env.DEMO_REPLAY_ONLY === 'true' || typeof env.DEMO_ACCESS_CODE !== 'string' || env.DEMO_ACCESS_CODE.length === 0;
-        return res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ status: 'ok', replayOnly, voiceEnabled, expansionLimit, expansionUsed: expansionBudget.usage(sessionId), ...(localBrowserAccess(req) ? { localReviewAccess: true } : {}) }));
+        return res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ status: 'ok', ...localMetaSetupState(req), voiceEnabled: voiceEnabled(), expansionLimit, expansionUsed: expansionBudget.usage(sessionId) }));
       }
       if ((req.method === 'GET' || req.method === 'HEAD') && path === '/runs') return json(res, 200, { runs: await listRuns() });
       if ((req.method === 'GET' || req.method === 'HEAD') && path.startsWith('/event-scenes/')) {
@@ -459,7 +535,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         const hasHero = item.branch.hero?.branchId === input.branchId && item.assets.includes('hero.png');
         if (req.method === 'GET') return json(res, 200, { status: hasHero || sceneRecord?.status === 'complete' ? 'missing' : 'missing-image' });
         if (!hasHero && sceneRecord?.status !== 'complete') return json(res, 200, { status: 'missing-image' });
-        if (await writableRootSharesPackage() || env.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled.' });
+        if (await writableRootSharesPackage() || runtimeEnv.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled.' });
         let imagePath, imageRoot;
         if (hasHero) {
           for (const candidate of [runsRoot, liveRoot]) {
@@ -479,10 +555,10 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         let t = now(), previous = (requests.get(ip) ?? []).filter(n => t - n < rateWindowMs);
         if (previous.length >= rateLimit) return json(res, 429, { status: 'retryable', error: 'Please try again shortly.' });
         let dailyCapUsd;
-        try { dailyCapUsd = configuredDailyCap({ env }); } catch { dailyCapUsd = NaN; }
+        try { dailyCapUsd = configuredDailyCap({ env: runtimeEnv }); } catch { dailyCapUsd = NaN; }
         if (!Number.isFinite(dailyCapUsd) || dailyCapUsd <= 0) return json(res, 503, { error: 'Cutout generation is unavailable.' });
         let runner;
-        try { runner = segmentEventCutout ?? await import('../src/demo/pipeline.js').then(m => m.createDemoEventCutoutRunner({ env, dailyCapUsd, outputRoot: liveRoot })); }
+        try { runner = segmentEventCutout ?? await createRunner('createDemoEventCutoutRunner', { dailyCapUsd, outputRoot: liveRoot }); }
         catch { return json(res, 503, { error: 'Cutout generation is unavailable.' }); }
         if (typeof runner !== 'function' || runner.enforcesDailyCap !== true) return json(res, 503, { error: 'Cutout generation is unavailable.' });
         const latest = cutouts.get(input.runId, input.branchId);
@@ -536,7 +612,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           return json(res, 200, { status: existing.status === 'in-progress' && !activeScenes.has(scenes.keyFor(input.runId, input.branchId)) ? 'uncertain' : existing.status });
         }
         if (req.method === 'GET') return json(res, 200, { status: 'missing' });
-        if (await writableRootSharesPackage() || env.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled.' });
+        if (await writableRootSharesPackage() || runtimeEnv.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled.' });
         let context;
         try { context = continuationFor(item, input.branchId, await savedParentRecord(item, input.branchId), 100); }
         catch { return json(res, 400, { error: 'This saved event cannot be illustrated.' }); }
@@ -548,10 +624,10 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         let t = now(), previous = (requests.get(ip) ?? []).filter(n => t - n < rateWindowMs);
         if (previous.length >= rateLimit) return json(res, 429, { status: 'retryable', error: 'Please try again shortly.' });
         let dailyCapUsd;
-        try { dailyCapUsd = configuredDailyCap({ env }); } catch { dailyCapUsd = NaN; }
+        try { dailyCapUsd = configuredDailyCap({ env: runtimeEnv }); } catch { dailyCapUsd = NaN; }
         if (!Number.isFinite(dailyCapUsd) || dailyCapUsd <= 0) return json(res, 503, { error: 'Scene generation is unavailable.' });
         let runner;
-        try { runner = renderEventScene ?? await import('../src/demo/pipeline.js').then(m => m.createDemoEventSceneRunner({ env, dailyCapUsd, outputRoot: liveRoot })); }
+        try { runner = renderEventScene ?? await createRunner('createDemoEventSceneRunner', { dailyCapUsd, outputRoot: liveRoot }); }
         catch { return json(res, 503, { error: 'Scene generation is unavailable.' }); }
         if (typeof runner !== 'function' || runner.enforcesDailyCap !== true) return json(res, 503, { error: 'Scene generation is unavailable.' });
         const latest = scenes.get(input.runId, input.branchId);
@@ -610,7 +686,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         return json(res, 404, { error: 'Not found' });
       }
       if (req.method === 'POST' && path === '/api/transcribe') {
-        if (!voiceEnabled) return json(res, 503, { error: 'Voice input is unavailable.' });
+        if (!voiceEnabled()) return json(res, 503, { error: 'Voice input is unavailable.' });
         if (!authorized(req)) return json(res, 403, { error: 'Voice input needs an access code.' });
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}` && req.headers.origin !== `https://${req.headers.host}`) return json(res, 403, { error: 'Voice input is unavailable.' });
         const t = now();
@@ -646,7 +722,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           chunks = [];
           if (!audio) return json(res, 413, { error: 'Audio is too large. Keep it under 30 seconds.' });
           try { validateVoiceWav(audio); } catch { return json(res, 400, { error: 'Use a mono PCM WAV recording of at most 30 seconds.' }); }
-          const runner = transcribeAudio ?? createDemoTranscriber({ env, outputRoot: liveRoot });
+          const runner = transcribeAudio ?? await createRunner('createDemoTranscriber', { outputRoot: liveRoot });
           if (typeof runner !== 'function' || runner.enforcesDailyCap !== true) return json(res, 503, { error: 'Voice input is unavailable.' });
           const result = await Promise.race([runner({ audio, signal: controller.signal, timeoutMs: voiceTimeoutMs }), stopped]);
           if (typeof result?.transcript !== 'string') throw new Error('Invalid transcript');
@@ -657,7 +733,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       }
       if (req.method === 'POST' && (path === '/api/run' || path === '/api/continue')) {
         const continuing = path === '/api/continue';
-        if (!continuing && env.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled. Use replay mode.' });
+        if (!continuing && runtimeEnv.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled. Use replay mode.' });
         if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'Live generation is unavailable. Use replay mode.' });
         const ip = req.socket.remoteAddress ?? 'unknown';
         let t = now(), previous = (requests.get(ip) ?? []).filter(n => t - n < rateWindowMs);
@@ -714,13 +790,13 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
             } catch (error) { return json(res, 400, { error: error.message }); }
           }
         }
-        if (await writableRootSharesPackage() || env.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled. Use replay mode.' });
+        if (await writableRootSharesPackage() || runtimeEnv.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled. Use replay mode.' });
         if (continuing && !keywordCheck(divergence).allowed) return json(res, 400, { error: 'The saved branch cannot pass the topic policy.' });
         let dailyCapUsd;
-        try { dailyCapUsd = configuredDailyCap({ env }); } catch { dailyCapUsd = NaN; }
+        try { dailyCapUsd = configuredDailyCap({ env: runtimeEnv }); } catch { dailyCapUsd = NaN; }
         if (!Number.isFinite(dailyCapUsd) || dailyCapUsd <= 0) return json(res, 503, { error: 'Live generation is unavailable. Use replay mode.' });
         let runner;
-        try { runner = runPipeline ?? await import('../src/demo/pipeline.js').then(m => m.createDemoRunner({ env, dailyCapUsd, outputRoot: liveRoot })); }
+        try { runner = runPipeline ?? await createRunner('createDemoRunner', { dailyCapUsd, outputRoot: liveRoot }); }
         catch { return json(res, 503, { error: 'Live generation is unavailable. Use replay mode.' }); }
         if (typeof runner !== 'function' || runner.enforcesDailyCap !== true) return json(res, 503, { error: 'Live generation is unavailable. Use replay mode.' });
         if (continuing) {
@@ -848,7 +924,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
 export function createConfiguredDemoServer({ env = process.env, outputRoot, host = env.HOST || '127.0.0.1', ...options } = {}) {
   const requestedOutputRoot = outputRoot ?? (typeof env.DEMO_LIVE_RUNS_DIR === 'string' && env.DEMO_LIVE_RUNS_DIR.trim() ? env.DEMO_LIVE_RUNS_DIR.trim() : undefined);
   const status = validateStartupConfig({ env, outputRoot: requestedOutputRoot ?? 'out' });
-  const selectedOutputRoot = requestedOutputRoot ?? (status.replayOnly ? 'demo/replay-history' : 'out');
+  const selectedOutputRoot = requestedOutputRoot ?? 'out';
   const normalizedHost = host === 'localhost' ? '127.0.0.1' : host;
   const isLoopback = normalizedHost === '127.0.0.1';
   const effectiveEnv = { ...env };
