@@ -27,8 +27,25 @@ test('Atlas route bounds and edge presentation remain complete', () => {
     'the dashed proposed and question edges retain distance updates');
   assert.match(scene, /worldRadiusForScreenPixels\([^;]*44\)/,
     'node selection retains its existing 44px hit target');
-  assert.match(scene, /ensureGoldEdgeCapacity\(Math\.ceil\(goldPositions\.length \/ 6\)\)/,
-    'exact lineage corners do not get truncated by the old fixed segment capacity');
+  assert.match(scene, /ensureGoldEdgeCapacity\(bucketIndex, goldSegmentCounts\[bucketIndex\] \+ 1\)/,
+    'exact lineage corners grow their opacity bucket instead of truncating at fixed capacity');
+});
+
+test('transition edge opacity is stored per rendered edge while retaining gold and dashed styles', () => {
+  assert.match(scene, /vertexColors: true/,
+    'the pinned Three r183 Line materials accept per-vertex RGBA edge opacity');
+  assert.doesNotMatch(scene, /edgeOpacity\[kind\]\s*=\s*Math\.max/,
+    'one Orbit edge no longer raises opacity for every Atlas edge in the same style group');
+  assert.match(scene, /function writeEdgeBuffer\(line, positions, opacities\)[\s\S]*new THREE\.BufferAttribute\(new Float32Array\(vertexCount \* 4\), 4\)[\s\S]*colors\[vertex \* 4 \+ 3\] = Number\(opacities\[vertex\]\)/,
+    'each route vertex carries its own opacity rather than inheriting its style bucket maximum');
+  assert.match(scene, /edgeVertexOpacity\[kind\]\.push\(alpha, alpha\)/,
+    'each segment endpoint receives the owning edge opacity');
+  assert.match(scene, /goldOpacityLevels\.findIndex\(level => Math\.abs\(level - alpha\) < 1e-7\)[\s\S]*mesh\.material\.opacity = goldOpacityLevels\[bucketIndex\] \|\| 0/,
+    'thick gold lineage ribbons retain per-edge opacity without a custom shader');
+  assert.match(scene, /const GOLD_OPACITY_BUCKET_COUNT = 8[\s\S]*goldOpacityLevels\.reduce\(/,
+    'gold segments use a bounded number of exact alpha groups instead of one global maximum');
+  assert.match(scene, /threads\.computeLineDistances\(\); questionThreads\.computeLineDistances\(\)/,
+    'dashed route lengths still update after variable-opacity geometry writes');
 });
 
 test('axis changes suppress routed Atlas threads but retain non-Atlas threads and overlay context', () => {

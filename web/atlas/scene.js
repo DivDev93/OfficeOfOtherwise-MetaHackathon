@@ -370,29 +370,44 @@ export function createAtlasScene(container, {
   lodPoints.frustumCulled = false; atlasGroup.add(lodPoints);
 
   const threadGeometry = new THREE.BufferGeometry();
-  const threadMaterial = new THREE.LineDashedMaterial({ color: '#57c9e7', dashSize: 0.075, gapSize: 0.055, transparent: true, opacity: 0.8 });
+  const threadMaterial = new THREE.LineDashedMaterial({ color: '#57c9e7', dashSize: 0.075, gapSize: 0.055, transparent: true, opacity: 0.8, vertexColors: true });
   const threads = new THREE.LineSegments(threadGeometry, threadMaterial);
   threads.frustumCulled = false; atlasGroup.add(threads);
-  const hoverThreads = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#a4e8f5', transparent: true, opacity: 0.95, depthWrite: false }));
+  const hoverThreads = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#a4e8f5', transparent: true, opacity: 0.95, depthWrite: false, vertexColors: true }));
   hoverThreads.name = 'Hovered exploration path'; hoverThreads.frustumCulled = false; atlasGroup.add(hoverThreads);
-  const lineageThreads = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#d5a85c', transparent: true, opacity: 0.9, depthWrite: false }));
+  const lineageThreads = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#d5a85c', transparent: true, opacity: 0.9, depthWrite: false, vertexColors: true }));
   lineageThreads.name = 'Gold current lineage edges'; lineageThreads.frustumCulled = false; atlasGroup.add(lineageThreads);
   const goldEdgeGeometry = new THREE.CylinderGeometry(1, 1, 1, 6, 1, false);
-  const goldEdgeMaterial = new THREE.MeshBasicMaterial({ color: '#d5a85c', transparent: true, opacity: 0.9, depthWrite: false });
-  let goldEdgeCapacity = INITIAL_GOLD_EDGE_SEGMENTS;
-  let goldEdgeMeshes = new THREE.InstancedMesh(goldEdgeGeometry, goldEdgeMaterial, goldEdgeCapacity);
-  goldEdgeMeshes.name = 'Thick continuous gold lineage ribbons'; goldEdgeMeshes.count = 0;
-  goldEdgeMeshes.instanceMatrix.setUsage(THREE.DynamicDrawUsage); goldEdgeMeshes.frustumCulled = false; atlasGroup.add(goldEdgeMeshes);
-  function ensureGoldEdgeCapacity(required) {
-    if (required <= goldEdgeCapacity) return;
-    const previous = goldEdgeMeshes;
-    goldEdgeCapacity = 2 ** Math.ceil(Math.log2(required));
-    goldEdgeMeshes = new THREE.InstancedMesh(goldEdgeGeometry, goldEdgeMaterial, goldEdgeCapacity);
-    goldEdgeMeshes.name = previous.name; goldEdgeMeshes.count = 0;
-    goldEdgeMeshes.instanceMatrix.setUsage(THREE.DynamicDrawUsage); goldEdgeMeshes.frustumCulled = false;
-    atlasGroup.remove(previous); previous.dispose?.(); atlasGroup.add(goldEdgeMeshes);
+  const GOLD_OPACITY_BUCKET_COUNT = 8;
+  const goldEdgeCapacities = [];
+  function makeGoldEdgeMesh(capacity) {
+    const geometry = goldEdgeGeometry.clone();
+    const material = new THREE.MeshBasicMaterial({ color: '#d5a85c', transparent: true, opacity: 0, depthWrite: false });
+    const mesh = new THREE.InstancedMesh(geometry, material, capacity);
+    mesh.name = 'Thick continuous gold lineage ribbons'; mesh.count = 0;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); mesh.frustumCulled = false;
+    atlasGroup.add(mesh);
+    return mesh;
   }
-  const questionThreads = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineDashedMaterial({ color: '#eadfca', dashSize: 0.09, gapSize: 0.055, transparent: true, opacity: 0.84, depthWrite: false }));
+  const goldEdgeMeshes = [];
+  function ensureGoldEdgeCapacity(bucketIndex, required) {
+    while (goldEdgeMeshes.length <= bucketIndex && goldEdgeMeshes.length < GOLD_OPACITY_BUCKET_COUNT) {
+      goldEdgeCapacities.push(INITIAL_GOLD_EDGE_SEGMENTS);
+      goldEdgeMeshes.push(makeGoldEdgeMesh(INITIAL_GOLD_EDGE_SEGMENTS));
+    }
+    if (!goldEdgeMeshes[bucketIndex]) return;
+    if (required <= goldEdgeCapacities[bucketIndex]) return;
+    const previous = goldEdgeMeshes[bucketIndex];
+    goldEdgeCapacities[bucketIndex] = 2 ** Math.ceil(Math.log2(required));
+    goldEdgeMeshes[bucketIndex] = makeGoldEdgeMesh(goldEdgeCapacities[bucketIndex]);
+    const next = goldEdgeMeshes[bucketIndex];
+    atlasGroup.remove(previous); previous.geometry.dispose(); previous.material.dispose(); previous.dispose?.();
+    return next;
+  }
+  function renderedGoldEdgeSegmentCount() {
+    return goldEdgeMeshes.reduce((sum, mesh) => sum + mesh.count, 0);
+  }
+  const questionThreads = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineDashedMaterial({ color: '#eadfca', dashSize: 0.09, gapSize: 0.055, transparent: true, opacity: 0.84, depthWrite: false, vertexColors: true }));
   questionThreads.name = 'Parchment authored question edges'; questionThreads.frustumCulled = false; atlasGroup.add(questionThreads);
 
   const registry = createWorldRegistry();
@@ -877,6 +892,22 @@ export function createAtlasScene(container, {
     line.geometry.computeBoundingSphere();
   }
 
+  function writeEdgeBuffer(line, positions, opacities) {
+    writePositionBuffer(line, positions);
+    const vertexCount = positions.length / 3;
+    let colorAttribute = line.geometry.attributes.color;
+    if (!colorAttribute || colorAttribute.itemSize !== 4 || colorAttribute.count !== vertexCount) {
+      colorAttribute = new THREE.BufferAttribute(new Float32Array(vertexCount * 4), 4);
+      line.geometry.setAttribute('color', colorAttribute);
+    }
+    const colors = colorAttribute.array;
+    for (let vertex = 0; vertex < vertexCount; vertex++) {
+      colors[vertex * 4] = 1; colors[vertex * 4 + 1] = 1; colors[vertex * 4 + 2] = 1;
+      colors[vertex * 4 + 3] = Number(opacities[vertex]) || 0;
+    }
+    colorAttribute.needsUpdate = true;
+  }
+
 
   function applyZoom(value, announce = true, timestamp = performance.now()) {
     zoom = clamp(Number(value) || 0, 0, 1);
@@ -1261,7 +1292,8 @@ export function createAtlasScene(container, {
       else if (!activeLabelIds.has(id)) element.style.display = 'none';
     }
     const edgePositions = { lineage: [], proposed: [], question: [], hover: [] };
-    const edgeOpacity = { lineage: 0, proposed: 0, question: 0, hover: 0 };
+    const edgeVertexOpacity = { lineage: [], proposed: [], question: [], hover: [] };
+    const edgeSegmentOpacity = { lineage: [], proposed: [], question: [], hover: [] };
     const allClusteredIds = new Set(orbitClusteredIdsForPresentation(clusterPlan, { atlas: state.atlas, zoom, orbitNeighborhoodIds }));
     const visibleAtlasIds = new Set(entries.filter(entry => !folded.has(entry.id) && !allClusteredIds.has(entry.id)).map(entry => entry.id));
     const lineageIds = new Set(atlasTimeline?.lineageIds || []);
@@ -1288,7 +1320,6 @@ export function createAtlasScene(container, {
         : state.atlas > 0.05 && hoverPathIds.has(parent.id) && hoverPathIds.has(child.id) ? 'hover'
         : (isQuestionAttachment || child.world.proposed === false || child.world.questionId !== parent.world.questionId || /question|chronos|time.?token/i.test(`${child.world.kind || ''} ${child.world.type || ''} ${child.world.tokenType || ''}`)) ? 'question'
           : 'proposed';
-      edgeOpacity[kind] = Math.max(edgeOpacity[kind], alpha);
       const edgeState = suppressAtlasThreads ? { ...state, atlas:0 } : state;
       const fromRadius = parent.id === currentId ? surfaceEarthRadius(edgeState) : markerRadius;
       const from = worldPosition(parent, edgeState, timestamp, fromRadius);
@@ -1323,6 +1354,8 @@ export function createAtlasScene(container, {
       for (let step = 0; step < segments; step++) {
         const a = arcPoints[step], b = arcPoints[step + 1];
         values.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        edgeVertexOpacity[kind].push(alpha, alpha);
+        edgeSegmentOpacity[kind].push(alpha);
       }
     }
     const rootConnections = state.atlas > 0.015 && !suppressAtlasThreads
@@ -1338,8 +1371,9 @@ export function createAtlasScene(container, {
         const rootPoint = new THREE.Vector3(rootOrbit.x, rootOrbit.y, rootOrbit.z || 0).multiplyScalar(state.lift);
         if (!suppressAtlasThreads) rootPoint.lerp(atlasPosition(root, timestamp), state.atlas);
         edgePositions.question.push(parentPoint.x, parentPoint.y, parentPoint.z, rootPoint.x, rootPoint.y, rootPoint.z);
+        edgeVertexOpacity.question.push(state.orbit, state.orbit);
+        edgeSegmentOpacity.question.push(state.orbit);
       }
-      edgeOpacity.question = Math.max(edgeOpacity.question, state.orbit);
     }
     for (const connection of rootConnections) {
       const root = entryById.get(connection.worldId);
@@ -1366,46 +1400,59 @@ export function createAtlasScene(container, {
         : hoverPathIds.has(connection.worldId) ? 'hover'
           : connection.color === 'question' ? 'question' : 'proposed';
       const values = edgePositions[kind];
+      const alpha = state.atlas;
       for (let index = 0; index < route.length - 1; index++) {
         const a = route[index], b = route[index + 1];
         values.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        edgeVertexOpacity[kind].push(alpha, alpha);
+        edgeSegmentOpacity[kind].push(alpha);
       }
-      edgeOpacity[kind] = Math.max(edgeOpacity[kind], state.atlas);
     }
-    writePositionBuffer(threads, new Float32Array(edgePositions.proposed));
-    writePositionBuffer(hoverThreads, new Float32Array(edgePositions.hover));
-    writePositionBuffer(lineageThreads, new Float32Array(edgePositions.lineage));
-    writePositionBuffer(questionThreads, new Float32Array(edgePositions.question));
+    writeEdgeBuffer(threads, new Float32Array(edgePositions.proposed), edgeVertexOpacity.proposed);
+    writeEdgeBuffer(hoverThreads, new Float32Array(edgePositions.hover), edgeVertexOpacity.hover);
+    writeEdgeBuffer(lineageThreads, new Float32Array(edgePositions.lineage), edgeVertexOpacity.lineage);
+    writeEdgeBuffer(questionThreads, new Float32Array(edgePositions.question), edgeVertexOpacity.question);
     camera.updateMatrixWorld(true);
     camera.getWorldPosition(goldCameraWorldPosition);
-    let goldSegmentCount = 0;
+    const goldSegmentCounts = Array(GOLD_OPACITY_BUCKET_COUNT).fill(0);
+    const goldOpacityLevels = [];
     const goldPositions = edgePositions.lineage;
-    ensureGoldEdgeCapacity(Math.ceil(goldPositions.length / 6));
-    if (edgeOpacity.lineage > 0.015) {
-      for (let offset = 0; offset + 5 < goldPositions.length; offset += 6) {
-        goldSegmentStart.fromArray(goldPositions, offset);
-        goldSegmentEnd.fromArray(goldPositions, offset + 3);
-        goldSegmentDirection.subVectors(goldSegmentEnd, goldSegmentStart);
-        const length = goldSegmentDirection.length();
-        if (length < 1e-5) continue;
-        goldSegmentWorldMidpoint.copy(goldSegmentStart).add(goldSegmentEnd).multiplyScalar(0.5).applyMatrix4(atlasGroup.matrixWorld);
-        const distance = goldSegmentWorldMidpoint.distanceTo(goldCameraWorldPosition);
-        const radius = worldRadiusForScreenPixels(distance, camera.fov, Math.max(1, renderer.domElement.clientHeight), 2.5);
-        dummy.position.copy(goldSegmentStart).add(goldSegmentEnd).multiplyScalar(0.5);
-        dummy.quaternion.setFromUnitVectors(goldCylinderUp, goldSegmentDirection.multiplyScalar(1 / length));
-        dummy.scale.set(radius, length, radius);
-        dummy.updateMatrix(); goldEdgeMeshes.setMatrixAt(goldSegmentCount++, dummy.matrix);
+    for (let offset = 0, segmentIndex = 0; offset + 5 < goldPositions.length; offset += 6, segmentIndex++) {
+      const alpha = edgeSegmentOpacity.lineage[segmentIndex] || 0;
+      if (alpha <= 0.015) continue;
+      let bucketIndex = goldOpacityLevels.findIndex(level => Math.abs(level - alpha) < 1e-7);
+      if (bucketIndex < 0) {
+        bucketIndex = goldOpacityLevels.length;
+        if (bucketIndex >= GOLD_OPACITY_BUCKET_COUNT) {
+          bucketIndex = goldOpacityLevels.reduce((nearest, level, index) => Math.abs(level - alpha) < Math.abs(goldOpacityLevels[nearest] - alpha) ? index : nearest, 0);
+        } else goldOpacityLevels.push(alpha);
       }
+      ensureGoldEdgeCapacity(bucketIndex, goldSegmentCounts[bucketIndex] + 1);
+      goldSegmentStart.fromArray(goldPositions, offset);
+      goldSegmentEnd.fromArray(goldPositions, offset + 3);
+      goldSegmentDirection.subVectors(goldSegmentEnd, goldSegmentStart);
+      const length = goldSegmentDirection.length();
+      if (length < 1e-5) continue;
+      goldSegmentWorldMidpoint.copy(goldSegmentStart).add(goldSegmentEnd).multiplyScalar(0.5).applyMatrix4(atlasGroup.matrixWorld);
+      const distance = goldSegmentWorldMidpoint.distanceTo(goldCameraWorldPosition);
+      const radius = worldRadiusForScreenPixels(distance, camera.fov, Math.max(1, renderer.domElement.clientHeight), 2.5);
+      dummy.position.copy(goldSegmentStart).add(goldSegmentEnd).multiplyScalar(0.5);
+      dummy.quaternion.setFromUnitVectors(goldCylinderUp, goldSegmentDirection.multiplyScalar(1 / length));
+      dummy.scale.set(radius, length, radius);
+      dummy.updateMatrix(); goldEdgeMeshes[bucketIndex].setMatrixAt(goldSegmentCounts[bucketIndex]++, dummy.matrix);
     }
-    goldEdgeMeshes.count = goldSegmentCount;
-    goldEdgeMeshes.instanceMatrix.needsUpdate = true;
-    goldEdgeMeshes.material.opacity = edgeOpacity.lineage;
+    for (let bucketIndex = 0; bucketIndex < goldEdgeMeshes.length; bucketIndex++) {
+      const mesh = goldEdgeMeshes[bucketIndex];
+      mesh.count = goldSegmentCounts[bucketIndex];
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.material.opacity = goldOpacityLevels[bucketIndex] || 0;
+    }
     lineageThreads.visible = false;
     threads.computeLineDistances(); questionThreads.computeLineDistances();
-    threads.material.opacity = (0.82 - 0.5 * state.atlas) * edgeOpacity.proposed;
-    hoverThreads.material.opacity = 0.95 * edgeOpacity.hover;
-    lineageThreads.material.opacity = 0.9 * edgeOpacity.lineage;
-    questionThreads.material.opacity = (0.84 - 0.5 * state.atlas) * edgeOpacity.question;
+    threads.material.opacity = 0.82 - 0.5 * state.atlas;
+    hoverThreads.material.opacity = 0.95;
+    lineageThreads.material.opacity = 0.9;
+    questionThreads.material.opacity = 0.84 - 0.5 * state.atlas;
     lodPoints.material.opacity = 0.92;
     lodPointMaterial.size = 4.2 + 8.8 * state.atlas;
     instancedPins.material.transparent = true;
@@ -1556,7 +1603,7 @@ export function createAtlasScene(container, {
       sceneCount, cameraCount, rendererCount: renderer.isWebGLRenderer ? 1 : 0,
       meshCount, pointCloudCount, lineCount, worldCount: entries.length,
       ...sphereCounts, ...textureMetadata, presentEarthReferenceCount,
-      goldEdgeSegments: goldEdgeMeshes.count,
+      goldEdgeSegments: renderedGoldEdgeSegmentCount(),
       lineageWorldIds: [...(atlasTimeline?.lineageIds || [])],
     };
   }
@@ -1919,11 +1966,11 @@ export function createAtlasScene(container, {
     container.dataset.realWorldSpheres = String(sphereCount);
     renderer.domElement.dataset.currentWorldId = currentId || '';
     renderer.domElement.dataset.travelState = String(Boolean(travelState));
-    renderer.domElement.dataset.goldEdgeSegments = String(goldEdgeMeshes.count);
+    renderer.domElement.dataset.goldEdgeSegments = String(renderedGoldEdgeSegmentCount());
     renderer.domElement.dataset.lineageWorldIds = JSON.stringify(atlasTimeline?.lineageIds || []);
     container.dataset.currentWorldId = currentId || '';
     container.dataset.travelState = String(Boolean(travelState));
-    container.dataset.goldEdgeSegments = String(goldEdgeMeshes.count);
+    container.dataset.goldEdgeSegments = String(renderedGoldEdgeSegmentCount());
     container.dataset.lineageWorldIds = JSON.stringify(atlasTimeline?.lineageIds || []);
     if (travelState) {
       const stateNow = travelSample(timestamp);
@@ -2012,6 +2059,7 @@ export function createAtlasScene(container, {
         for (const material of materials) { material?.map?.dispose?.(); material?.dispose?.(); }
       });
       auxiliaryLabels.clear(); labelOverlay.remove();
+      goldEdgeGeometry.dispose();
       unenteredOutlineTexture.dispose(); currentEarthTexture.dispose(); miniEarthTexture.dispose(); earthTexture.dispose(); renderer.dispose(); renderer.domElement.remove();
     },
   };
