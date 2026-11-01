@@ -225,3 +225,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Restore saved replay histories alongside live continuations, preserving branch identity, ancestry, and read-only package data. | |
 | 2026-11-01 | Restore bounded source retrieval and evidence-linked briefs, preserving complete quoted units and uncertainty. | |
 | 2026-11-01 | Continue unsupported or ungrounded topics as explicitly unsourced speculation, without invented citations or additional proposal calls. | |
+| 2026-11-01 | Resolve run manifests and assets through the same valid source, so metadata-only live continuation records do not hide packaged files and real live collisions stay consistent. | |

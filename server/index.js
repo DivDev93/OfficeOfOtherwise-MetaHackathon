@@ -282,17 +282,29 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     }
     return result.sort((a, b) => a.id.localeCompare(b.id));
   }
-  async function manifest(id) {
+  async function runSource(id) {
     const roots = [liveRoots.get(id), packagedIds.has(id) ? packagedRoot : null, runsRoot].filter(Boolean);
-    for (const candidate of roots) {
+    for (const candidate of [...new Set(roots)]) {
       try {
         const actualRoot = await realpath(candidate);
         const runDir = await realpath(join(candidate, id));
         const separator = actualRoot.includes('\\') ? '\\' : '/';
         if (!runDir.startsWith(actualRoot + separator)) continue;
-        const branchPath = await realpath(join(runDir, 'branch.json'));
-        if (!branchPath.startsWith(runDir + separator)) continue;
-        const branch = JSON.parse(await readFile(branchPath, 'utf8'));
+        let branch = null;
+        try {
+          const branchPath = await realpath(join(runDir, 'branch.json'));
+          if (branchPath.startsWith(runDir + separator)) branch = JSON.parse(await readFile(branchPath, 'utf8'));
+        } catch { /* active runs can expose assets before branch completion */ }
+        return { root: candidate, runDir, branch, separator };
+      } catch { /* try the next registered source */ }
+    }
+    return null;
+  }
+  async function manifest(id) {
+    const source = await runSource(id);
+    if (!source?.branch) return null;
+    const { runDir, branch, separator } = source;
+    try {
         const present = [];
         for (const name of assets) {
           try {
@@ -333,9 +345,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         const continuation = { rootRunId: saved?.continuation?.rootRunId ?? id, path: [], ...(saved?.continuation ?? {}), children };
         const selectedHero = Array.isArray(branch.branches) ? branch.branches.find(item => item.id === branch.hero?.branchId) : null;
         return { id, title: value(branch.hero?.title) || value(selectedHero?.title) || value(branch.title) || value(branch.divergence) || id, divergence: value(branch.divergence), ...rendering, status: provisional?.status ?? rendering.status ?? (value(branch.status) || 'unknown'), ...((provisional?.reason ?? rendering.reason) ? { reason: provisional?.reason ?? rendering.reason } : {}), hasModel: present.includes('model.glb') || present.includes('model.meshopt.glb'), assets: present, assetUrls, branch, continuation, ...(saved?.questionAttachment ? { questionAttachment: saved.questionAttachment } : {}) };
-      } catch { /* no valid manifest in this root */ }
-    }
-    return null;
+    } catch { /* selected run metadata could not be read */ }
   }
   const ready = (async () => {
     // Only discover direct, safe-ID directories in the fixed packaged fixture;
@@ -584,12 +594,8 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           return data ? json(res, 200, data) : json(res, 404, { error: 'Not found' });
         }
         if (segments.length !== 4 || !safeId(segments[2]) || !assets.has(segments[3])) return json(res, 404, { error: 'Not found' });
-        const registeredRoot = liveRoots.get(segments[2]);
-        if (registeredRoot) return file(res, join(registeredRoot, segments[2], segments[3]), req.method, registeredRoot);
-        const packagedAsset = packagedIds.has(segments[2]) && packagedRoot ? join(packagedRoot, segments[2], segments[3]) : null;
-        if (packagedAsset && await stat(packagedAsset).then(s => s.isFile()).catch(() => false)) return file(res, packagedAsset, req.method, packagedRoot);
-        const cached = join(runsRoot, segments[2], segments[3]);
-        if (await stat(cached).then(s => s.isFile()).catch(() => false)) return file(res, cached, req.method, runsRoot);
+        const source = await runSource(segments[2]);
+        if (source) return file(res, join(source.runDir, segments[3]), req.method, source.root);
         return json(res, 404, { error: 'Not found' });
       }
       if (req.method === 'POST' && path === '/api/transcribe') {

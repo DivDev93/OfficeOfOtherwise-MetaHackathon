@@ -13,7 +13,7 @@ const chain = [
   ['1fc70744-d82b-4364-8b78-c79544a4f7d6', 'b1', 1538],
 ];
 
-async function startReplay(t, { packagedFallback = false, liveCollision = false, liveChildCollision = false, packageRootIsLiveRoot = false } = {}) {
+async function startReplay(t, { packagedFallback = false, liveCollision = false, liveChildCollision = false, liveParentMetadata = false, packageRootIsLiveRoot = false } = {}) {
   const outputRoot = await mkdtemp(join(tmpdir(), 'office-replay-history-'));
   const liveRunsDir = join(outputRoot, packagedFallback ? 'live-output' : 'replay-history');
   if (packagedFallback) await mkdir(liveRunsDir);
@@ -33,6 +33,12 @@ async function startReplay(t, { packagedFallback = false, liveCollision = false,
       id: chain[0][0], status: 'complete', rootDivergence: 'An unrelated saved scenario.',
       continuation: { rootRunId: 'unrelated', parentRunId: 'unrelated', parentBranchId: 'other', path: [] },
       completion: { runId: chain[0][0], branch: { status: 'ok', divergence: 'An unrelated saved scenario.', branches: [], hero: { title: 'Unrelated child' } } },
+    });
+  }
+  if (liveParentMetadata) {
+    createContinuationStore(liveRunsDir).save({
+      id: 'beringia', status: 'complete', rootDivergence: 'Metadata-only parent record.',
+      completion: { runId: 'beringia', branch: { status: 'ok', divergence: 'Metadata-only parent record.', branches: [] } },
     });
   }
   const { server, replayOnly } = createConfiguredDemoServer({
@@ -65,6 +71,14 @@ test('packaged saved history remains visible beside a separate writable live roo
     'serving packaged history does not rewrite or copy its records');
 });
 
+test('metadata-only live parent uses one packaged source for its manifest and branch asset', async t => {
+  const { base } = await startReplay(t, { packagedFallback: true, liveParentMetadata: true });
+  const manifest = await (await fetch(`${base}/runs/beringia`)).json();
+  const response = await fetch(`${base}/runs/beringia/branch.json`);
+  assert.equal(response.status, 200, 'a live continuation record without a run directory does not mask the packaged artifact');
+  assert.deepEqual(await response.json(), manifest.branch, 'asset and manifest resolve from the same canonical run source');
+});
+
 test('an explicitly registered live record takes precedence over the packaged replay record', async t => {
   const { base } = await startReplay(t, { packagedFallback: true, liveCollision: true });
   const runId = chain[0][0];
@@ -73,6 +87,8 @@ test('an explicitly registered live record takes precedence over the packaged re
   assert.equal(manifest.divergence, 'Live saved astronomy replay');
   assert.equal(manifest.continuation.path.length, 0);
   assert.equal(manifest.continuation.children.length, 0, 'stale packaged edges are filtered when the same branch ID has changed meaning');
+  const liveBranch = await (await fetch(`${base}/runs/${runId}/branch.json`)).json();
+  assert.deepEqual(liveBranch, manifest.branch, 'a real live collision wins for both metadata and assets');
   const cookie = (await fetch(`${base}/health`)).headers.get('set-cookie')?.split(';')[0];
   const response = await fetch(`${base}/api/continue`, { method: 'POST',
     headers: { 'x-demo-access-code': 'local-replay-code', 'content-type': 'application/json', cookie },
