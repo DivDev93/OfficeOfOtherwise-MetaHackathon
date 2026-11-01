@@ -22,4 +22,6 @@ At 375px, the Other questions control was checked against saved data: opening it
 
 `lift-slide-1440.png` and `lift-slide-375.png` capture the later slide treatment at 30% zoom. On desktop, the local computed widths for both the rail and tree remained 320px while the tree translated left; this check does not prove every transition frame or viewport.
 
+`lift-title-clear-375.png` captures the saved story at 30% zoom after reserving the visible details sheet as a label obstacle. At 40%, the local replay continued to show other Atlas labels outside the sheet.
+
 In the recorded local replay at 1440×900, successive 120-pixel wheel inputs reached 10, 19, 29, 38, 48, 57 (Orbit), 67, 76, 86, 95 and 100 (Atlas). The reverse pass reached 90, 81, 71, 62, 57 (Orbit), 47, 38, 28, 19, 9 and 0 (Surface). Both passes left the Orbit stop on the next input.

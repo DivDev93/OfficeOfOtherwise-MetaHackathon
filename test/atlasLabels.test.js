@@ -110,6 +110,28 @@ test('crowded direct-child labels use compact collision-free edge slots', () => 
   }
 });
 
+test('labels avoid only the visible fading story sheet and preserve labels in clear canvas space', () => {
+  const bounds = { left:0, top:0, right:375, bottom:812 };
+  // At 375x812, the phone Lift sheet is about 260px high and sits 10px above
+  // the bottom edge, so its top is approximately y=542.
+  const fadingSheet = { x:187.5, y:672, width:357, height:260 };
+  const labels = [
+    { id:'under-sheet', text:'Canopy Walkway · 1978', x:187.5, y:610, width:180, height:20, priority:100 },
+    { id:'near-sheet-edge', text:'Forest Pharmacy · 1902', x:187.5, y:480, width:180, height:20, priority:80 },
+  ];
+
+  const placed = placeScreenLabels(labels, bounds, [], [fadingSheet]);
+  const clear = placed.find(label => label.id === 'near-sheet-edge');
+
+  assert.equal(placed.length, 1, 'only the label with no clear placement is suppressed');
+  assert.equal(placed.some(label => label.id === 'under-sheet'), false, 'the label under the story sheet cannot show through it');
+  assert.ok(clear, 'the label just above the story sheet remains available');
+  assert.equal(clear.x, 187.5);
+  assert.ok(clear.y + clear.height / 2 < fadingSheet.y - fadingSheet.height / 2 - 3
+    || clear.y - clear.height / 2 > fadingSheet.y + fadingSheet.height / 2 + 3,
+  'the near-edge label remains outside the realistic fading sheet bounds');
+});
+
 test('Orbit child label lanes retain every child and scroll overflow around reserved controls', () => {
   const bounds = { left: 0, top: 0, right: 375, bottom: 190 };
   const toolbar = { x: 187.5, y: 90, width: 355, height: 90 };

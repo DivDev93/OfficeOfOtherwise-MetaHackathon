@@ -1196,7 +1196,7 @@ export function createAtlasScene(container, {
     const labelDocument = container.ownerDocument || document;
     const reservedRects = [];
     const topChromeBottoms = [];
-    for (const element of labelDocument.querySelectorAll?.('.site-header .brand, .site-header .header-actions, .panel-head, #chronicle, #atlas-toolbar, #atlas-other-questions, #atlas-world-card, #atlas-compact-controls, #atlas-reopen-controls, .geography-panel') || []) {
+    for (const element of labelDocument.querySelectorAll?.('.site-header .brand, .site-header .header-actions, .panel-head, #chronicle, .atlas-world-details, #atlas-toolbar, #atlas-other-questions, #atlas-world-card, #atlas-compact-controls, #atlas-reopen-controls, .geography-panel') || []) {
       if (element.hidden) continue;
       const styles = labelDocument.defaultView?.getComputedStyle?.(element);
       if (styles?.display === 'none' || styles?.visibility === 'hidden' || Number(styles?.opacity) <= 0.05) continue;

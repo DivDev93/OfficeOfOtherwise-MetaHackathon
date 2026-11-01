@@ -191,3 +191,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: fade the full Lift panels without overlapping the compact card, prevent hidden panel input, and enlarge zoom slider targets. | |
 | 2026-11-01 | Atlas round 3: keep the desktop Lift rail at full width while sliding its contents, with reduced-motion transforms disabled. | |
 | 2026-11-01 | Atlas round 3: make the reduced-motion panel handoff instantaneous and reserve the full desktop rail width during Lift. | |
+| 2026-11-01 | Atlas round 3: keep Lift labels clear of the visible details sheet without hiding unrelated labels. | |

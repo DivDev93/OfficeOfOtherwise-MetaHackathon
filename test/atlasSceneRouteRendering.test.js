@@ -68,7 +68,7 @@ test('node hit ownership uses the nearest projected anchor after existing ray an
 });
 
 test('Orbit ancestor labels reserve top chrome and move edge markers below it', () => {
-  assert.match(scene, /\.site-header \.brand, \.site-header \.header-actions, \.panel-head, #chronicle, #atlas-toolbar/,
+  assert.match(scene, /\.site-header \.brand, \.site-header \.header-actions, \.panel-head, #chronicle, \.atlas-world-details, #atlas-toolbar/,
     'page header, Atlas title, and zoom controls are measured as label obstacles');
   assert.match(scene, /const lineageTop = topChromeBottoms\.length[\s\S]*Math\.max\(safeBounds\.top, \.\.\.topChromeBottoms\) \+ 8[\s\S]*const lineageBounds = \{ \.\.\.safeBounds, top: lineageTop \}/,
     'ancestor edge markers use a top boundary below active chrome');
@@ -77,10 +77,15 @@ test('Orbit ancestor labels reserve top chrome and move edge markers below it', 
 });
 
 test('mobile labels treat the visible Other questions control as reserved chrome', () => {
-  assert.match(scene, /querySelectorAll\?\.\('\.site-header \.brand, \.site-header \.header-actions, \.panel-head, #chronicle, #atlas-toolbar, #atlas-other-questions,[\s\S]*if \(element\.hidden\) continue/,
+  assert.match(scene, /querySelectorAll\?\.\('\.site-header \.brand, \.site-header \.header-actions, \.panel-head, #chronicle, \.atlas-world-details, #atlas-toolbar, #atlas-other-questions,[\s\S]*if \(element\.hidden\) continue/,
     'the current visibility of the phone control gates its reserved label rectangle');
   assert.match(scene, /element\.matches\?\.\('\.site-header \.brand, \.site-header \.header-actions, \.panel-head, #atlas-toolbar, #atlas-other-questions'\)/,
     'ancestor markers also begin below the visible Other questions control');
+});
+
+test('fading story-sheet bounds join the screen-label collision obstacles', () => {
+  assert.match(scene, /querySelectorAll\?\.\('[^']*\.atlas-world-details[^']*'\)[\s\S]*?styles\?\.display === 'none' \|\| styles\?\.visibility === 'hidden' \|\| Number\(styles\?\.opacity\) <= 0\.05[\s\S]*?reservedRects\.push\(/,
+    'only the currently visible sheet rectangle blocks labels, with its computed fade opacity gating the obstacle');
 });
 
 test('Orbit direct-child labels use accessible scroll lanes only in the Orbit neighborhood', () => {
