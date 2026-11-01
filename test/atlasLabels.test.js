@@ -294,6 +294,19 @@ test('compact Orbit fallback dock fits a 44px child label in a constrained 375px
     { mode:'portal', visible:true, hint:false }, 'blocked children stay labeled in Orbit without a tree-reopen action');
 });
 
+test('Orbit fallback never puts a dock over controls when every viewport slot is blocked', () => {
+  const bounds = { left:0, top:0, right:375, bottom:812 };
+  const controls = [{ left:0, top:0, right:375, bottom:812 }];
+
+  assert.equal(placeOrbitFallbackPanel(bounds, controls), null,
+    'the full fallback panel has no control-free slot');
+  assert.equal(placeOrbitFallbackDock(bounds, controls), null,
+    'the compact 44px dock also remains clear of controls');
+  assert.deepEqual(resolveOrbitFallbackMount({ invitationVisible:true, hasTree:true, portalRect:null }),
+    { mode:'invitation', visible:true, hint:false },
+    'direct child labels fall back into an already visible host instead of covering a control');
+});
+
 test('compact Orbit dock may use projected globe space but stays clear of controls and existing labels', () => {
   const bounds = { left:0, top:0, right:1440, bottom:900 };
   const controls = [{ left:0, top:0, right:1440, bottom:180 }];

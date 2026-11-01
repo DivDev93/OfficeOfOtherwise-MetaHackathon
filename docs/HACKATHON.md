@@ -196,6 +196,7 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: size Orbit and Atlas cluster raycast planes from transformed camera depth so rotated Surface clusters retain their declared touch target. | |
 | 2026-11-01 | Atlas round 3: sample Orbit cluster and Atlas world/question hit boundaries in a local synthetic fixture at desktop and phone widths. | |
 | 2026-11-01 | Atlas round 3: keep crowded Orbit child labels visible in a scrollable fallback where a control-clear slot exists. | |
+| 2026-11-01 | Atlas round 3: verify crowded Orbit child labels use a visible host when controls block every fallback dock slot. | |
 | 2026-11-01 | Atlas round 3: try broader safe corner radii on settled Atlas routes while retaining crossing and node-clearance checks. | |
 | 2026-11-01 | Atlas round 3: apply axis changes immediately under reduced motion without blanking the canvas; preserve normal animated transitions. | |
 | 2026-11-01 | Atlas: require visible world anchors before accepting hits from the 44px selection target, preventing clicks through Earth. | |
