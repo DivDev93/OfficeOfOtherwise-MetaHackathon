@@ -15,6 +15,7 @@ let voiceEnabled = false, localReviewAccess = false;
 const hasLiveAccess = () => localReviewAccess || !!$('access').value;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', atlasController = null, atlasInitPromise = null, atlasPreviewWorld = null, atlasAttachmentIntent = { mode:'current-world', parentId:null, divergenceYear:null }, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0;
+let atlasActiveQuestionId = '', atlasOtherQuestionsOpen = false, atlasVisibleGraphSignature = '', atlasSourceGraphSignature = '';
 let expansionLimit = 20, serverExpansionUsed = 0, activeExpansion = null, preserveGraphUntilReady = false;
 let atlasGeographyOverride = null;
 const enteredNodes = new Set();
@@ -425,7 +426,11 @@ function renderStarMap(rootManifest) {
     });
   }
   const graph = { mapNodes, questions:[...questions.values()], rootManifest, rootRunId, currentRunId, selectedBranchId, currentWorldId };
-  atlasController?.setGraph(graph);
+  sendAtlasGraph(graph);
+  const nextActiveQuestionId = String(activeQuestionId || '');
+  if (atlasActiveQuestionId && nextActiveQuestionId !== atlasActiveQuestionId) atlasOtherQuestionsOpen = false;
+  atlasActiveQuestionId = nextActiveQuestionId;
+  syncAtlasOtherQuestionToggle(mapNodes);
   if (atlasPreviewWorld) showAtlasPreview(atlasPreviewWorld);
   if (rootManifest) {
     checkHydratedEventScenes();
@@ -443,6 +448,44 @@ function renderStarMap(rootManifest) {
           renderExplorationTree(true);
         }
       }).finally(() => atlasRootRequests.delete(id));
+    }
+  }
+}
+function sendAtlasGraph(graph) {
+  if (!atlasController) return false;
+  const sourceGraphSignature = JSON.stringify(graph);
+  if (sourceGraphSignature === atlasSourceGraphSignature) return false;
+  atlasController.setGraph(graph);
+  atlasSourceGraphSignature = sourceGraphSignature;
+  atlasVisibleGraphSignature = '';
+  return true;
+}
+function isAtlasPhone() { return window.matchMedia?.('(max-width: 430px)').matches === true; }
+function syncAtlasOtherQuestionToggle(mapNodes = atlasNodes) {
+  const toggle = $('atlas-other-questions');
+  if (!toggle) return;
+  const hasOtherQuestions = mapNodes.some(node => node.otherTree && node.questionId && node.questionId !== atlasActiveQuestionId);
+  const atlasOnlyView = isAtlasPhone() && atlasController?.scene?.getLevel?.() === 'atlas';
+  toggle.hidden = !atlasOnlyView || !hasOtherQuestions;
+  toggle.setAttribute('aria-pressed', String(atlasOtherQuestionsOpen));
+  if (atlasController) {
+    const { worlds, questions, currentWorldId } = atlasController.getData();
+    const visibleWorlds = !atlasOnlyView || atlasOtherQuestionsOpen
+      ? worlds
+      : worlds.filter(world => String(world.questionId) === atlasActiveQuestionId);
+    const visibleQuestionIds = new Set(visibleWorlds.map(world => String(world.questionId)));
+    const visibleQuestions = !atlasOnlyView || atlasOtherQuestionsOpen
+      ? questions
+      : questions.filter(question => String(question.id) === atlasActiveQuestionId || visibleQuestionIds.has(String(question.id)));
+    const snapshot = {
+      worlds:visibleWorlds,
+      questions:visibleQuestions,
+      currentId:visibleWorlds.some(world => world.id === currentWorldId) ? currentWorldId : null,
+    };
+    const signature = JSON.stringify(snapshot);
+    if (signature !== atlasVisibleGraphSignature) {
+      atlasVisibleGraphSignature = signature;
+      atlasController.scene?.setWorlds?.(snapshot);
     }
   }
 }
@@ -540,6 +583,7 @@ function initializeAtlas() {
       container.dataset.atlasLevel = level?.level || 'unknown';
       $('map-status').textContent = labels[level?.level] || 'ATLAS · POSSIBLE WORLDS';
       applyAtlasGeographyLevel(level?.level);
+      syncAtlasOtherQuestionToggle();
     },
     onMetrics:metrics => {
       container.dataset.atlasLevel = metrics?.level || container.dataset.atlasLevel || 'unknown';
@@ -552,6 +596,11 @@ function initializeAtlas() {
     atlasController = controller;
     compactAtlasToolbar(toolbar);
     applyAtlasGeographyLevel(container.dataset.atlasLevel || 'surface');
+    const phoneViewport = window.matchMedia?.('(max-width: 430px)');
+    phoneViewport?.addEventListener?.('change', event => {
+      if (event.matches) atlasOtherQuestionsOpen = false;
+      syncAtlasOtherQuestionToggle();
+    });
     const canvas = container.querySelector('canvas');
     if (canvas) {
       canvas.setAttribute('aria-label', 'Atlas scene. Hover or focus to preview. Click or press Enter to enter a saved world, open present-day Earth, or unfold a question chip. Use plus and minus to zoom; Escape moves out one level.');
@@ -581,6 +630,12 @@ function compactAtlasToolbar(toolbar) {
   const controls = [...toolbar.children];
   if (controls.length < 4) return;
   const quick = document.createElement('div'); quick.className = 'atlas-quick-controls'; quick.setAttribute('aria-label', 'Quick Atlas controls');
+  const zoomOut = controls.find(control => control.getAttribute('aria-label') === 'Zoom out');
+  zoomOut?.addEventListener('click', event => {
+    if (!isAtlasPhone() || atlasController?.scene?.getZoom?.() >= 0.22) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    atlasController?.scene?.setZoom?.(0.68);
+  }, true);
   const options = document.createElement('details'); options.className = 'atlas-view-options';
   const summary = document.createElement('summary'); summary.textContent = 'View options';
   const panel = document.createElement('div'); panel.className = 'atlas-view-options-panel';
@@ -1630,7 +1685,7 @@ function renderHeroModels() {
     card.append(model, role, metrics); host.append(card);
   }
 }
-function reset({ preservePanel = false, preserveExpansion = false } = {}) { savedPreview.clear(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; geographyPreviewControls.clear(); showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
+function reset({ preservePanel = false, preserveExpansion = false } = {}) { savedPreview.clear(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; geographyPreviewControls.clear(); showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasSourceGraphSignature = ''; atlasVisibleGraphSignature = ''; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
 function setBranch(data, event = 'complete', preferredBranchId = '') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchState.phase === 'final' ? (continuation.path?.length ? 'POSSIBLE CONSEQUENCE' : 'SELECTED EVENT') : branchPhaseLabel(branchState.phase);
@@ -1944,6 +1999,12 @@ $('atlas-compact-tree')?.addEventListener('click', () => {
   syncAtlasCompactButtons();
 });
 $('atlas-compact-new')?.addEventListener('click', openNewExploration);
+$('atlas-other-questions')?.addEventListener('click', () => {
+  atlasOtherQuestionsOpen = !atlasOtherQuestionsOpen;
+  const toggle = $('atlas-other-questions');
+  toggle?.setAttribute('aria-pressed', String(atlasOtherQuestionsOpen));
+  syncAtlasOtherQuestionToggle();
+});
 $('atlas-open-details')?.addEventListener('click', () => {
   const open = !document.body.classList.contains('atlas-details-open');
   document.body.classList.toggle('atlas-details-open', open);
