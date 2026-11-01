@@ -167,3 +167,4 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: avoid trapping wheel input at Orbit when normalized zoom introduces floating-point roundoff. | |
 | 2026-11-01 | Atlas round 3: refresh four-level desktop and phone screenshots and the local wheel round trip after routing and wheel fixes. | |
 | 2026-11-01 | Atlas round 3: separate compact and full selected-world views, and preserve keyboard focus when opening, closing, or leaving details. | |
+| 2026-11-01 | Atlas round 3: capture the open detail sheet at desktop and phone sizes after browser focus and visibility checks. | |

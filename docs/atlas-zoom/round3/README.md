@@ -6,4 +6,6 @@ Exact settled question-root and parent-child paths were independently checked to
 
 At 375px, the Other questions control was checked against saved data: opening it changed the visible world count from 30 to 42 and closing it restored 30. The phone Zoom out button was hit-tested and opened Orbit at 68%. Reduced-motion emulation reported a 0-second transition for the rail, sheet and compact card. Review used the local replay-only fixture and did not dispatch Meta requests.
 
+`details-open-1440.jpg` and `details-open-375.jpg` show the selected-world sheet open in Orbit. Local browser checks confirmed its compact card is hidden while the sheet heading is visible, the close button receives focus after the reveal, and closing returns to the compact card.
+
 In the recorded local replay at 1440×900, successive 120-pixel wheel inputs reached 10, 19, 29, 38, 48, 57 (Orbit), 67, 76, 86, 95 and 100 (Atlas). The reverse pass reached 90, 81, 71, 62, 57 (Orbit), 47, 38, 28, 19, 9 and 0 (Surface). Both passes left the Orbit stop on the next input.
