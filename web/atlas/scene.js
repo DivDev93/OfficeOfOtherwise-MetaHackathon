@@ -2429,7 +2429,7 @@ export function createAtlasScene(container, {
     return hitClusterTarget(event)?.cluster || null;
   }
 
-  function nearestPagedPointerTarget(event, pagedClusterHit, { activation = false } = {}) {
+  function nearestPointerTarget(event, pagedClusterHit, { activation = false } = {}) {
     const candidates = [
       pagedClusterHit,
       hitWorldTarget(event),
@@ -2510,19 +2510,11 @@ export function createAtlasScene(container, {
       return;
     }
     const pagedClusterHit = hitPagedClusterCandidate(event);
-    let reference = null, chipHit = null, cluster = null, world = null;
-    if (pagedClusterHit) {
-      const target = nearestPagedPointerTarget(event, pagedClusterHit);
-      if (target?.kind === 'present') reference = target;
-      else if (target?.kind === 'question') chipHit = target;
-      else if (target?.kind === 'cluster') cluster = target.cluster;
-      else if (target?.kind === 'world') world = target.world;
-    } else {
-      reference = hitPresentEarth(event);
-      chipHit = reference ? null : hitQuestionChip(event);
-      cluster = reference || chipHit ? null : hitCluster(event);
-      world = reference || chipHit || cluster ? null : hitWorld(event);
-    }
+    const target = nearestPointerTarget(event, pagedClusterHit);
+    const reference = target?.kind === 'present' ? target : null;
+    const chipHit = target?.kind === 'question' ? target : null;
+    const cluster = target?.kind === 'cluster' ? target.cluster : null;
+    const world = target?.kind === 'world' ? target.world : null;
     const id = world ? stableWorldId(world) : null;
     if (cluster?.id) {
       if (needsPagedClusterPicker(cluster)) largeClusterPicker?.preview(cluster.id);
@@ -2570,50 +2562,27 @@ export function createAtlasScene(container, {
     drag = null;
     if (moved < 5) {
       const pagedClusterHit = hitPagedClusterCandidate(event);
-      if (pagedClusterHit) {
-        const target = nearestPagedPointerTarget(event, pagedClusterHit, { activation: true });
-        if (target?.kind === 'cluster') {
-          if (needsPagedClusterPicker(target.cluster)) largeClusterPicker?.open(target.cluster.id, { focus: true });
-          else {
-            openClusterFan(target.cluster);
-            setZoom(target.cluster.level === 'surface' ? Math.max(zoom, 0.3) : Math.max(zoom, 0.68));
-          }
-          return;
+      const target = nearestPointerTarget(event, pagedClusterHit, { activation: true });
+      if (target?.kind === 'cluster') {
+        if (needsPagedClusterPicker(target.cluster)) largeClusterPicker?.open(target.cluster.id, { focus: true });
+        else {
+          openClusterFan(target.cluster);
+          setZoom(target.cluster.level === 'surface' ? Math.max(zoom, 0.3) : Math.max(zoom, 0.68));
         }
-        if (target?.kind === 'world' && target.world) {
-          explicitEnter(target.world, projectedAnchor(stableWorldId(target.world), 'pointer', event.clientX, event.clientY));
-          return;
-        }
-        if (target?.kind === 'question') {
-          expandQuestionChip(target.chip, questionAnchor(questionForChip(target.chip), 'pointer', event.clientX, event.clientY, target.x, target.y));
-          return;
-        }
-        if (target?.kind === 'present' && target.world) {
-          onEnter(target.world, { source: 'pointer', worldId: 'present-day-earth', clientX: event.clientX, clientY: event.clientY });
-          return;
-        }
-      }
-      const chipHit = hitQuestionChip(event);
-      if (chipHit) {
-        expandQuestionChip(chipHit.chip, questionAnchor(questionForChip(chipHit.chip), 'pointer', event.clientX, event.clientY, chipHit.x, chipHit.y));
         return;
       }
-      if (hitPresentEarth(event)) {
-        onEnter(virtualPresentEarth(), { source: 'pointer', worldId: 'present-day-earth', clientX: event.clientX, clientY: event.clientY });
+      if (target?.kind === 'world' && target.world) {
+        explicitEnter(target.world, projectedAnchor(stableWorldId(target.world), 'pointer', event.clientX, event.clientY));
         return;
       }
-      const cluster = hitCluster(event);
-      if (cluster?.selectable) {
-        if (needsPagedClusterPicker(cluster)) {
-          largeClusterPicker?.open(cluster.id, { focus: true });
-          return;
-        }
-        if (cluster.id !== hoveredClusterId) openClusterFan(cluster);
-        setZoom(cluster.level === 'surface' ? Math.max(zoom, 0.3) : Math.max(zoom, 0.68));
+      if (target?.kind === 'question') {
+        expandQuestionChip(target.chip, questionAnchor(questionForChip(target.chip), 'pointer', event.clientX, event.clientY, target.x, target.y));
         return;
       }
-      const world = hitWorld(event);
-      if (world) explicitEnter(world, projectedAnchor(stableWorldId(world), 'pointer', event.clientX, event.clientY));
+      if (target?.kind === 'present' && target.world) {
+        onEnter(target.world, { source: 'pointer', worldId: 'present-day-earth', clientX: event.clientX, clientY: event.clientY });
+        return;
+      }
     }
   });
   listen(renderer.domElement, 'pointercancel', event => {

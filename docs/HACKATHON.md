@@ -204,6 +204,7 @@ Event: Meta Global AI Developer Hackathon. Building Oct 27 – Nov 4, 2026. **Su
 | 2026-11-01 | Atlas round 3: record replay-only actual-app views and a synthetic-wheel round trip at the requested desktop and phone widths; note remaining route and label limits. | |
 | 2026-11-01 | Atlas round 3: put ancestor titles before dates in offscreen and crowded edge markers so phone labels retain context. | |
 | 2026-11-01 | Atlas round 3: try shorter cubic gutter sweeps where route and node clearance checks allow them. | |
+| 2026-11-01 | Atlas round 3: resolve overlapping world and Earth pointer targets by their nearest projected anchors. | |
 | 2026-11-01 | Atlas: require visible world anchors before accepting hits from the 44px selection target, preventing clicks through Earth. | |
 | 2026-11-01 | Atlas: reject question-chip hits when Earth is nearer along the actual pointer ray, while keeping Orbit/Atlas chips selectable. Added off-center ray-depth coverage. | |
 | 2026-11-01 | Atlas: add browser-free 64-direction 44px boundary-ray and overlapping-anchor helper math across Orbit/Atlas depths; this does not verify runtime occlusion or ownership. | |
