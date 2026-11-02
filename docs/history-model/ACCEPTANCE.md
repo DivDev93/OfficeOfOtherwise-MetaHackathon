@@ -17,18 +17,18 @@ current source, tests and rendered evidence establish the listed behavior.
 | Spark checks every later event; flags only; Keep and explicit metered Regenerate | P2 source, fixture and browser evidence in P2/STATUS.md; final phase checks recorded at commit. |
 | Unwoven suggestions persist and remain discoverable by window | P2 source, fixture and browser evidence in P2/STATUS.md; final phase checks recorded at commit. |
 | Per-user/session generated-world/window/history counts; no stored-suggestion cap | P2 durable counter tests cover completed batches and per-session/event generated-world deduplication. |
-| Rail year/title, collapsible eras, cause links, flags, per-event What if instead | Pending P3. |
-| History tabs, >4 dropdown; below-rail window suggestions/verdict/actions; no duplicate breadcrumb | Pending P3/P4. |
-| Surface gold events through date, latest highlighted; cyan current-window suggestions | Pending P3. |
-| Bottom globe time bar with event/era ticks, pointer and arrow stepping; only visible slider | Pending P3. |
-| Wheel/pinch zoom; +/- in View options; event sheet as-of header and event details | Pending P3. |
+| Rail year/title, collapsible eras, cause links, flags, per-event What if instead | P3 source, Node22 tests and rendered evidence in P3/STATUS.md. |
+| History tabs, >4 dropdown; below-rail window suggestions/verdict/actions; no duplicate breadcrumb | P3 active timeline has replaced the visible tree/breadcrumb; P4 final wiring removal remains. |
+| Surface gold events through date, latest highlighted; cyan current-window suggestions | P3 source, Node22 tests and rendered evidence in P3/STATUS.md. |
+| Bottom globe time bar with event/era ticks, pointer and arrow stepping; only visible slider | P3 source, Node22 tests and rendered evidence in P3/STATUS.md. |
+| Wheel/pinch zoom; +/- in View options; event sheet as-of header and event details | P3 source, Node22 tests and rendered evidence in P3/STATUS.md. |
 | Orbit optional only for >=2 histories; sibling Earths at same date; one history skips Orbit | Pending P4. |
 | Atlas gold/dim history spines at divergence/fork, real trunk, other-question count chips | Pending P4. |
 | Suggestions only current history/window; no other unwoven worlds; routed wiring removed | Pending P4. |
-| Gold=current history/user, cyan=suggestions, parchment=authored | Pending browser presentation validation in P3/P4. |
-| Both named stories at 1440x900 and 375px, every phase | P1 and P2 captured; P3/P4 pending. P1 UI is explicitly transitional. |
-| P3 scrub recording and P4 zoom-out recording | Pending. |
-| Node22 tests, Gitleaks, dated HACKATHON log, paths/call-cost/remaining-work receipt per phase | P1 passed; P2 final checks at phase commit; P3/P4 pending. |
+| Gold=current history/user, cyan=suggestions, parchment=authored | P3 gold/cyan browser evidence; authored/history-spine styling verified in P4. |
+| Both named stories at 1440x900 and 375px, every phase | P1/P2/P3 captured; P4 pending. P1 UI is explicitly transitional. |
+| P3 scrub recording and P4 zoom-out recording | P3 recorded; P4 pending. |
+| Node22 tests, Gitleaks, dated HACKATHON log, paths/call-cost/remaining-work receipt per phase | P1/P2 pushed with green CI; P3 has 761 passing Node22 tests and final staged scan; P4 pending. |
 
 Fixture tests establish deterministic parsing, actions and invariants. They do not
 establish the factual quality of new live model suggestions. No live paid model calls

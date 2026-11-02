@@ -11,7 +11,9 @@ import * as geographyLabels from '../web/geographyLabels.js';
 import * as savedPreviews from '../web/savedPreview.js';
 import { createLocalMetaKeySetup } from '../web/localMetaKey.js';
 import { createHistorySession } from '../web/historySession.js';
-import { mountHistoryPanel } from '../web/historyPanel.js';
+import { mountHistoryTimeline } from '../web/historyTimeline.js';
+import { mountHistoryTimebar } from '../web/historyTimebar.js';
+import { composeGeography } from '../web/historyModel.js';
 import { REGIONS, GEOGRAPHY_STYLES } from '../web/geographyRegions.js';
 
 const branch = (id, title, year = 500) => ({ id, title, year, summary: `${title} changes this world.`, place: { name: title, lat: 20, lon: year / 100 } });
@@ -67,12 +69,12 @@ test('causal arcs follow actual ancestry and selected parent, never join sibling
   assert.equal(old.signal.aborted, true); assert.equal(guard.current(old.id), false); assert.equal(guard.current(current.id), true);
 });
 
-function element() {
+function element(tagName = 'div') {
   const classes = new Set(), attributes = new Map(), listeners = new Map();
-  return { children: [], value: '', hidden: false, textContent: '', dataset: {}, style: {}, classList: { add(...names) { names.forEach(name => classes.add(name)); }, remove(...names) { names.forEach(name => classes.delete(name)); }, contains(name) { return classes.has(name); }, toggle(name, enabled = !classes.has(name)) { enabled ? classes.add(name) : classes.delete(name); return enabled; } },
+  return { tagName, children: [], value: '', hidden: false, textContent: '', dataset: {}, style: {}, classList: { add(...names) { names.forEach(name => classes.add(name)); }, remove(...names) { names.forEach(name => classes.delete(name)); }, contains(name) { return classes.has(name); }, toggle(name, enabled = !classes.has(name)) { enabled ? classes.add(name) : classes.delete(name); return enabled; } },
     append(...nodes) { this.children.push(...nodes); }, replaceChildren(...nodes) { this.children = nodes; }, add(node) { this.children.push(node); },
-    setAttribute(key, value) { attributes.set(key, value); }, getAttribute(key) { return attributes.get(key); }, addEventListener(type, callback) { listeners.set(type, callback); }, dispatch(type) { return listeners.get(type)?.({target:this}); }, click() { return listeners.get('click')?.({target:this}); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; listeners.get('keydown')?.(event); return event; }, matches(selector) { return selector === ':popover-open' && !!this.popoverOpen; }, hidePopover() { this.popoverOpen = false; this.hidePopoverCalls = (this.hidePopoverCalls || 0) + 1; }, scrollIntoView() {}, focus() { this.focused = true; listeners.get('focus')?.({target:this}); },
-    querySelector() { return this.copy ||= element(); }, querySelectorAll() { return this.children.filter(child => child.dataset?.branchId); }, removeAttribute(key) { attributes.delete(key); },
+    setAttribute(key, value) { attributes.set(key, value); }, getAttribute(key) { return attributes.get(key); }, addEventListener(type, callback) { listeners.set(type, callback); }, dispatch(type) { return listeners.get(type)?.({target:this,currentTarget:this}); }, dispatchWithTarget(type,target) { return listeners.get(type)?.({target,currentTarget:this}); }, click() { return listeners.get('click')?.({target:this,currentTarget:this}); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; listeners.get('keydown')?.(event); return event; }, matches(selector) { return selector === ':popover-open' && !!this.popoverOpen; }, hidePopover() { this.popoverOpen = false; this.hidePopoverCalls = (this.hidePopoverCalls || 0) + 1; }, scrollIntoView() {}, focus() { this.focused = true; listeners.get('focus')?.({target:this}); },
+    querySelector() { return this.copy ||= element(); }, querySelectorAll() { return this.children.filter(child => child.dataset?.branchId); }, queryAll(tag) { return [...(this.tagName === tag ? [this] : []), ...this.children.flatMap(child => child.queryAll?.(tag) || [])]; }, closest(selector) { if (selector === 'button[data-action]' && this.tagName === 'button' && this.dataset?.action) return this; if (selector === 'button[data-history-id]' && this.tagName === 'button' && this.dataset?.historyId) return this; if (selector === 'button[data-year]' && this.tagName === 'button' && this.dataset?.year) return this; return null; }, removeAttribute(key) { attributes.delete(key); },
     pointerenter() { listeners.get('pointerenter')?.({target:this}); }, pointerleave() { listeners.get('pointerleave')?.({target:this}); },
     blur() { this.focused=false; listeners.get('blur')?.({target:this}); },
     getBoundingClientRect() { return {left:80,top:100,right:180,bottom:140,width:100,height:40}; } };
@@ -81,12 +83,12 @@ const textContentDeep = node => `${node?.textContent || ''}${(node?.children || 
 const findNode = (node, predicate) => predicate(node) ? node : (node?.children || []).map(child => findNode(child, predicate)).find(Boolean) || null;
 function harness(fixtures, onPost = async () => { throw new Error('Unexpected generation'); }, replayOnly = false, initialHash = '', onArchive = () => Response.json({ runs: [] }), onHistory = () => Response.json({runs: []}), localReview = false, onScene = () => Response.json({status:'missing'}), onCutout = () => Response.json({status:'missing'}), scheduleTimer = setTimeout, cancelTimer = clearTimeout, onHead = null, onGet = null, setupAvailable = false) {
   const nodes = new Map(), get = id => { if (!nodes.has(id)) { const node = element(); if (id === 'root-generation-status') { node.hidden = true; node.setAttribute('role','status'); node.setAttribute('aria-live','polite'); } nodes.set(id, node); } return nodes.get(id); };
-  const documentListeners = new Map(), document = { getElementById:get, createElement:element, createTextNode:text => ({ textContent:text }), querySelector:get, querySelectorAll:() => [], body:element(), addEventListener(type, callback) { documentListeners.set(type, callback); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; documentListeners.get('keydown')?.(event); return event; } };
+  const documentListeners = new Map(), document = { getElementById:get, createElement:tag => element(tag), createTextNode:text => ({ textContent:text }), querySelector:get, querySelectorAll:() => [], body:element(), addEventListener(type, callback) { documentListeners.set(type, callback); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; documentListeners.get('keydown')?.(event); return event; } };
   const windowListeners = new Map(), window = { innerWidth:390, innerHeight:844, opened:[], open(...args) { this.opened.push(args); }, addEventListener(type, callback) { const callbacks = windowListeners.get(type) || []; callbacks.push(callback); windowListeners.set(type, callbacks); }, dispatch(type) { for (const callback of windowListeners.get(type) || []) callback(); } };
   let reducedMotionMatches = false;
   const reducedMotionListeners = [];
   const reducedMotionQuery = { get matches() { return reducedMotionMatches; }, addEventListener(type, callback) { if (type === 'change') reducedMotionListeners.push(callback); } };
-  const posts = [], gets = [], heads = [], atlasWorldHistory = [], atlasEntryHistory = [], storage = new Map(), location = { hash: initialHash, pathname: '/', search: '' };
+  const posts = [], gets = [], heads = [], atlasWorldHistory = [], atlasEntryHistory = [], atlasHistoryViews = [], storage = new Map(), location = { hash: initialHash, pathname: '/', search: '' };
   const fetch = async (url, options = {}) => {
     if (options.method === 'HEAD') { heads.push(url); if (onHead) return onHead(url); const parts = url.split('/'); return new Response('', { status: fixtures[parts[2]]?.assets?.includes(parts[3]) ? 200 : 404 }); }
     if (options.method === 'POST') { posts.push({ url, body: JSON.parse(options.body) }); return onPost(url, options); }
@@ -103,13 +105,14 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     return Response.json(match[2] === 'branch.json' ? fixture.branch : match[2] === 'trace.json' ? { steps: [] } : fixture);
   };
   const context = vm.createContext({ ...logic, ...geographyTexture, ...geography, ...geographyControls, ...geographyLabels, ...savedPreviews, createLocalMetaKeySetup, createHistorySession,
-    mountHistoryPanel:(root, session) => mountHistoryPanel(root, session, { document }), REGIONS, GEOGRAPHY_STYLES,
+    mountHistoryTimeline, mountHistoryTimebar, composeGeography, REGIONS, GEOGRAPHY_STYLES,
     loadLocalTerrain: async () => ({ width:1, height:1, elevation:new Int16Array([0]), landmass:new Uint8Array([1]) }), console, fetch, AbortController, TextDecoder, Uint8Array, URLSearchParams, setTimeout:scheduleTimer, clearTimeout:cancelTimer,
     createAtlasController(options) {
       const controller = {
-        graph:options.graph || {}, nodes:options.graph?.mapNodes || [], selectedId:options.graph?.currentWorldId || null,
+        optionsRef:options, graph:options.graph || {}, nodes:options.graph?.mapNodes || [], selectedId:options.graph?.currentWorldId || null,
         scene:{ currentId:options.graph?.currentWorldId || null, level:'surface', enterWorld(id, settings = {}) { this.currentId = id; this.lastEntry = { id, settings }; atlasEntryHistory.push(id); }, setGeography(geography, mode, renderState) { this.geographyPreview = { geography, mode, renderState }; }, setZoom(value) { this.zoom = value; }, getZoom() { return this.zoom || 0; }, getLevel() { return this.level; } },
         setGraph(next) { this.graph = next; this.nodes = next.mapNodes || []; this.selectedId = next.currentWorldId || null; this.scene.currentId = this.selectedId; atlasWorldHistory.push(this.selectedId); },
+        setHistoryView(view) { this.historyView = view; atlasHistoryViews.push(view); return view; }, getHistoryView() { return this.historyView || null; },
         setGeography(geography, mode, renderState) { this.scene.setGeography(geography, mode, renderState); },
         getData() { return { worlds:this.nodes.map(node => ({...node, eventRef:node.eventRef || (node.runId && node.branchId ? {runId:node.runId,branchId:node.branchId} : undefined)})), questions:this.graph.questions || [], currentWorldId:this.selectedId }; },
         getAttachmentIntent() { return {...(this.attachment || {mode:'current-world'}), currentWorldId:this.selectedId}; },
@@ -128,11 +131,93 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) }, Option: function(text, value) { return { text, value }; },
   });
   const source = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/import\('\.\/visuals\.js'\)\.then\(async \(\{createModelViewer\}\) => \{[\s\S]*?\}\)\.catch\(\(\) => \{ modelApi = null; setView\(activeView\); \}\);/, '');
-  vm.runInContext(`${source}\n globalThis.ui = {loadRun,selectBranch,activateBranch,selectStarMapNode,expandBranch,runPrompt,setView,setSurfaceMode,setAtlasLevel:applyAtlasGeographyLevel,toggleAtlasGeographyPanel,refreshHistory,toggleArchiveHistory,setCurrentRunContextForTest:id=>{currentRunId=id;currentManifest=knownRunManifests.get(id)||currentManifest;continuation=currentManifest?.continuation||continuation;renderExplorationTree();},setAtlasAttachmentIntent:value=>{atlasController.attachment=value;},setGlobe:api=>{Object.assign(atlasController.scene,api);renderGeography();},setModelApi:api=>{modelApi=api;},syncOtherQuestionsForTest:(level,mapNodes)=>{window.matchMedia=()=>({matches:true});atlasController.scene.level=level;syncAtlasOtherQuestionToggle(mapNodes);},previewGlobe:(branch,anchor)=>showAtlasPreview(branch,anchor),eventWorkFor:(runId,branchId)=>{const work=eventWork.get(eventKey(runId,branchId));return work?{...work}:null;},state:()=>({currentRunId,atlasCurrentWorldRunId,continuation,streamBusy,selectedContext,hasImage,activeView,continuationViewSelection,surfaceGeography,surfaceMode,hasStory:document.body.classList.contains('has-story'),invitationOpen:document.body.classList.contains('invitation-open'),starMapNodes:atlasNodes,atlasAttachmentIntent,serverExpansionUsed,expansionLimit,enteredNodesCount:enteredNodes.size,pendingExpansionCount:pendingExpansionNodes.size,selectedBranchId,selectedWork:{...eventWork.get(eventKey(currentRunId,selectedBranchId))},activePreview:savedPreview.activePreview,previewHidden:savedPreview.element.hidden})};`, context);
-  return { ui: context.ui, get, posts, gets, heads, atlasWorldHistory, atlasEntryHistory, storage, location, starMap: context.starMap, document, window, setReducedMotion(matches) { reducedMotionMatches = Boolean(matches); for (const listener of reducedMotionListeners) listener({ matches:reducedMotionMatches }); }, navigate(hash, ...events) { location.hash = hash; for (const event of events) window.dispatch(event); } };
+  vm.runInContext(`${source}\n globalThis.ui = {loadRun,selectBranch,activateBranch,selectStarMapNode,expandBranch,runPrompt,setView,setSurfaceMode,setAtlasLevel:applyAtlasGeographyLevel,toggleAtlasGeographyPanel,refreshHistory,toggleArchiveHistory,setHistoryContextForTest:value=>historySession.setContext(value),setHistoryDateForTest:value=>historySession.setDate(value),selectHistoryEventForTest:id=>selectHistoryEvent(id),setHistoryAtlasLevelForTest:level=>atlasController.optionsRef.onLevelChange?.({level}),breakHistoryRendererForTest:()=>{atlasController.setHistoryView=()=>{throw new Error('fixture renderer failure');};},setCurrentRunContextForTest:id=>{currentRunId=id;currentManifest=knownRunManifests.get(id)||currentManifest;continuation=currentManifest?.continuation||continuation;renderExplorationTree();},setAtlasAttachmentIntent:value=>{atlasController.attachment=value;},setGlobe:api=>{Object.assign(atlasController.scene,api);renderGeography();},setModelApi:api=>{modelApi=api;},syncOtherQuestionsForTest:(level,mapNodes)=>{window.matchMedia=()=>({matches:true});atlasController.scene.level=level;syncAtlasOtherQuestionToggle(mapNodes);},previewGlobe:(branch,anchor)=>showAtlasPreview(branch,anchor),eventWorkFor:(runId,branchId)=>{const work=eventWork.get(eventKey(runId,branchId));return work?{...work}:null;},state:()=>({currentRunId,atlasCurrentWorldRunId,continuation,streamBusy,selectedContext,hasImage,activeView,continuationViewSelection,surfaceGeography,surfaceMode,historyMode,history:historySession.getState(),historyAtlasView:atlasController.getHistoryView(),selectedHistoryRecord,hasStory:document.body.classList.contains('has-story'),invitationOpen:document.body.classList.contains('invitation-open'),starMapNodes:atlasNodes,atlasAttachmentIntent,serverExpansionUsed,expansionLimit,enteredNodesCount:enteredNodes.size,pendingExpansionCount:pendingExpansionNodes.size,selectedBranchId,selectedWork:{...eventWork.get(eventKey(currentRunId,selectedBranchId))},activePreview:savedPreview.activePreview,previewHidden:savedPreview.element.hidden})};`, context);
+  return { ui: context.ui, get, posts, gets, heads, atlasWorldHistory, atlasEntryHistory, atlasHistoryViews, storage, location, starMap: context.starMap, document, window, setReducedMotion(matches) { reducedMotionMatches = Boolean(matches); for (const listener of reducedMotionListeners) listener({ matches:reducedMotionMatches }); }, navigate(hash, ...events) { location.hash = hash; for (const event of events) window.dispatch(event); } };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const complete = fixture => new Response(`event: complete\ndata: ${JSON.stringify({ runId: fixture.id, branch: fixture.branch, continuation: fixture.continuation })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+
+test('active history mode drives the real timeline, timebar and Atlas without selecting an event while scrubbing', async () => {
+  const events = [
+    { id:'event-bce', year:-1200, era:'Bronze observatories', title:'Observatory traditions begin', summary:'A new tradition is recorded.', causeEventId:null,
+      geography:{version:1,changes:[{id:'green-sahara',region:'sahara',kind:'vegetation',intensity:0.8,assumption:'Green conditions persist.',uncertainty:'Illustrative.'},{id:'sahara-lakes',region:'sahara',kind:'lake',intensity:0.6,assumption:'Seasonal lakes persist.',uncertainty:'Illustrative.'}]} },
+    { id:'event-ce', year:900, era:'Coastal era', title:'Coastal observatories spread', summary:'A later event in this history.', causeEventId:'event-bce',
+      sceneRef:'/event-scenes/' + 'a'.repeat(64) + '.png', checkFlags:[{ kind:'weave-ripple', status:'pending', wovenEventId:'woven-1', message:'This event changed after a new possibility was woven.' }] },
+  ];
+  const history = { id:'history-root', events, suggestions:[], suggestionWindows:[] };
+  const question = { id:'question-root', title:'What if observatories spread?', histories:[history] };
+  const app = harness({}, async (url, options) => {
+    assert.equal(url, '/api/history/regenerate');
+    const updatedEvent = { ...events[1], title:'Rewritten coastal observatories', summary:'The newly regenerated account.' };
+    delete updatedEvent.sceneRef; delete updatedEvent.checkFlags;
+    const updatedHistory = { ...history, events:[events[0], updatedEvent], suggestions:[], suggestionWindows:[] };
+    return Response.json({ question:{ ...question, histories:[updatedHistory] }, history:updatedHistory, event:updatedEvent });
+  }, true, '', undefined, undefined, false, undefined, undefined, undefined, undefined, undefined, async url => {
+    if (url === '/api/history/preferences') return Response.json({ autoSuggest:false });
+    if (url.startsWith('/api/histories?')) return Response.json({ questions:[question] });
+    return null;
+  });
+  await tick();
+  app.window.matchMedia = query => ({ matches:query.includes('max-width: 430px') || query.includes('max-width:700px') });
+  app.ui.setHistoryContextForTest({ questionId:question.id, historyId:history.id, eventId:'event-ce', date:900 });
+  for (let index=0; index<10 && !app.ui.state().history.history; index++) await tick();
+  assert.equal(app.ui.state().historyMode, true);
+  assert.equal(app.get('history-timeline-host').hidden, false);
+  assert.equal(app.get('history-timebar-host').hidden, false, 'the datebar is visible once the saved history has loaded');
+  assert.equal(app.document.body.classList.contains('atlas-focused'), true, 'phone history starts in the compact globe view');
+  assert.equal(app.get('atlas-show-tree').textContent, 'History', 'a persistent reopen control is labelled for the history rail');
+  app.get('atlas-show-tree').click();
+  assert.equal(app.document.body.classList.contains('atlas-panels-open'), true, 'the History control reopens the timeline drawer');
+  app.get('focus-atlas').click();
+  assert.equal(app.document.body.classList.contains('atlas-focused'), true, 'Focus Atlas closes the drawer and restores the compact view');
+  app.ui.setHistoryAtlasLevelForTest('atlas');
+  assert.equal(app.get('history-timebar-host').hidden, false, 'later Atlas level callbacks cannot hide the active history timebar');
+  assert.match(app.get('history-asof-header').textContent, /History as of 900 CE · 2 events/);
+  assert.equal(app.get('geography-status').textContent, 'As of 900 CE: Green Sahara, Sahara inland lakes', 'Earth panel names the composed active-history changes at its date');
+  assert.equal(app.get('geography-reset-adjustments').textContent, 'Reset to history as of 900 CE', 'reset label names the current history baseline');
+  assert.equal(app.get('hero-title').textContent, '900 CE · Coastal observatories spread');
+  assert.equal(app.ui.state().historyAtlasView.composedGeography.changes.length, 2, 'Atlas snapshot contains canonical composed changes through its date');
+  app.get('geography-present').click();
+  assert.equal(app.ui.state().historyAtlasView.surfaceMode, 'present');
+  assert.equal(app.ui.state().historyAtlasView.surfaceGeography.changes.length, 0, 'Present-day mode affects only the rendered surface');
+  app.get('geography-scenario').click();
+  const water = app.get('geography-water-number'); water.min = '-11000'; water.max = '9000'; water.value = '350'; water.dispatch('input');
+  assert.equal(app.ui.state().historyAtlasView.surfaceGeography.seaLevelMeters, 350, 'local controls update the active history projection');
+  assert.equal(app.ui.state().historyAtlasView.composedGeography.changes.length, 2, 'local preview controls do not edit stored event geography');
+  const regenerate = findNode(app.get('history-timeline-host'), node => node?.dataset?.action === 'regenerate');
+  assert.ok(regenerate);
+  const timelineEvents = app.get('history-timeline-host').children[0].children[1];
+  await timelineEvents.dispatchWithTarget('click', regenerate);
+  assert.deepEqual(app.posts.at(-1).body, { questionId:question.id, historyId:history.id, eventId:'event-ce', wovenEventId:'woven-1' });
+  assert.equal(app.get('hero-title').textContent, '900 CE · Rewritten coastal observatories', 'a same-ID regenerated history event refreshes the selected sheet');
+  assert.match(app.get('hero-description').textContent, /newly regenerated account/);
+  assert.equal(app.get('event-scene-action').hidden, true, 'ref-less regenerated events do not fall back to stale legacy media generation');
+  const range = app.get('history-timebar-host').queryAll('input')[0];
+  assert.ok(range, `range input is mounted: ${JSON.stringify(app.get('history-timebar-host').children.map(node => ({tag:node.tagName,children:node.children?.map(child=>child.tagName)})))}`);
+  range.value = String(range.min); range.dispatch('input');
+  assert.equal(app.ui.state().history.date, -1200);
+  assert.equal(app.ui.state().historyAtlasView.surfaceGeography.seaLevelMeters, 0, 'a different as-of date starts from that date’s composed scenario');
+  app.ui.setHistoryDateForTest(900);
+  assert.equal(app.ui.state().historyAtlasView.surfaceGeography.seaLevelMeters, 350, 'date-specific local controls persist with their history and return date');
+  app.get('geography-reset-adjustments').click();
+  assert.equal(app.ui.state().historyAtlasView.surfaceGeography.seaLevelMeters, 0, 'reset restores the selected date’s composed baseline');
+  app.ui.setHistoryDateForTest(-1200);
+  assert.equal(app.ui.state().historyAtlasView.surfaceGeography.seaLevelMeters, 0);
+  assert.equal(app.get('hero-title').textContent, '900 CE · Rewritten coastal observatories', 'moving the date changes the history view but keeps the selected event sheet');
+  assert.match(app.get('history-asof-header').textContent, /History as of 1200 BCE · 1 event/);
+  const firstEventTick = findNode(app.get('history-timebar-host'), node => node?.dataset?.eventId === 'event-bce');
+  assert.ok(firstEventTick);
+  app.get('history-timebar-host').children[0].children[1].children[2].dispatchWithTarget('click', firstEventTick);
+  assert.equal(app.ui.state().history.selectedEventId, 'event-bce');
+  assert.equal(app.get('hero-title').textContent, '1200 BCE · Observatory traditions begin', 'an explicit event tick selects its event sheet');
+  assert.ok(app.atlasHistoryViews.some(view => view?.historyId === history.id && view.asOfYear === -1200));
+  assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 0, 'date changes and marker selections never submit legacy continuation requests');
+  assert.equal(app.document.body.classList.contains('history-mode'), true, 'the legacy branch rail is hidden by active history-mode styles');
+  app.ui.breakHistoryRendererForTest(); app.ui.setHistoryDateForTest(-1100);
+  assert.equal(app.get('history-timeline-host').hidden, false, 'history rows remain active when the scene renderer throws');
+  assert.equal(app.get('history-timebar-host').hidden, false, 'date controls remain active when the scene renderer throws');
+  assert.match(app.get('history-render-status').textContent,/Atlas rendering is unavailable/);
+});
 
 test('local Meta key setup refreshes live feature mode and keeps the key out of browser storage', async () => {
   const secret = 'fixture-only-meta-key';

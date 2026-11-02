@@ -186,9 +186,10 @@ test('migrated suggestion windows remain ready and empty after weaving the last 
       event('candidate-a', -3000, 'Shallow canal gardens spread', { causeEventId: 'legacy-root' }),
       event('candidate-b', -1000, 'Reed craft follows the basin', { causeEventId: 'legacy-root' }),
     ], hero: { branchId: 'visited' } }));
-  let calls = 0;
+  let calls = 0, compatibilityCalls = 0;
   const makeService = () => createHistoryService({ store: createHistoryStore(liveRunsDir), agent: {
     async suggest() { calls++; return []; }, async checkRipple() { calls++; return { inconsistent: false }; },
+    async checkSuggestion() { compatibilityCalls++; return { verdict: 'fits', conflictsWith: null, reason: '' }; },
   } });
   const first = await start(t, { liveRunsDir, service: makeService() });
   const initialResponse = await fetch(`${first.url}/api/histories`, { headers: first.headers });
@@ -206,7 +207,8 @@ test('migrated suggestion windows remain ready and empty after weaving the last 
   assert.equal(afterWeave.suggestions.some(item => item.id === preserved.id), true, 'other unwoven candidates remain available');
   assert.deepEqual(afterWeave.suggestionWindows.find(item => item.window.fromYear === consumed.window.fromYear),
     { window: consumed.window, status: 'ready', batches: 1, suggestionCount: 0 }, 'the consumed window remains cached even when empty');
-  assert.equal(calls, 0, 'migration, weaving and GET do not call the model');
+  assert.equal(calls, 0, 'migrated cache weaving does not invoke Wonder or unrelated ripple checks');
+  assert.equal(compatibilityCalls, 1, 'the remaining migrated candidate is explicitly checked against the changed history');
 
   await new Promise(resolveClose => first.server.close(resolveClose));
   const restarted = await start(t, { liveRunsDir, service: makeService() });
@@ -216,7 +218,8 @@ test('migrated suggestion windows remain ready and empty after weaving the last 
   assert.equal(afterRestart.suggestions.some(item => item.id === preserved.id), true);
   assert.deepEqual(afterRestart.suggestionWindows.find(item => item.window.fromYear === consumed.window.fromYear),
     { window: consumed.window, status: 'ready', batches: 1, suggestionCount: 0 });
-  assert.equal(calls, 0, 'restart and migrated-cache reads never redispatch generation');
+  assert.equal(calls, 0, 'restart and migrated-cache reads never redispatch generation or ripple checks');
+  assert.equal(compatibilityCalls, 1, 'the persisted compatibility revision prevents a repeated Spark check');
 });
 
 test('duplicate persisted history IDs recover four immutable paths and keep later weaving scoped to one history', async t => {
@@ -269,8 +272,12 @@ test('duplicate persisted history IDs recover four immutable paths and keep late
   const weaveOwner = repaired.histories.find(item => item.suggestions?.some(suggestion => suggestion.id === 'suggestion:deep-root:candidate-y'));
   assert.ok(weaveOwner, 'the recovered path retains its other unwoven legacy suggestion');
   const beforePaths = new Map(repaired.histories.map(history => [history.id, history.events.map(event => event.id)]));
-  const service = createHistoryService({ store, agent: { async suggest() { return []; } } });
+  let compatibilityCalls = 0;
+  const service = createHistoryService({ store, agent: { async suggest() { return []; },
+    async checkSuggestion() { compatibilityCalls++; return { verdict: 'fits', conflictsWith: null, reason: '' }; },
+    async checkRipple() { return { inconsistent: false }; } } });
   await service.weave({ questionId: 'deep-root', historyId: weaveOwner.id, suggestionId: 'suggestion:deep-root:candidate-y' });
+  assert.equal(compatibilityCalls, 1, 'recovery-scoped weaving explicitly rechecks its stale migrated candidate');
   const afterPaths = store.get('deep-root').histories;
   const changedPaths = afterPaths.filter(history => JSON.stringify(history.events.map(event => event.id)) !== JSON.stringify(beforePaths.get(history.id)));
   assert.equal(changedPaths.length, 1, 'weaving after recovery updates only the selected history');
@@ -283,4 +290,39 @@ test('duplicate persisted history IDs recover four immutable paths and keep late
   const unsafeStore = createHistoryStore(unsafeRoot);
   assert.throws(() => unsafeStore.get('deep-root'), /Duplicate history IDs/, 'unreconciled duplicates fail closed');
   assert.throws(() => unsafeStore.save(corruptState.questions['deep-root']), /Duplicate history/, 'normalization also refuses to persist duplicate identities');
+});
+
+test('replay mode preserves stale migrated suggestions as pending and requires explicit More for new generation', async t => {
+  const liveRunsDir = await mkdtemp(join(tmpdir(), 'office-history-replay-stale-'));
+  t.after(() => rm(liveRunsDir, { recursive: true, force: true }));
+  const runDir = join(liveRunsDir, 'runs', 'legacy-replay-root');
+  await mkdir(runDir, { recursive: true });
+  await writeFile(join(runDir, 'branch.json'), JSON.stringify({ status: 'ok', divergence: 'What if the Sahara remained green?',
+    branches: [
+      event('visited', -4000, 'Lake settlements grow', { causeEventId: 'legacy-replay-root' }),
+      event('candidate-a', -3000, 'Shallow canal gardens spread', { causeEventId: 'legacy-replay-root' }),
+      event('candidate-b', -1000, 'Reed craft follows the basin', { causeEventId: 'legacy-replay-root' }),
+    ], hero: { branchId: 'visited' } }));
+  const replay = await start(t, { liveRunsDir, env: { DEMO_ACCESS_CODE: 'history-actions-code', DEMO_REPLAY_ONLY: 'true' } });
+  const migrated = (await (await fetch(`${replay.url}/api/histories`, { headers: replay.headers })).json()).questions
+    .find(item => item.id === 'legacy-replay-root').histories[0];
+  const first = migrated.suggestions.find(item => item.suggestionForEventId === 'legacy-replay-root:candidate-a');
+  const second = migrated.suggestions.find(item => item.suggestionForEventId === 'legacy-replay-root:candidate-b');
+  assert.ok(first && second);
+  const firstWeave = await fetch(`${replay.url}/api/history/weave`, { method: 'POST', headers: replay.headers,
+    body: JSON.stringify({ questionId: 'legacy-replay-root', historyId: migrated.id, suggestionId: first.id }) });
+  assert.equal(firstWeave.status, 200, 'the migrated candidate remains directly usable before its history changes');
+  const staleWeave = await fetch(`${replay.url}/api/history/weave`, { method: 'POST', headers: replay.headers,
+    body: JSON.stringify({ questionId: 'legacy-replay-root', historyId: migrated.id, suggestionId: second.id }) });
+  assert.equal(staleWeave.status, 409, 'replay mode does not silently trust a stale compatibility verdict');
+  const staleBody = await staleWeave.json();
+  assert.equal(staleBody.code, 'suggestion_recheck_pending');
+  assert.equal(staleBody.suggestion.id, second.id);
+  assert.equal(staleBody.suggestion.recheckStatus, 'pending');
+  const saved = (await (await fetch(`${replay.url}/api/histories`, { headers: replay.headers })).json()).questions
+    .find(item => item.id === 'legacy-replay-root').histories[0];
+  assert.equal(saved.suggestions.find(item => item.id === second.id).recheckStatus, 'pending', 'the unavailable check state survives GET');
+  const more = await fetch(`${replay.url}/api/history/suggest`, { method: 'POST', headers: replay.headers,
+    body: JSON.stringify({ questionId: 'legacy-replay-root', historyId: migrated.id, window: second.window, more: true }) });
+  assert.equal(more.status, 503, 'a saved stale candidate does not trigger generation; a new batch needs explicit live More');
 });

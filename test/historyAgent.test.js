@@ -102,6 +102,22 @@ test('explicit fork suggestions receive the excluded event and replacement instr
   assert.equal(calls.length, 1, 'fork context is supplied in the normal single Wonder proposal call');
 });
 
+test('stale cached suggestion checker names a current conflict and rejects unknown conflict ids', async () => {
+  const suggestion = { id: 'saved-suggestion', year: -2300, title: 'Lake channels adapt', summary: 'Channels change over time.' };
+  const { agent, calls } = agentFor({ verdict: 'conflicts', conflictsWith: 'channels-2400-bce', reason: 'This suggestion depends on open water unavailable in the named history event.' });
+  const checked = await agent.checkSuggestion({ question: fixture.question, history: fixture.history, suggestion });
+  assert.deepEqual(checked, { verdict: 'conflicts', conflictsWith: 'channels-2400-bce', reason: 'This suggestion depends on open water unavailable in the named history event.' });
+  assert.equal(calls[0].model, 'muse-spark-1.3');
+  assert.equal(calls[0].label, 'history-agent:recheck-suggestion');
+  const input = JSON.parse(calls[0].input);
+  assert.equal(input.question.text, fixture.question.question);
+  assert.equal(input.cachedSuggestion.id, suggestion.id);
+  assert.deepEqual(input.currentHistory.map(event => event.id), ['channels-2400-bce']);
+
+  const invalid = agentFor({ verdict: 'conflicts', conflictsWith: 'unknown-event', reason: 'This old scenario now contradicts an unlisted event.' }).agent;
+  await assert.rejects(invalid.checkSuggestion({ question: fixture.question, history: fixture.history, suggestion }), /current history event/);
+});
+
 test('topic policy removes disallowed proposals before they are exposed', async () => {
   let checked = 0;
   const policy = { async checkBranches(items) { checked++; return { kept: items.slice(1), rejected: [{ branch: items[0] }] }; } };

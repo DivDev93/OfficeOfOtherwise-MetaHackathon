@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHistoryService, HistoryServiceError } from '../src/demo/historyService.js';
-import { normalizeQuestionHistories } from '../web/historyModel.js';
+import { migrateSavedTree, normalizeQuestionHistories } from '../web/historyModel.js';
 
 const question = normalizeQuestionHistories({ id: 'lake-chad', question: 'What if Lake Chad stayed larger?', histories: [{ id: 'history-1', events: [
   { id: 'channels-2400', year: -2400, place: { name: 'Lake Chad', lat: 13, lon: 14 }, title: 'Timed channels water dry fields',
@@ -12,13 +12,13 @@ const question = normalizeQuestionHistories({ id: 'lake-chad', question: 'What i
 
 function memoryStore(initial = question) {
   let saved = structuredClone(initial);
-  return { get: id => id === saved.id ? saved : null, save: value => { saved = normalizeQuestionHistories(value); return saved; },
+  return { get: id => id === saved.id ? saved : null, list: () => [saved], save: value => { saved = normalizeQuestionHistories(value); return saved; },
     usage: () => ({ suggestionWindowsGenerated: 0 }), recordUsage: () => ({ histories: 1 }), current: () => saved };
 }
 
 function memoryStoreMany(questions) {
   const saved = new Map(questions.map(item => [item.id, normalizeQuestionHistories(item)]));
-  return { get: id => saved.get(id) ?? null, save: value => { const next = normalizeQuestionHistories(value); saved.set(next.id, next); return next; },
+  return { get: id => saved.get(id) ?? null, list: () => [...saved.values()], save: value => { const next = normalizeQuestionHistories(value); saved.set(next.id, next); return next; },
     usage: () => ({ suggestionWindowsGenerated: 0 }), recordUsage: () => ({ histories: 1 }) };
 }
 
@@ -48,6 +48,121 @@ test('suggestion windows cache by history and window; More explicitly appends a 
   assert.equal(more.generated, true);
   assert.equal(count, 2);
   assert.equal(more.history.suggestions.length, 2);
+});
+
+test('cached suggestions survive earlier weaves; each stale candidate is rechecked without another Wonder window call', async () => {
+  const store = memoryStore();
+  let generationCalls = 0, compatibilityChecks = 0, rippleChecks = 0;
+  const service = createHistoryService({ store, agent: {
+    async suggest() { generationCalls++; return [candidate('suggestion-a', -2300), candidate('suggestion-b', -2200), candidate('suggestion-c', -2100)]; },
+    async checkRipple() { rippleChecks++; return { inconsistent: false, reason: '' }; },
+    async checkSuggestion({ suggestion, history }) {
+      compatibilityChecks++;
+      if (suggestion.id === 'suggestion-c') return { verdict: 'conflicts', conflictsWith: 'suggestion-b',
+        reason: 'This alternative depends on channels that the newly woven event redirected.' };
+      return { verdict: 'fits', conflictsWith: null, reason: 'The saved event remains compatible with all current events.' };
+    },
+  } });
+  const args = { questionId: 'lake-chad', historyId: 'history-1', window: { fromYear: -2400, toYear: -2000 } };
+  const generated = await service.suggest(args);
+  assert.equal(generated.suggestions.length, 3);
+  await service.weave({ questionId: args.questionId, historyId: args.historyId, suggestionId: 'suggestion-a' });
+  await service.weave({ questionId: args.questionId, historyId: args.historyId, suggestionId: 'suggestion-b' });
+  await assert.rejects(service.weave({ questionId: args.questionId, historyId: args.historyId, suggestionId: 'suggestion-c' }),
+    error => error.code === 'suggestion_became_conflict' && error.conflictsWith === 'suggestion-b');
+  const finalHistory = store.get('lake-chad').histories[0];
+  const updated = finalHistory.suggestions.find(item => item.id === 'suggestion-c');
+  assert.equal(updated.verdict, 'conflicts');
+  assert.equal(updated.conflictsWith, 'suggestion-b');
+  assert.deepEqual(updated.window, args.window);
+  assert.equal(finalHistory.events.some(item => item.id === 'suggestion-a'), true);
+  assert.equal(finalHistory.events.some(item => item.id === 'suggestion-b'), true);
+  assert.equal(finalHistory.events.some(item => item.id === 'suggestion-c'), false, 'a newly conflicting possibility is not auto-forked');
+  assert.equal(generationCalls, 1, 'weaving cached candidates does not regenerate the window');
+  assert.equal(compatibilityChecks, 2, 'only stale candidates get Spark rechecks');
+  assert.equal(rippleChecks, 2, 'each weave checks only its later event');
+});
+
+test('unavailable stale-candidate check keeps the saved suggestion with a pending marker', async () => {
+  const store = memoryStore();
+  const original = store.get('lake-chad');
+  original.histories[0].suggestions = [candidate('saved-fit', -2300, 'fits')];
+  store.save(original);
+  const service = createHistoryService({ store, agent: { async suggest() { throw new Error('No generation expected'); } } });
+  const history = store.get('lake-chad').histories[0];
+  const suggestion = history.suggestions[0];
+  // A real history edit makes the saved fixture stale; lack of checker must not evict it or demand More.
+  const changed = store.get('lake-chad');
+  changed.histories[0].events[0].summary = 'Channels now follow a changed seasonal route.';
+  store.save(changed);
+  await assert.rejects(service.weave({ questionId: 'lake-chad', historyId: 'history-1', suggestionId: suggestion.id }),
+    error => error.code === 'suggestion_recheck_pending' && /remains available/i.test(error.message));
+  const retained = store.get('lake-chad').histories[0].suggestions.find(item => item.id === suggestion.id);
+  assert.equal(retained.recheckStatus, 'pending');
+  assert.equal(retained.verdict, 'fits');
+});
+
+test('history changes during a Spark recheck leave the cached candidate pending without an automatic retry', async () => {
+  const store = memoryStore();
+  const initial = store.get('lake-chad');
+  initial.histories[0].suggestions = [candidate('saved-fit', -2300, 'fits')];
+  store.save(initial);
+  const gate = deferred();
+  let calls = 0;
+  const service = createHistoryService({ store, agent: { async suggest() { throw new Error('No window generation expected'); },
+    async checkSuggestion() { calls++; return gate.promise; } } });
+  const stale = store.get('lake-chad');
+  stale.histories[0].events[0].summary = 'Channels now serve a new seasonal route.';
+  store.save(stale);
+  const checking = service.weave({ questionId: 'lake-chad', historyId: 'history-1', suggestionId: 'saved-fit' });
+  while (!calls) await new Promise(resolve => setTimeout(resolve, 0));
+  const editedAgain = store.get('lake-chad');
+  editedAgain.histories[0].events[1].summary = 'The settlement now depends on a later water course.';
+  store.save(editedAgain);
+  gate.resolve({ verdict: 'fits', conflictsWith: null, reason: 'It remains compatible with the new history.' });
+  await assert.rejects(checking, error => error.code === 'suggestion_recheck_pending');
+  assert.equal(calls, 1, 'a changed revision does not trigger an automatic recheck loop');
+  const retained = store.get('lake-chad').histories[0].suggestions.find(item => item.id === 'saved-fit');
+  assert.equal(retained.recheckStatus, 'pending');
+  assert.equal(retained.verdict, 'fits');
+  assert.match(retained.recheckReason, /history-changed-during-check/);
+});
+
+test('migration suggestions receive a deterministic history revision without model calls', () => {
+  const migrated = migrateSavedTree([{ runId: 'legacy-revision', run: { divergence: 'What if seasonal lakes stayed larger?',
+    branches: [
+      { id: 'visited', year: -3000, title: 'Wetland villages follow the lakes', summary: 'Seasonal lakes sustain gardens.', place: { name: 'Lake basin', lat: 12, lon: 14 } },
+      { id: 'unvisited', year: -2000, title: 'Canal gardens expand', summary: 'Gardeners use small canals.', place: { name: 'Lake basin', lat: 12, lon: 14 } },
+    ], hero: { branchId: 'visited' } } }]).questions[0];
+  assert.equal(migrated.histories[0].suggestions[0].historyRevision, undefined);
+  const store = memoryStoreMany([migrated]);
+  let modelCalls = 0;
+  createHistoryService({ store, agent: { async suggest() { modelCalls++; return []; } } });
+  const stamped = store.get(migrated.id).histories[0].suggestions[0];
+  assert.match(stamped.historyRevision, /^[a-f0-9]{64}$/);
+  assert.equal(stamped.verdict, 'fits');
+  assert.equal(modelCalls, 0);
+});
+
+test('older conflicting alternatives fork at the earlier year and do not share events after it', async () => {
+  const olderQuestion = normalizeQuestionHistories({ id: 'marsh-question', question: 'What if marshes spread earlier?', histories: [{ id: 'history-marsh', events: [
+    { id: 'older-waterway', year: -5000, place: { name: 'Lake Chad', lat: 13, lon: 14 }, title: 'Early waterway gardens', summary: 'Gardens follow a lake margin.', causeEventId: 'marsh-question' },
+    { id: 'channels-2400', year: -2400, place: { name: 'Lake Chad', lat: 13, lon: 14 }, title: 'Timed channels water dry fields', summary: 'Channels direct open lake water to dry fields.', causeEventId: 'older-waterway' },
+    { id: 'later-settlement', year: -1800, place: { name: 'Lake Chad', lat: 13, lon: 14 }, title: 'Later shoreline settlement', summary: 'Homes follow the channels.', causeEventId: 'channels-2400' },
+  ] }] });
+  const store = memoryStore(olderQuestion);
+  const suggestion = { ...candidate('marsh-by-3000', -3000, 'conflicts', 'channels-2400'), causeEventId: 'channels-2400', window: { fromYear: -3500, toYear: -2000 } };
+  const withSuggestion = store.get('marsh-question');
+  withSuggestion.histories[0].suggestions = [suggestion];
+  store.save(withSuggestion);
+  const result = await createHistoryService({ store, agent: { async suggest() { return []; } } }).fork({ questionId: 'marsh-question', historyId: 'history-marsh',
+    eventId: 'channels-2400', suggestionId: 'marsh-by-3000' });
+  assert.deepEqual(result.sharedEventIds, ['older-waterway']);
+  assert.deepEqual(result.history.events.map(event => event.id), ['older-waterway', 'marsh-by-3000']);
+  assert.equal(result.history.origin.forkYear, -3000);
+  assert.equal(result.history.forkEventId, 'channels-2400');
+  assert.equal(result.history.events.find(event => event.id === 'marsh-by-3000').causeEventId, 'marsh-question');
+  assert.match(result.history.forkReason, /original cause, Timed channels water dry fields, falls after fork year -3000/);
 });
 
 test('weaving inserts a fitting event in date order and persists explicit Spark ripple flags', async () => {
@@ -104,7 +219,7 @@ test('a conflicting suggestion cannot be woven', async () => {
   store.save(questionWithSuggestion);
   const service = createHistoryService({ store, agent: { async suggest() { return []; } } });
   await assert.rejects(service.weave({ questionId: 'lake-chad', historyId: 'history-1', suggestionId: 'suggestion-conflict' }),
-    error => error instanceof HistoryServiceError && error.code === 'conflict_requires_fork' && error.status === 409);
+    error => error instanceof HistoryServiceError && ['conflict_requires_fork', 'suggestion_became_conflict'].includes(error.code) && error.status === 409);
 });
 
 test('explicit regeneration replaces one flagged later event; Keep resolves its flag without a model call', async () => {

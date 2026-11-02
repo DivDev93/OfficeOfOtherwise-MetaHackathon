@@ -1,0 +1,83 @@
+{
+  "date": "2026-11-01",
+  "timezone": "America/Toronto",
+  "mode": "local replay-only; no paid model calls",
+  "screenshots": [
+    {
+      "viewport": [
+        1440,
+        900
+      ],
+      "file": "deep-sea-levels-1440.jpg",
+      "asOfYear": 1978,
+      "selectedEvent": "1978 CE · Canopy Walkway Exploration Network"
+    },
+    {
+      "viewport": [
+        375,
+        812
+      ],
+      "file": "deep-sea-levels-375.jpg",
+      "asOfYear": 1978,
+      "selectedEvent": "1978 CE · Canopy Walkway Exploration Network"
+    },
+    {
+      "viewport": [
+        1440,
+        900
+      ],
+      "file": "green-sahara-1440.jpg",
+      "asOfYear": -2800,
+      "selectedEvent": "2800 BCE · Sailboats Cross Megalake Chad"
+    },
+    {
+      "asOfYear": 550,
+      "goldPins": 1,
+      "selectedEvent": "2800 BCE · Sailboats Cross Megalake Chad",
+      "cyanPins": 1,
+      "file": "green-sahara-375.jpg",
+      "viewport": [
+        375,
+        812
+      ]
+    }
+  ],
+  "recording": {
+    "selectedEventUnchanged": true,
+    "viewport": [
+      375,
+      812
+    ],
+    "file": "date-scrub-phone.webm",
+    "frames": 75,
+    "input": "native Browser pointer drag, ArrowRight and event-tick click",
+    "samples": [
+      {
+        "year": 2368,
+        "goldPins": 5
+      },
+      {
+        "year": 1603,
+        "goldPins": 0
+      },
+      {
+        "year": 1991,
+        "goldPins": 3
+      }
+    ],
+    "durationSeconds": 7.416,
+    "encodedFps": 12
+  },
+  "tests": {
+    "passed": 761,
+    "failed": 0,
+    "node": "22.23.3"
+  },
+  "sha256": {
+    "date-scrub-phone.webm": "2b8f67f50320e7c6534fdf22d320110579dea0b86bd4ba69a7b611a8249e0448",
+    "deep-sea-levels-1440.jpg": "a076cdcbd84f2dfc69991d185db4e610da871e1d8f3689fb478f09ade7452b71",
+    "deep-sea-levels-375.jpg": "8273fd7018538bc3b860d062f6ef64c3a97fcef0f55b42e7a69c6007518db9d5",
+    "green-sahara-1440.jpg": "6789c2ccb27e0439735bdc0d88a64d3c19b6c8c4314b98e1350c3cf05795ad9e",
+    "green-sahara-375.jpg": "f5722f3f7e1d857d2151c33aaec403481379cb359aec0840ff5f9cb493781e19"
+  }
+}

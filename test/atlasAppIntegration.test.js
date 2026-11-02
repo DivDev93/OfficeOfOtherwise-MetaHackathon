@@ -6,13 +6,23 @@ const html = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8')
 const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
 
-test('page uses one persistent Atlas canvas and keeps the complete text exploration tree', () => {
+test('page keeps one Atlas canvas and provides the chronological history rail and bottom date control', () => {
   assert.match(html, /id="atlas-scene"/);
   assert.match(html, /id="atlas-toolbar"/);
-  assert.match(html, /id="branch-list"/);
-  assert.match(html, /id="world-navigation"/);
+  assert.match(html, /id="history-timeline-host"/);
+  assert.match(html, /id="history-timebar-host"/);
+  assert.match(html, /id="history-asof-header"/);
+  assert.match(html, /class="history-legacy-fallback"/);
   assert.doesNotMatch(html, /id="exploration-map-panel"|id="starmap"|id="globe"/);
   assert.doesNotMatch(html, /popover="manual"/);
+});
+
+test('history datebar event ticks occupy a separate hit row and geography keeps numeric controls without extra sliders', () => {
+  assert.match(css, /\.history-timebar-track\{position:relative;height:72px/);
+  assert.match(css, /\.history-timebar-range\{position:absolute;z-index:2;top:20px;left:5px;width:calc\(100% - 10px\);height:16px;min-width:0;min-height:0/);
+  assert.match(css, /\.history-timebar-event-tick\{top:43px;width:28px;height:28px;min-width:0;min-height:0/);
+  assert.match(css, /body\.history-mode #geography-adjustments input\[type=range\]\{display:none!important\}/);
+  assert.match(css, /body\.history-mode \.geography-number-row\{grid-template-columns:minmax\(0,1fr\)\}/);
 });
 
 test('evidence panel renders only the validated evidence endpoint response', () => {
@@ -148,8 +158,9 @@ test('small phones keep Surface usable, zoom to Orbit on first zoom-out, and gat
   assert.match(css, /\.map-panel>#atlas-scene\{inset:0;width:100%;\}/, 'the active Atlas remains full width on phones');
 });
 
-test('Atlas graph signatures are recorded only after a controller receives the graph', () => {
-  assert.match(app, /function sendAtlasGraph\(graph\) \{\s*if \(!atlasController\) return false;\s*const sourceGraphSignature = JSON\.stringify\(graph\);\s*if \(sourceGraphSignature === atlasSourceGraphSignature\) return false;\s*atlasController\.setGraph\(graph\);\s*atlasSourceGraphSignature = sourceGraphSignature;/);
+test('Atlas graph signatures are recorded only after a controller receives the graph and history mode owns its view', () => {
+  assert.match(app, /function sendAtlasGraph\(graph\) \{\s*if \(!atlasController \|\| historyMode\) return false;\s*const sourceGraphSignature = JSON\.stringify\(graph\);\s*if \(sourceGraphSignature === atlasSourceGraphSignature\) return false;\s*atlasController\.setGraph\(graph\);\s*atlasSourceGraphSignature = sourceGraphSignature;/);
+  assert.match(app, /atlasController\.setHistoryView\(view\)/, 'composed history snapshots and display previews are sent through the controller adapter');
   assert.match(app, /const graph = \{ mapNodes, questions:\[\.\.\.questions\.values\(\)\][\s\S]*?\};\s*sendAtlasGraph\(graph\);/);
   assert.match(app, /renderStarMap\(continuation\.rootRunId \? knownRunManifests\.get\(continuation\.rootRunId\) \|\| currentManifest : currentManifest\);/);
 });

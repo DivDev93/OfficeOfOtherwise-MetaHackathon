@@ -18,10 +18,14 @@ const document = { createElement(tag) { return new Element(tag, document); }, cr
 const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
 
-test('history session is wired to selected-event changes and rendered in the rail, not hover previews', () => {
-  assert.match(html, /id="history-suggestions-host"/);
+test('history session is wired to selected-event changes and rendered in the timeline and timebar, not hover previews', () => {
+  assert.match(html, /id="history-timeline-host"/);
+  assert.match(html, /id="history-timebar-host"/);
   assert.match(app, /import \{ createHistorySession \} from '\.\/historySession\.js'/);
-  assert.match(app, /mountHistoryPanel\(\$\('history-suggestions-host'\), historySession\)/);
+  assert.match(app, /mountHistoryTimeline\(\$\('history-timeline-host'\)/);
+  assert.match(app, /mountHistoryTimebar\(\$\('history-timebar-host'\)/);
+  assert.match(app, /onHistoryChange:id => historySession\.selectHistory\(id\)/);
+  assert.match(app, /historySession\.subscribe\(syncHistoryUi\)/);
   assert.match(app, /historySession\.setContext\(\{ questionId:activeAtlasRootId\(selectedManifest\) \|\| runId, eventId:`\$\{runId\}:\$\{branch\.id\}`, date:branch\.year \}\)/);
   const preview = app.slice(app.indexOf('function showBranchPreview'), app.indexOf('function renderStarMap'));
   assert.doesNotMatch(preview, /historySession\.(?:suggest|more|setContext)/, 'hover previews never schedule suggestion generation');

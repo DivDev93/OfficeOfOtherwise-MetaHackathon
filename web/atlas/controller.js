@@ -1,4 +1,5 @@
 import { ORBIT_UNFOLDED_LEVEL, SURFACE_LABEL_LEVEL, stableWorldId } from '../atlasLayout.js';
+import { projectHistoryAtlas } from '../historyAtlas.js';
 import { migrateSavedRuns } from './worldModel.js';
 
 export const ATLAS_AXIS_MODES = Object.freeze([
@@ -247,7 +248,7 @@ export async function createAtlasController({
   graph = {}, mapNodes = [], worlds = [], questions = [], runData = [], rootManifest = null,
   currentRunId = null, selectedBranchId = null, currentWorldId = null,
   onPreview = () => {}, onEnter = () => {}, onQuestionPreview = () => {}, onQuestionEnter = () => {}, onMetrics = () => {}, onLevelChange = () => {},
-  onAttachmentIntent = () => {}, onViewOptionsChange = () => {},
+  onAttachmentIntent = () => {}, onViewOptionsChange = () => {}, onHistoryEventSelect = () => {},
   getZoomOutTarget = () => null,
   visitedStorage = undefined,
   document: documentObject = container?.ownerDocument, window: windowObject = documentObject?.defaultView,
@@ -281,37 +282,40 @@ export async function createAtlasController({
   }
   data.worlds = [...worldRecords.values()];
   const questionRecords = new Map(data.questions.map(question => [question.id, question]));
+  let historyProjection = null;
+  let historyProjectionSignature = '';
   const viewOptions = { axisMode: 'history-distance', travelMode: reducedMotion ? 'cut' : 'threads', ghostTrail: false, attachment: 'current', reducedMotion: Boolean(reducedMotion) };
   let toolbar = toolbarContainer;
   if (!toolbar) { toolbar = documentObject.createElement('div'); toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', 'Atlas controls'); container.parentElement?.insertBefore(toolbar, container); }
   toolbar.replaceChildren?.(); toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', 'Atlas controls');
-  const makeButton = (label, ariaLabel) => { const button = documentObject.createElement('button'); button.type = 'button'; button.textContent = label; button.setAttribute('aria-label', ariaLabel); button.style.minWidth = '44px'; button.style.minHeight = '44px'; toolbar.append(button); return button; };
+  const viewOptionsDetails = documentObject.createElement('details');
+  viewOptionsDetails.className = 'atlas-view-options';
+  const viewOptionsSummary = documentObject.createElement('summary'); viewOptionsSummary.textContent = 'View options';
+  viewOptionsDetails.append(viewOptionsSummary); toolbar.append(viewOptionsDetails);
+  const viewOptionsBody = documentObject.createElement('div'); viewOptionsBody.className = 'atlas-view-options-body'; viewOptionsDetails.append(viewOptionsBody);
+  const makeButton = (label, ariaLabel) => { const button = documentObject.createElement('button'); button.type = 'button'; button.textContent = label; button.setAttribute('aria-label', ariaLabel); button.style.minWidth = '44px'; button.style.minHeight = '44px'; viewOptionsBody.append(button); return button; };
   const zoomOut = makeButton('−', 'Zoom out'), zoomIn = makeButton('+', 'Zoom in');
-  const zoomInput = documentObject.createElement('input'); zoomInput.type = 'range'; zoomInput.min = '-100'; zoomInput.max = '100'; zoomInput.step = '1'; zoomInput.value = '0';
-  zoomInput.setAttribute('aria-label', 'Zoom (left: closer than Surface, center: Surface, right: Atlas)');
-  const zoomLabel = documentObject.createElement('label'); zoomLabel.textContent = 'Zoom (closer ← Surface → Atlas)'; zoomLabel.append(zoomInput); toolbar.append(zoomLabel);
   const updateZoomControls = (value, surfaceDetail = sceneApi?.getSurfaceDetailZoom?.() ?? 0) => {
     const zoom = Math.max(0, Math.min(1, Number(value) || 0));
     const detail = Math.max(0, Math.min(100, Number(surfaceDetail) || 0));
-    zoomInput.value = String(detail > 0 ? -Math.round(detail) : Math.round(zoom * 100));
-    zoomOut.disabled = zoom >= 1;
+    zoomOut.disabled = zoom >= 1 && detail <= 0;
     zoomIn.disabled = zoom <= 0 && detail >= 100;
   };
-  const surface = makeControl(documentObject, 'input', 'Labelled pins (surface)', toolbar).control;
-  surface.type = 'range'; surface.min = '0'; surface.max = '7'; surface.step = '1'; surface.value = String(SURFACE_LABEL_LEVEL); surface.setAttribute('aria-valuetext', `${SURFACE_LABEL_LEVEL} labelled pins`);
-  const unfold = makeControl(documentObject, 'input', 'Unfolded worlds (orbit)', toolbar).control;
-  unfold.type = 'range'; unfold.min = '0'; unfold.max = '7'; unfold.step = '1'; unfold.value = String(ORBIT_UNFOLDED_LEVEL); unfold.setAttribute('aria-valuetext', `${ORBIT_UNFOLDED_LEVEL} unfolded worlds`);
+  const surface = makeControl(documentObject, 'input', 'Labelled pins (surface)', viewOptionsBody).control;
+  surface.type = 'number'; surface.min = '0'; surface.max = '7'; surface.step = '1'; surface.value = String(SURFACE_LABEL_LEVEL); surface.setAttribute('aria-valuetext', `${SURFACE_LABEL_LEVEL} labelled pins`);
+  const unfold = makeControl(documentObject, 'input', 'Unfolded worlds (orbit)', viewOptionsBody).control;
+  unfold.type = 'number'; unfold.min = '0'; unfold.max = '7'; unfold.step = '1'; unfold.value = String(ORBIT_UNFOLDED_LEVEL); unfold.setAttribute('aria-valuetext', `${ORBIT_UNFOLDED_LEVEL} unfolded worlds`);
   const axisLabel = documentObject.createElement('label'); axisLabel.textContent = 'Vertical axis';
   const axis = documentObject.createElement('select'); axis.setAttribute('aria-label', 'Vertical axis');
   for (const [value, labelText] of ATLAS_AXIS_MODES) { const option = documentObject.createElement('option'); option.value = value; option.textContent = labelText; axis.append(option); }
-  axis.value = viewOptions.axisMode; axisLabel.append(axis); toolbar.append(axisLabel);
+  axis.value = viewOptions.axisMode; axisLabel.append(axis); viewOptionsBody.append(axisLabel);
   const travelLabel = documentObject.createElement('label'); travelLabel.textContent = 'Camera travel';
   const travel = documentObject.createElement('select'); travel.setAttribute('aria-label', 'Camera travel');
   for (const [value, labelText] of [['threads', 'Travel along threads'], ['cut', 'Cut directly']]) { const option = documentObject.createElement('option'); option.value = value; option.textContent = labelText; travel.append(option); }
   travel.value = viewOptions.travelMode; travel.disabled = Boolean(reducedMotion); if (reducedMotion) travel.setAttribute('aria-description', 'Reduced motion uses direct cuts');
-  travelLabel.append(travel); toolbar.append(travelLabel);
-  const ghost = makeControl(documentObject, 'input', 'Ghost trail', toolbar).control; ghost.type = 'checkbox'; ghost.checked = false;
-  const attachment = radioGroup(documentObject, toolbar, 'Attach a new question to', 'atlas-question-attachment', [['current', 'Current world'], ['present', 'Present-day Earth']], viewOptions.attachment);
+  travelLabel.append(travel); viewOptionsBody.append(travelLabel);
+  const ghost = makeControl(documentObject, 'input', 'Ghost trail', viewOptionsBody).control; ghost.type = 'checkbox'; ghost.checked = false;
+  const attachment = radioGroup(documentObject, viewOptionsBody, 'Attach a new question to', 'atlas-question-attachment', [['current', 'Current world'], ['present', 'Present-day Earth']], viewOptions.attachment);
 
   const currentWorld = () => data.worlds.find(world => world.id === currentId) || null;
   const focusPlace = makeButton('Focus place', 'Focus selected location on Surface');
@@ -322,7 +326,7 @@ export async function createAtlasController({
   placeStatus.setAttribute('aria-label', 'Branching location context');
   toolbar.append(placeStatus);
   const updatePlaceControls = () => {
-    const world = currentWorld();
+    const world = historyProjection ? null : currentWorld();
     const hasCoordinates = Boolean(world && Number.isFinite(world.lat) && world.lat >= -90 && world.lat <= 90
       && Number.isFinite(world.lon) && world.lon >= -180 && world.lon <= 180);
     focusPlace.disabled = !hasCoordinates;
@@ -383,6 +387,18 @@ export async function createAtlasController({
         onQuestionEnter(questionRecords.get(String(question.id)), anchor);
         return true;
       },
+      onHistoryEventSelect: (event, anchor) => {
+        if (disposed || !historyProjection || !event) return false;
+        onHistoryEventSelect(event, {
+          questionId: historyProjection.questionId,
+          historyId: historyProjection.historyId,
+          date: historyProjection.asOfYear,
+          visualKind: event.visualKind,
+          source: anchor?.source || 'pointer',
+          anchor: anchor || null,
+        });
+        return true;
+      },
       onMetrics,
       onZoomChange: zoom => updateZoomControls(zoom),
       onSurfaceDetailChange: (detail, zoom) => updateZoomControls(zoom, detail),
@@ -430,11 +446,6 @@ export async function createAtlasController({
     if (currentZoom <= 0) syncSurfaceDetail(Math.min(100, (Number(scene.getSurfaceDetailZoom?.()) || 0) + 8));
     else syncZoom(currentZoom - 0.08);
   });
-  zoomInput.addEventListener('input', () => {
-    const value = Number(zoomInput.value) || 0;
-    if (value < 0) { scene.setZoom?.(0); syncSurfaceDetail(-value); }
-    else { if ((Number(scene.getSurfaceDetailZoom?.()) || 0) > 0) syncSurfaceDetail(0); syncZoom(value / 100); }
-  });
   focusPlace.addEventListener('click', focusSelectedPlace);
   surface.addEventListener('input', () => { const value = Math.max(0, Math.min(7, Number(surface.value) | 0)); surface.value = String(value); surface.setAttribute('aria-valuetext', `${value} labelled pins`); scene.setSurfaceLabelLevel?.(value); });
   unfold.addEventListener('input', () => { const value = Math.max(0, Math.min(7, Number(unfold.value) | 0)); unfold.value = String(value); unfold.setAttribute('aria-valuetext', `${value} unfolded worlds`); scene.setOrbitLevel?.(value); });
@@ -452,7 +463,55 @@ export async function createAtlasController({
     getViewOptions: () => ({ ...viewOptions }),
     getAttachmentIntent: intent,
     focusSelectedPlace,
-    setGeography(geography, mode, renderState) { if (!disposed) scene.setGeography?.(geography, mode, renderState); },
+    setGeography(geography, mode, renderState) { if (!disposed && !historyProjection) scene.setGeography?.(geography, mode, renderState); },
+    setHistoryView(snapshot = null) {
+      if (disposed) return null;
+      if (snapshot == null) {
+        historyProjection = null;
+        historyProjectionSignature = '';
+        scene.setHistoryView?.(null);
+        scene.setWorlds?.({ worlds: data.worlds, questions: data.questions, currentId });
+        updatePlaceControls();
+        return null;
+      }
+      const question = snapshot.question || questionRecords.get(String(snapshot.questionId ?? ''));
+      const asOfYear = snapshot.asOfYear ?? snapshot.date;
+      const projection = {
+        ...projectHistoryAtlas(question, {
+        historyId: snapshot.historyId ?? snapshot.history?.id,
+        asOfYear,
+        window: snapshot.window,
+        suggestions: snapshot.suggestions,
+        }),
+        surfaceMode: snapshot.surfaceMode === 'present' ? 'present' : 'scenario',
+      };
+      // Geography controls provide a local display preview. Keep it separate
+      // from the event-derived as-of composition used by the history model.
+      const suppliedSurfaceGeography = snapshot.surfaceGeography ?? snapshot.composedGeography;
+      if (projection.surfaceMode === 'present') {
+        projection.surfaceGeography = null;
+        projection.surface = { ...projection.surface, geography: null };
+      } else if (suppliedSurfaceGeography != null) {
+        try {
+          projection.surfaceGeography = typeof structuredClone === 'function'
+            ? structuredClone(suppliedSurfaceGeography)
+            : JSON.parse(JSON.stringify(suppliedSurfaceGeography));
+          projection.surface = { ...projection.surface, geography: projection.surfaceGeography };
+        } catch {
+          // Ignore invalid/non-serializable preview state and render the
+          // canonical composition from the active history instead.
+        }
+      }
+      const signature = JSON.stringify(projection);
+      historyProjection = projection;
+      if (signature !== historyProjectionSignature) {
+        historyProjectionSignature = signature;
+        scene.setHistoryView?.(projection);
+      }
+      updatePlaceControls();
+      return projection;
+    },
+    getHistoryView: () => historyProjection,
     setGraph(next = {}) {
       if (disposed) return;
       const updated = adaptAtlasGraph(next);
@@ -491,10 +550,17 @@ export async function createAtlasController({
       }
       data.worlds = [...worldRecords.values()];
       updatePlaceControls();
-      scene.setWorlds?.({ worlds: data.worlds, questions: data.questions, currentId });
+      if (!historyProjection) scene.setWorlds?.({ worlds: data.worlds, questions: data.questions, currentId });
     },
     enterWorld(id, { zoom = 0 } = {}) {
       if (disposed) return false;
+      if (historyProjection) {
+        const selected = [...historyProjection.pins, ...historyProjection.suggestions].find(item => item.id === String(id));
+        if (!selected) return false;
+        onHistoryEventSelect(selected, { questionId: historyProjection.questionId, historyId: historyProjection.historyId,
+          date: historyProjection.asOfYear, visualKind: selected.visualKind, source: 'controller-explicit-entry', anchor: null });
+        return true;
+      }
       if (String(id) === PRESENT_DAY_WORLD_ID) return explicitEnter({ id: PRESENT_DAY_WORLD_ID, kind: 'present-day', year: ATLAS_PRESENT_YEAR, title: 'Present-day Earth' });
       const world = data.worlds.find(item => item.id === String(id));
       if (!world || world.selectable === false || world.isExpansionPlaceholder) return false;

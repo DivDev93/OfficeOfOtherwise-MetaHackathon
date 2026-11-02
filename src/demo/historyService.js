@@ -15,6 +15,11 @@ const eventRevision = event => {
   const content = Object.fromEntries(Object.entries(event).filter(([key]) => key !== 'checkFlags').sort(([a], [b]) => a.localeCompare(b)));
   return createHash('sha256').update(JSON.stringify(content)).digest('hex');
 };
+const suggestionRevision = suggestion => {
+  const content = Object.fromEntries(Object.entries(suggestion).filter(([key]) =>
+    !['historyRevision', 'recheckStatus', 'recheckReason'].includes(key)).sort(([a], [b]) => a.localeCompare(b)));
+  return createHash('sha256').update(JSON.stringify(content)).digest('hex');
+};
 
 export class HistoryServiceError extends Error {
   constructor(code, message, status = 400, details = {}) { super(message); this.name = 'HistoryServiceError'; Object.assign(this, { code, status, ...details }); }
@@ -51,6 +56,26 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
   const inFlight = new Map();
   const localLedger = new Map();
   const mutationTails = new Map();
+  const recheckFlights = new Map();
+
+  // Stamp migrated suggestions against their initial durable histories without
+  // model calls. Later event changes make that snapshot stale and trigger a
+  // Spark check only when the user explicitly weaves or forks the suggestion.
+  for (const question of store.list?.() ?? []) {
+    let changed = false;
+    const histories = question.histories.map(history => {
+      const revision = historyRevision(history);
+      let historyChanged = false;
+      const suggestions = (history.suggestions ?? []).map(item => {
+        if (item.historyRevision) return item;
+        historyChanged = true;
+        return { ...item, historyRevision: revision };
+      });
+      if (historyChanged) changed = true;
+      return historyChanged ? { ...history, suggestions } : history;
+    });
+    if (changed) store.save({ ...question, histories });
+  }
 
   async function mutateQuestion(questionId, operation) {
     const previous = mutationTails.get(questionId) ?? Promise.resolve();
@@ -125,18 +150,92 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
     try { return await task; } finally { if (inFlight.get(key) === task) inFlight.delete(key); }
   }
 
+  function pendingRecheck(suggestion, message = 'This saved suggestion needs a fresh compatibility check. It remains available; retry this action when checking is available.') {
+    throw new HistoryServiceError('suggestion_recheck_pending', message, 409, { suggestion,
+      conflictsWith: suggestion?.conflictsWith ?? undefined, reason: suggestion?.reason ?? undefined });
+  }
+
+  async function ensureCurrentSuggestion({ questionId, historyId, suggestionId, signal } = {}) {
+    const initial = resolve(store, questionId, historyId);
+    const original = initial.history.suggestions?.find(item => item.id === suggestionId);
+    if (!original) throw new HistoryServiceError('not_found', 'Suggestion not found', 404);
+    const observedHistoryRevision = historyRevision(initial.history);
+    if (original.historyRevision === observedHistoryRevision) return { ...initial, suggestion: original };
+    const observedSuggestionRevision = suggestionRevision(original);
+    const key = JSON.stringify([questionId, historyId, suggestionId, observedHistoryRevision]);
+    if (recheckFlights.has(key)) return recheckFlights.get(key);
+    const task = (async () => {
+      const prepared = await mutateQuestion(questionId, () => {
+        const { question, history } = resolve(store, questionId, historyId);
+        const current = history.suggestions?.find(item => item.id === suggestionId);
+        if (!current) throw new HistoryServiceError('not_found', 'Suggestion not found', 404);
+        const latestRevision = historyRevision(history);
+        if (current.historyRevision === latestRevision && !current.recheckStatus) return { question, history, suggestion: current, fresh: true };
+        const pending = { ...current, recheckStatus: 'pending', recheckReason: 'history-changed' };
+        const saved = saveHistory(store, question, { ...history, suggestions: history.suggestions.map(item => item.id === suggestionId ? pending : item) });
+        const suggestion = saved.histories.find(item => item.id === historyId).suggestions.find(item => item.id === suggestionId);
+        return { question: saved, history: saved.histories.find(item => item.id === historyId), suggestion,
+          staleDuringPrepare: latestRevision !== observedHistoryRevision || suggestionRevision(current) !== observedSuggestionRevision };
+      });
+      if (prepared.fresh) return prepared;
+      if (prepared.staleDuringPrepare) return pendingRecheck(prepared.suggestion, 'The history changed before the cached suggestion could be checked. It remains saved; retry Weave or What-if to re-check it.');
+      if (typeof agent.checkSuggestion !== 'function') return pendingRecheck(prepared.suggestion,
+        'The compatibility check is unavailable in replay mode. The saved suggestion remains available; retry when live checking is available.');
+      let verdict;
+      try { verdict = await agent.checkSuggestion({ question: prepared.question, history: prepared.history, suggestion: original, signal }); }
+      catch (error) {
+        const message = error?.code === 'suggestion_recheck_unavailable'
+          ? 'Live compatibility checking is disabled in replay mode. The saved suggestion remains available; switch to live mode to re-check it.'
+          : 'The compatibility check did not complete. The suggestion remains saved; retry Weave or What-if when checking is available.';
+        return pendingRecheck(prepared.suggestion, message);
+      }
+      return mutateQuestion(questionId, () => {
+        const { question, history } = resolve(store, questionId, historyId);
+        const current = history.suggestions?.find(item => item.id === suggestionId);
+        if (!current) throw new HistoryServiceError('not_found', 'Suggestion was removed during its compatibility check', 404);
+        const latestRevision = historyRevision(history);
+        if (current.historyRevision === latestRevision && !current.recheckStatus) return { question, history, suggestion: current };
+        if (latestRevision !== observedHistoryRevision || suggestionRevision(current) !== observedSuggestionRevision) {
+          const pending = { ...current, recheckStatus: 'pending', recheckReason: 'history-changed-during-check' };
+          const saved = saveHistory(store, question, { ...history, suggestions: history.suggestions.map(item => item.id === suggestionId ? pending : item) });
+          const savedHistory = saved.histories.find(item => item.id === historyId);
+          return pendingRecheck(savedHistory.suggestions.find(item => item.id === suggestionId),
+            'The history changed while the suggestion was being checked. The suggestion remains saved; retry Weave or What-if to check the new version.');
+        }
+        const updated = { ...current, ...verdict, historyRevision: observedHistoryRevision };
+        delete updated.recheckStatus;
+        delete updated.recheckReason;
+        const saved = saveHistory(store, question, { ...history, suggestions: history.suggestions.map(item => item.id === suggestionId ? updated : item) });
+        const savedHistory = saved.histories.find(item => item.id === historyId);
+        return { question: saved, history: savedHistory, suggestion: savedHistory.suggestions.find(item => item.id === suggestionId) };
+      });
+    })();
+    recheckFlights.set(key, task);
+    try { return await task; } finally { if (recheckFlights.get(key) === task) recheckFlights.delete(key); }
+  }
+
   async function weave({ questionId, historyId, suggestionId } = {}) {
+    const initial = resolve(store, questionId, historyId);
+    const alreadyWoven = initial.history.events.find(item => item.id === suggestionId);
+    if (alreadyWoven) return { ...resultFor(initial.question, initial.history, { event: alreadyWoven, cached: true }), ripple: [] };
+    await ensureCurrentSuggestion({ questionId, historyId, suggestionId });
     const started = await mutateQuestion(questionId, () => {
       const { question, history } = resolve(store, questionId, historyId);
       const existing = history.events.find(item => item.id === suggestionId);
       if (existing) return { question, history, event: existing, alreadyWoven: true, later: [] };
       const suggestion = history.suggestions?.find(item => item.id === suggestionId);
       if (!suggestion) throw new HistoryServiceError('not_found', 'Suggestion not found', 404);
-      if (suggestion.historyRevision && suggestion.historyRevision !== historyRevision(history)) {
-        throw new HistoryServiceError('stale_suggestion', 'This suggestion was checked against an older version of the history. Request More around this window before adding it.', 409);
+      if (suggestion.historyRevision !== historyRevision(history)) {
+        const pending = { ...suggestion, recheckStatus: 'pending', recheckReason: 'history-changed-before-weave' };
+        const saved = saveHistory(store, question, { ...history, suggestions: history.suggestions.map(item => item.id === suggestionId ? pending : item) });
+        return pendingRecheck(saved.histories.find(item => item.id === historyId).suggestions.find(item => item.id === suggestionId),
+          'The history changed after checking. The suggestion remains saved; retry Weave to check the new version.');
       }
-      if (suggestion.verdict !== 'fits') throw new HistoryServiceError('conflict_requires_fork', 'A conflicting suggestion must be forked', 409,
-        { conflictsWith: suggestion.conflictsWith, reason: suggestion.reason });
+      if (suggestion.verdict !== 'fits') {
+        if (suggestion.verdict === 'conflicts') throw new HistoryServiceError('suggestion_became_conflict', 'This saved suggestion conflicts with the current history. It remains available for What-if.', 409,
+          { conflictsWith: suggestion.conflictsWith, reason: suggestion.reason, suggestion });
+        throw new HistoryServiceError('invalid_suggestion', 'Suggestion verdict is unavailable', 409, { suggestion });
+      }
       if (!isYear(suggestion.year) || !validId(suggestion.causeEventId)) throw new HistoryServiceError('invalid_suggestion', 'Suggestion cannot be woven');
       const cause = suggestion.causeEventId === question.id ? null : history.events.find(event => event.id === suggestion.causeEventId);
       if (suggestion.causeEventId !== question.id && (!cause || cause.year >= suggestion.year)) throw new HistoryServiceError('invalid_cause', 'Suggestion cause is not earlier in this history', 409);
@@ -189,31 +288,39 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
   }
 
   async function fork({ questionId, historyId, eventId, suggestionId, userId, sessionId } = {}) {
+    if (suggestionId) await ensureCurrentSuggestion({ questionId, historyId, suggestionId });
     return mutateQuestion(questionId, () => {
     const { question, history } = resolve(store, questionId, historyId);
     const point = history.events.find(event => event.id === eventId);
     if (!point) throw new HistoryServiceError('not_found', 'Fork event not found', 404);
     const suggestion = suggestionId ? history.suggestions?.find(item => item.id === suggestionId) : null;
     if (suggestionId && !suggestion) throw new HistoryServiceError('not_found', 'Fork suggestion not found', 404);
-    if (suggestion?.historyRevision && suggestion.historyRevision !== historyRevision(history)) {
-      throw new HistoryServiceError('stale_suggestion', 'This suggestion was checked against an older version of the history. Request More before forking from it.', 409);
+    if (suggestion && suggestion.historyRevision !== historyRevision(history)) {
+      const pending = { ...suggestion, recheckStatus: 'pending', recheckReason: 'history-changed-before-fork' };
+      const saved = saveHistory(store, question, { ...history, suggestions: history.suggestions.map(item => item.id === suggestionId ? pending : item) });
+      return pendingRecheck(saved.histories.find(item => item.id === historyId).suggestions.find(item => item.id === suggestionId),
+        'The history changed after checking. The suggestion remains saved; retry What-if to check the new version.');
     }
-    if (suggestion && (suggestion.verdict !== 'conflicts' || suggestion.conflictsWith !== eventId)) throw new HistoryServiceError('invalid_fork', 'Fork suggestion must conflict with the selected event', 409);
-    const prefix = sorted(history.events.filter(event => event.year < point.year || (event.year === point.year && event.id.localeCompare(point.id) < 0)));
+    if (suggestion && suggestion.verdict !== 'conflicts') throw new HistoryServiceError('invalid_fork', 'This suggestion still fits the current history and cannot be forked.', 409, { suggestion });
+    if (suggestion && suggestion.conflictsWith !== eventId) throw new HistoryServiceError('suggestion_became_conflict', 'The suggestion now conflicts with a different event. Its updated verdict remains saved.', 409,
+      { conflictsWith: suggestion.conflictsWith, reason: suggestion.reason, suggestion });
+    const forkYear = suggestion ? Math.min(point.year, suggestion.year) : point.year;
+    const prefix = sorted(history.events.filter(event => event.year < forkYear));
     const replacedEvent = Object.fromEntries(['id', 'year', 'place', 'title', 'summary', 'causeEventId', 'era', 'geography']
       .filter(key => point[key] !== undefined).map(key => [key, structuredClone(point[key])]));
     const forked = { id: `history-fork-${randomUUID()}`,
       events: prefix, forkEventId: eventId, forkedFromHistoryId: history.id,
       forkReason: suggestion?.reason ?? `What if instead of ${point.title}?`,
-      origin: { kind: suggestion ? 'conflicting-suggestion-fork' : 'deliberate-what-if', replacedEvent } };
+      origin: { kind: suggestion ? 'conflicting-suggestion-fork' : 'deliberate-what-if', forkYear, replacedEvent } };
     if (suggestion) {
       const alternative = { ...suggestion, id: suggestion.id };
       delete alternative.window; delete alternative.verdict; delete alternative.conflictsWith; delete alternative.reason; delete alternative.generatedAt; delete alternative.historyRevision;
       if (alternative.causeEventId !== question.id && !prefix.some(event => event.id === alternative.causeEventId)) {
-        alternative.causeEventId = prefix.at(-1)?.id ?? question.id;
+        const excludedCause = history.events.find(event => event.id === alternative.causeEventId);
+        alternative.causeEventId = question.id;
+        forked.forkReason += ` Its original cause${excludedCause ? `, ${excludedCause.title},` : ''} falls after fork year ${forkYear}; the question is used as the cause instead.`;
       }
       forked.events = sorted([...prefix, alternative]);
-      forked.forkReason = suggestion.reason;
     }
     const normalizedFork = normalizeHistory(forked, { questionId });
     const savedQuestion = normalizeQuestionHistories({ ...question, histories: [...question.histories, normalizedFork] });

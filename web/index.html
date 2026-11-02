@@ -45,18 +45,20 @@
         <div class="archive-picker"><label for="runs">THE ARCHIVE <span>· STORIES</span></label><div class="input-row"><select id="runs"><option value="">Loading archive…</option></select><button id="load-run" class="outline" type="button">Open ↗</button></div><button id="archive-history-toggle" class="outline" type="button" aria-pressed="false">Show previous explorations</button><small id="archive-history-hint" role="status"></small></div>
       </div>
     </section>
-    <section id="exploration-tree" class="exploration-tree glass-panel" aria-label="Exploration tree">
+    <section id="exploration-tree" class="exploration-tree glass-panel" aria-label="History timeline">
       <div class="exploration-tree-heading">
-        <div><p class="eyebrow">YOUR STORY</p><h2>Exploration tree</h2></div>
+        <div><p class="eyebrow">YOUR HISTORY</p><h2>History timeline</h2></div>
         <button id="focus-atlas" class="map-open-action" type="button" aria-controls="atlas-scene"><span class="map-open-icon" aria-hidden="true">✳</span><span>Focus atlas</span><span class="map-open-arrow" aria-hidden="true">↗</span></button>
       </div>
-      <p class="exploration-tree-help">Choose a possibility here or enter it on the atlas. Both views stay linked.</p>
+      <p class="exploration-tree-help">Events stay in one history. Weave possibilities that fit; fork only when you choose another path.</p>
       <div id="root-generation-status" class="root-generation-status" role="status" aria-live="polite" hidden><span id="root-generation-indicator" class="activity-indicator" aria-hidden="true"></span><span id="root-generation-message"></span></div>
+      <div id="history-timeline-host"></div>
+      <div class="history-legacy-fallback" aria-hidden="true">
       <div id="exploration-tree-status" aria-live="polite"></div>
-      <div id="history-suggestions-host"></div>
       <nav id="world-navigation" class="world-navigation" aria-label="Chosen speculative history" hidden><button id="world-back" class="outline" type="button" hidden>← Previous world</button><div id="world-path"></div><small>Speculative causes and consequences · generated possibilities, not historical facts. Choose a path to expand; saved futures reopen without generation.</small></nav>
       <div id="branch-list" class="branch-list" aria-label="Story branches"></div>
       <p id="map-empty" class="empty"><span aria-hidden="true">✳</span> A question opens the map. Choose a saved possibility to begin.</p>
+      </div>
     </section>
     <nav id="atlas-compact-controls" class="atlas-compact-controls" aria-label="Atlas quick navigation">
       <button id="atlas-compact-tree" type="button" aria-controls="exploration-tree" aria-expanded="false" aria-label="Open story tree"><span aria-hidden="true">☷</span><span>Story tree</span></button>
@@ -76,7 +78,9 @@
           <button id="atlas-show-tree" type="button">Story tree</button>
           <button id="atlas-show-selected" type="button">Selected world</button>
         </div>
-        <div id="atlas-scene" tabindex="0" aria-label="Continuous Atlas scene: hover or focus to preview; click or press Enter to enter a world or unfold a question chip" aria-describedby="branch-list"></div>
+        <div id="atlas-scene" tabindex="0" aria-label="Continuous Atlas scene: hover or focus to preview; click or press Enter to select an event or unfold a question chip" aria-describedby="history-timeline-host"></div>
+        <p id="history-render-status" class="history-render-status" role="status" hidden></p>
+        <div id="history-timebar-host"></div>
         <div id="atlas-preview-anchor" class="atlas-preview-anchor" aria-hidden="true"></div>
         <p id="globe-fallback" class="muted fallback-note" hidden>Atlas scene unavailable; explore stories using the tree.</p>
         <section id="geography-panel" class="geography-panel glass-vault" aria-label="Scenario geography">
@@ -116,6 +120,7 @@
           <button id="atlas-open-details" type="button" aria-controls="chronicle" aria-expanded="false">Open details</button>
         </div>
         <div id="atlas-world-details" class="atlas-world-details">
+        <p id="history-asof-header" class="history-asof-header" role="status" hidden></p>
         <div class="chronicle-heading"><div><p class="eyebrow">THE SELECTED WORLD</p><h2 id="hero-title">A world to step into</h2></div><span id="hero-tag" class="archive-stamp muted">AWAITING A STORY</span><button id="atlas-close-details" class="atlas-details-close" type="button" aria-label="Close selected world details" aria-controls="chronicle" aria-expanded="false" hidden>×</button></div>
         <p id="selected-branch-context" class="selected-branch-context" hidden></p>
         <div class="view-switch glass-veil" role="tablist" aria-label="Selected world views"><button id="scene-view" type="button" role="tab" aria-selected="true" aria-controls="chronicle-stage">Scene</button><button id="cutout-view" type="button" role="tab" aria-selected="false" aria-controls="chronicle-stage">SAM cutout</button><button id="model-button" type="button" role="tab" aria-selected="false" aria-controls="chronicle-stage">3D object</button><button id="orbit-button" type="button" aria-pressed="false" hidden>Orbit object</button><button id="back-to-atlas" type="button" class="outline" hidden>Back to atlas</button></div>
@@ -130,6 +135,6 @@
   </main>
   <dialog id="scene-lightbox" class="scene-lightbox" aria-label="Enlarged scene image"><button id="scene-lightbox-close" class="outline" type="button" aria-label="Close enlarged image">Close <span aria-hidden="true">×</span></button><img id="scene-lightbox-image" alt=""></dialog>
   <footer><span>OFFICE OF OTHERWISE</span><span id="footer-service-mode">Saved stories · run locally with your own Meta API key for fresh exploration</span></footer>
-  <script type="module" src="/app.js?v=history-p2-session-1"></script>
+  <script type="module" src="/app.js?v=history-p3-timeline-1"></script>
 </body>
 </html>

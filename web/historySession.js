@@ -10,7 +10,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   onChange = () => {}, debounceMs = 800 } = {}) {
   let context = null, timer = null, generation = 0, preferenceRequest = 0;
   const listeners = new Set();
-  const state = { autoSuggest: true, questionId: '', historyId: '', selectedEventId: '', date: null, window: null,
+  const state = { autoSuggest: true, questionId: '', historyId: '', selectedEventId: '', date: null, window: null, question: null, histories: [],
     suggestions: [], status: '', paused: false, loading: false, busyIds: new Set(), history: null, windowCached: false, windowStatus: '' };
   const emit = () => { const snapshot = { ...state, suggestions: [...state.suggestions], busyIds: new Set(state.busyIds) }; onChange(snapshot); for (const listener of listeners) listener(snapshot); };
   const isCurrent = (token, identity) => token === generation && context?.questionId === identity.questionId
@@ -87,7 +87,8 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
       const history = question?.histories?.find(item => item.id === identity.historyId)
         || question?.histories?.find(item => item.events?.some(event => event.id === identity.eventId));
       if (!history) { state.history = null; state.suggestions = []; state.status = 'No saved history is available for this story.'; return; }
-      context.historyId = history.id; state.historyId = history.id; state.history = history; state.window = windowFor(identity.date);
+      context.historyId = history.id; state.question = question; state.histories = question.histories || [];
+      state.historyId = history.id; state.history = history; state.window = windowFor(identity.date);
       updateWindowSuggestions(); state.status = state.windowStatus === 'pending' ? 'Suggestions for this window are still being prepared.' : state.windowStatus === 'unknown' ? 'A previous request may have completed; use More to check for another batch.' : '';
     } catch (error) {
       if (isCurrent(token, identity)) state.status = error.message || 'Could not load saved history.';
@@ -116,7 +117,9 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
         return;
       }
       const previousHistory = state.history;
+      state.question = data.question || state.question;
       state.history = mergeWindows(data.history || state.history, previousHistory, identity.window, 'ready');
+      if (state.question) state.histories = state.question.histories.map(item => item.id === state.history.id ? state.history : item);
       state.suggestions = (state.history?.suggestions || []).filter(item => item.window?.fromYear === identity.window.fromYear && item.window?.toYear === identity.window.toYear);
       if (Array.isArray(data.suggestions) && data.suggestions.length) state.suggestions = [...new Map([...state.suggestions, ...data.suggestions].map(item => [item.id, item])).values()];
       state.windowCached = true; state.windowStatus = 'ready';
@@ -134,11 +137,27 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
       }) });
       const data = await response.json().catch(() => ({}));
       if (!isCurrent(token, identity)) return null;
-      if (!response.ok) { state.status = data.error || 'Could not update history.'; return null; }
+      if (!response.ok) {
+        if (data.code === 'suggestion_became_conflict' && data.suggestion) {
+          const refreshed = { ...data.suggestion, window:data.suggestion.window || identity.window };
+          state.history = { ...state.history, suggestions:(state.history.suggestions || []).map(item => item.id === refreshed.id ? refreshed : item) };
+          state.history = mergeWindows(state.history, state.history, identity.window, 'ready');
+          state.suggestions = state.suggestions.map(item => item.id === refreshed.id ? refreshed : item);
+          state.window = identity.window; state.windowCached = true; state.windowStatus = 'ready';
+          state.status = data.error || 'This suggestion now conflicts with the selected history.';
+          if (state.question) state.histories = state.histories.map(item => item.id === state.history.id ? state.history : item);
+          emit();
+        } else if (data.code === 'suggestion_recheck_pending') state.status = data.error || 'This suggestion is being checked again; retry the action shortly.';
+        else state.status = data.error || 'Could not update history.';
+        return null;
+      }
       const priorHistory = state.history;
       const forkedHistory = !!(data.history?.id && data.history.id !== context.historyId && data.forkEventId);
+      state.question = data.question || state.question;
       state.history = forkedHistory ? mergeWindows(data.history, null, null) : mergeWindows(data.history || state.history, priorHistory,
         identity.window, path === '/api/history/weave' || identity.windowCached ? 'ready' : '');
+      if (state.question) state.histories = state.question.histories.map(item => item.id === state.history.id ? state.history : item);
+      else if (forkedHistory) state.histories = [...state.histories, state.history];
       if (context && forkedHistory) {
         const forkPoint = priorHistory?.events?.find(item => item.id === data.forkEventId);
         context.historyId = data.history.id; context.date = forkPoint?.year ?? context.date;
@@ -175,25 +194,46 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     }
     generation++;
     if (timer !== null) { clearTimer(timer); timer = null; }
-    context = next; state.questionId = questionId; state.historyId = historyId; state.selectedEventId = eventId; state.date = date; state.window = next.window;
-    state.loading = false; state.busyIds.clear(); state.paused = false; state.history = sameHistory ? state.history : null;
+    const savedQuestion = state.questionId === questionId ? state.question : null;
+    const savedHistories = state.questionId === questionId ? state.histories : [];
+    const cachedHistory = sameHistory ? state.history : savedHistories.find(item => item.id === historyId)
+      || (!historyId ? savedHistories.find(item => item.events?.some(item => item.id === eventId)) : null);
+    if (cachedHistory && !next.historyId) next.historyId = cachedHistory.id;
+    context = next; state.questionId = questionId; state.historyId = next.historyId; state.selectedEventId = eventId; state.date = date; state.window = next.window;
+    state.question = savedQuestion; state.histories = savedHistories;
+    state.loading = false; state.busyIds.clear(); state.paused = false; state.history = cachedHistory || null;
     state.suggestions = [];
     state.windowCached = false; state.windowStatus = '';
     if (state.history) updateWindowSuggestions();
     state.status = '';
-    if (state.history) { emit(); scheduleSuggest(); }
+    if (state.history) { updateWindowSuggestions(); state.histories = state.histories.map(item => item.id === state.history.id ? state.history : item); emit(); scheduleSuggest(); }
     else { const token = generation; emit(); loadHistory(next, token); }
+  }
+  function selectHistory(historyId) {
+    if (!state.questionId || !historyId || !Number.isSafeInteger(state.date)) return;
+    const history = state.histories.find(item => item.id === historyId);
+    const selectedExists = history?.events?.some(item => item.id === state.selectedEventId);
+    const latest = [...(history?.events || [])].filter(item => item.year <= state.date).sort((a,b) => a.year-b.year).at(-1);
+    setContext({ questionId: state.questionId, historyId, eventId: selectedExists ? state.selectedEventId : latest?.id || '', date: state.date });
+  }
+  function selectEvent(eventId) {
+    if (!state.questionId || !state.historyId || !Number.isSafeInteger(state.date)) return;
+    setContext({ questionId: state.questionId, historyId: state.historyId, eventId, date: state.date });
+  }
+  function setDate(date) {
+    if (!state.questionId || !state.historyId || !Number.isSafeInteger(date) || date === 0) return;
+    setContext({ questionId: state.questionId, historyId: state.historyId, eventId: state.selectedEventId, date });
   }
   function clear() {
     generation++; if (timer !== null) clearTimer(timer); timer = null; context = null;
     state.questionId = ''; state.historyId = ''; state.selectedEventId = ''; state.date = null; state.window = null; state.suggestions = [];
-    state.status = ''; state.loading = false; state.paused = false; state.busyIds.clear(); state.history = null; state.windowCached = false; state.windowStatus = ''; emit();
+    state.status = ''; state.loading = false; state.paused = false; state.busyIds.clear(); state.history = null; state.question = null; state.histories = []; state.windowCached = false; state.windowStatus = ''; emit();
   }
   function hover() { /* Preview is deliberately inert: never generate from hover. */ }
   readPreferences();
   return { getState: () => ({ ...state, suggestions: [...state.suggestions], busyIds: new Set(state.busyIds) }),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    setContext, clear, hover, setAutoSuggest: persistPreference,
+    setContext, selectHistory, selectEvent, setDate, clear, hover, setAutoSuggest: persistPreference,
     suggest: () => requestSuggestions(false), more: () => requestSuggestions(true),
     weave: suggestionId => mutate('/api/history/weave', { suggestionId }, `suggestion:${suggestionId}`),
     forkSuggestion: suggestionId => mutate('/api/history/fork', { eventId: state.suggestions.find(item => item.id === suggestionId)?.conflictsWith, suggestionId }, `suggestion:${suggestionId}`),

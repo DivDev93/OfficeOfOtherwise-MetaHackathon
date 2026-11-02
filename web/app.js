@@ -11,11 +11,12 @@ import { createAtlasController } from './atlas/controller.js';
 import { renderEvidencePanel } from './evidence.js';
 import { createLocalMetaKeySetup } from './localMetaKey.js';
 import { createHistorySession } from './historySession.js';
-import { mountHistoryPanel } from './historyPanel.js';
+import { mountHistoryTimeline } from './historyTimeline.js';
+import { mountHistoryTimebar } from './historyTimebar.js';
+import { composeGeography } from './historyModel.js';
 const $ = id => document.getElementById(id);
 const savedPreview = createSavedPreviewPopover(document.body, { document, viewport: () => ({ width:window.innerWidth || 1024, height:window.innerHeight || 768 }) });
 const historySession = createHistorySession({ fetchImpl: fetch });
-mountHistoryPanel($('history-suggestions-host'), historySession);
 const voice = createVoiceInput({ prompt: $('prompt'), access: $('access'), controls: $('voice-controls'), record: $('voice-record'), stop: $('voice-stop'), cancel: $('voice-cancel'), message: $('voice-status') });
 let voiceEnabled = false, localReviewAccess = false;
 const localMetaKeySetup = createLocalMetaKeySetup({ details: $('meta-key-setup'), input: $('meta-key-input'), useButton: $('meta-key-use'), clearButton: $('meta-key-clear'), status: $('meta-key-status'), configStatus: $('meta-key-config-status'), fetchImpl: fetch, refreshServiceMode: loadServiceMode });
@@ -26,6 +27,12 @@ let atlasActiveQuestionId = '', atlasOtherQuestionsOpen = false, atlasVisibleGra
 let expansionLimit = 20, serverExpansionUsed = 0, activeExpansion = null, preserveGraphUntilReady = false;
 let atlasGeographyOverride = null;
 let atlasDetailsFocusTimer = null;
+let historyMode = false, selectedHistoryRecord = null, selectedHistoryId = '', historyMedia = { sceneUrl:'',cutoutUrl:'',modelUrl:'' }, historyViewSignature = '', historyRenderSignature = '', historyRenderFailed = false;
+const historyTimeline = mountHistoryTimeline($('history-timeline-host'), { getState:() => historySession.getState(), subscribe:fn => historySession.subscribe(fn), session:historySession,
+  onHistoryChange:id => historySession.selectHistory(id), onEventSelect:id => selectHistoryEvent(id), onWindowSelect:year => historySession.setDate(year), document });
+const historyTimebar = mountHistoryTimebar($('history-timebar-host'), { getState:() => historySession.getState(), subscribe:fn => historySession.subscribe(fn),
+  onDateChange:year => historySession.setDate(year), onEventSelect:id => selectHistoryEvent(id), document });
+historySession.subscribe(syncHistoryUi);
 reducedMotion.addEventListener?.('change', () => applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'));
 const enteredNodes = new Set();
 const pendingExpansionNodes = new Set();
@@ -99,6 +106,122 @@ function rememberAtlasQuestionRoot(id) {
 }
 function activeAtlasRootId(manifest) {
   return manifest?.questionAttachment?.questionId || manifest?.continuation?.rootRunId || manifest?.id || null;
+}
+function historyRefUrl(ref) {
+  const url = typeof ref === 'string' ? ref : ref?.status === 'complete' ? ref.url : '';
+  if (typeof url !== 'string' || !url.startsWith('/') || url.includes('\\') || /[?#\u0000-\u001f]/.test(url) || /%(?:2e|2f|5c)/i.test(url)) return '';
+  return /^\/runs\/[A-Za-z0-9._%-]+\/(?:hero\.png|cutout\.png|model\.glb|model\.meshopt\.glb)$/.test(url)
+    || /^\/(?:event-scenes|event-cutouts)\/[a-f\d]{64}\.png$/i.test(url) ? url : '';
+}
+function legacyHistorySource(event) {
+  const match = /^([A-Za-z0-9_-]{1,128}):([A-Za-z0-9_-]{1,128})$/.exec(event?.id || '');
+  if (!match) return null;
+  const manifest = knownRunManifests.get(match[1]);
+  const branch = manifest?.branch?.branches?.find(item => item.id === match[2]);
+  if (!branch || branch.title !== event.title || branch.year !== event.year || (event.summary && branch.summary !== event.summary)) return null;
+  return { runId:match[1], branch, manifest };
+}
+function renderHistoryEvent(event) {
+  if (!event) return;
+  selectedHistoryRecord = event;
+  selectedHistoryId = historySession.getState().historyId;
+  historyMedia = { sceneUrl:historyRefUrl(event.sceneRef) || historyRefUrl(event.heroRef),
+    cutoutUrl:historyRefUrl(event.cutoutRef), modelUrl:historyRefUrl(event.modelRef) };
+  modelRequestId++; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = '';
+  modelApi?.clear?.();
+  $('history-asof-header').hidden = false;
+  $('hero-title').textContent = `${formatYear(event.year)} · ${event.title}`;
+  $('hero-description').textContent = event.summary || '';
+  $('hero-tag').textContent = 'HISTORY EVENT';
+  $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren();
+  $('event-consequences').hidden = true; $('event-children').replaceChildren(); $('event-retry').hidden = true; $('event-scene-action').hidden = true;
+  $('evidence-toggle').hidden = true; $('evidence-panel').hidden = true;
+  const source = legacyHistorySource(event);
+  if (source) loadEvidenceForBranch(source.runId, source.branch);
+  setStageMessage(historyMedia.sceneUrl ? 'Loading the saved scene for this history event…' : 'No saved scene is attached to this history event.');
+  setView(continuationViewSelection || 'scene');
+}
+function selectHistoryEvent(eventId) {
+  const state = historySession.getState();
+  const event = state.history?.events?.find(item => item.id === eventId);
+  if (!event) return;
+  historySession.selectEvent(eventId);
+  if (selectedHistoryRecord?.id !== event.id) renderHistoryEvent(event);
+}
+function showHistoryGeography(state) {
+  const events = state.history?.events || [];
+  surfaceGeographyRaw = composeGeography(events, state.date);
+  surfaceGeography = safeGeography(surfaceGeographyRaw);
+  surfaceUnavailable = !!surfaceGeographyRaw && !surfaceGeography;
+  surfacePreviewKey = geographyPreviewKey(`history:${state.questionId}:${state.historyId}`, String(state.date));
+  geographyPreviewControls.get(surfacePreviewKey, surfaceGeography);
+  renderGeography();
+}
+function syncHistoryUi(state = historySession.getState()) {
+  const active = !!state.question && !!state.history && Array.isArray(state.histories);
+  const enteringHistory = active && !historyMode;
+  const leavingHistory = historyMode && !active;
+  historyMode = active;
+  document.body.classList.toggle('history-mode', historyMode);
+  const historyCanvasLabel = 'Atlas scene for the selected history. Hover to preview; click or press Enter to select an event. Use plus and minus to zoom; Escape moves out one level.';
+  if (historyMode) {
+    $('atlas-scene')?.setAttribute('aria-label', historyCanvasLabel);
+    $('atlas-scene')?.querySelector('canvas')?.setAttribute('aria-label', historyCanvasLabel);
+  } else if (leavingHistory) {
+    const legacyCanvasLabel = 'Atlas scene. Hover or focus to preview. Click or press Enter to enter a saved world, open present-day Earth, or unfold a question chip. Use plus and minus to zoom; Escape moves out one level.';
+    $('atlas-scene')?.setAttribute('aria-label', legacyCanvasLabel);
+    $('atlas-scene')?.querySelector('canvas')?.setAttribute('aria-label', legacyCanvasLabel);
+  }
+  $('history-asof-header').hidden = !historyMode;
+  if (!historyMode) {
+    if (leavingHistory) atlasController?.setHistoryView?.(null);
+    selectedHistoryRecord = null; selectedHistoryId = ''; historyMedia = { sceneUrl:'',cutoutUrl:'',modelUrl:'' }; historyViewSignature = '';
+    historyRenderSignature = ''; historyRenderFailed = false;
+    $('atlas-show-tree').textContent = 'Story tree'; $('atlas-show-tree').setAttribute('aria-label','Open story tree');
+    if ($('history-asof-header')) $('history-asof-header').textContent = '';
+    if ($('history-render-status')) $('history-render-status').hidden = true;
+    return;
+  }
+  if (enteringHistory && isAtlasPhone()) setAtlasFocused(true);
+  $('atlas-show-tree').textContent = isAtlasPhone() ? 'History' : 'Story tree';
+  $('atlas-show-tree').setAttribute('aria-label', isAtlasPhone() ? 'Open history timeline' : 'Open story tree');
+  const count = state.history.events.filter(event => event.year <= state.date).length;
+  $('history-asof-header').textContent = `History as of ${formatYear(state.date)} · ${count} ${count === 1 ? 'event' : 'events'}`;
+  const selected = state.history.events.find(event => event.id === state.selectedEventId);
+  if (!selectedHistoryRecord || selectedHistoryRecord !== selected || selectedHistoryRecord.id !== state.selectedEventId || selectedHistoryId !== state.historyId) {
+    if (selected) renderHistoryEvent(selected);
+    else if (enteringHistory) {
+      const latest = [...state.history.events].filter(event => event.year <= state.date).sort((a,b) => a.year-b.year).at(-1);
+      if (latest) { historySession.selectEvent(latest.id); renderHistoryEvent(latest); }
+    }
+  }
+  $('history-timebar-host').hidden = false;
+  const nextSignature = JSON.stringify([state.questionId,state.historyId,state.date,state.window?.fromYear,state.window?.toYear]);
+  if (historyViewSignature !== nextSignature) { historyViewSignature = nextSignature; showHistoryGeography(state); }
+  updateHistoryAtlasView(state);
+}
+function updateHistoryAtlasView(state = historySession.getState()) {
+  if (!historyMode || !state.history || !atlasController?.setHistoryView) return;
+  let surfaceGeography = presentDayGeography();
+  try { surfaceGeography = geographyFromControls(surfaceGeographyRaw || composeGeography(state.history.events,state.date), currentGeographyControls()); }
+  catch { /* Keep the history projection available if a local display adjustment is invalid. */ }
+  const composedGeography = composeGeography(state.history.events,state.date);
+  const view = { question:state.question, historyId:state.historyId, asOfYear:state.date, date:state.date,
+    window:state.window, suggestions:state.suggestions, selectedEventId:state.selectedEventId,
+    surfaceMode, composedGeography, surfaceGeography:surfaceMode === 'present' ? presentDayGeography() : surfaceGeography };
+  const signature = JSON.stringify([state.questionId,state.historyId,state.date,state.window?.fromYear,state.window?.toYear,
+    surfaceMode,view.surfaceGeography]);
+  if (signature === historyRenderSignature && !historyRenderFailed) return;
+  historyRenderSignature = signature;
+  try {
+    atlasController.setHistoryView(view);
+    historyRenderFailed = false;
+    $('history-render-status').hidden = true;
+  } catch {
+    historyRenderFailed = true;
+    $('history-render-status').textContent = 'Atlas rendering is unavailable; the history timeline and date controls remain active.';
+    $('history-render-status').hidden = false;
+  }
 }
 let surfaceGeography, surfaceGeographyRaw, surfaceMode = 'scenario', surfaceUnavailable = false;
 const geographyPreviewControls = createGeographyPreviewStore();
@@ -369,6 +492,7 @@ function buildStarMapNodes(rootManifest) {
   return output;
 }
 function renderStarMap(rootManifest) {
+  if (historyMode) return;
   const roots = new Map();
   if (rootManifest?.branch) roots.set(rootManifest.id, rootManifest);
   for (const id of atlasQuestionRootIds) {
@@ -463,7 +587,7 @@ function renderStarMap(rootManifest) {
   }
 }
 function sendAtlasGraph(graph) {
-  if (!atlasController) return false;
+  if (!atlasController || historyMode) return false;
   const sourceGraphSignature = JSON.stringify(graph);
   if (sourceGraphSignature === atlasSourceGraphSignature) return false;
   atlasController.setGraph(graph);
@@ -599,6 +723,7 @@ function initializeAtlas() {
     reducedMotion:reducedMotion.matches,
     getZoomOutTarget:zoom => isAtlasPhone() && zoom < 0.22 ? 0.68 : null,
     onPreview:(world, anchor) => showAtlasPreview(world, anchor),
+    onHistoryEventSelect:(event, detail) => selectHistoryEvent(event?.id || detail?.eventId),
     onQuestionPreview:(question, anchor) => showAtlasPreview(question ? {
       role:'root-question', title:question.question || question.title || 'Saved question',
       prompt:question.question || question.prompt || question.summary || '',
@@ -608,6 +733,7 @@ function initializeAtlas() {
     onLevelChange:level => {
       const labels = { surface:'SURFACE · CURRENT WORLD', lift:'LIFT · FOLLOW A THREAD', orbit:'ORBIT · ALTERNATE WORLDS', atlas:'ATLAS · HISTORY AND POSSIBILITIES' };
       container.dataset.atlasLevel = level?.level || 'unknown';
+      $('history-timebar-host').hidden = !historyMode;
       $('map-status').textContent = labels[level?.level] || 'ATLAS · POSSIBLE WORLDS';
       applyAtlasGeographyLevel(level?.level);
       syncAtlasOtherQuestionToggle();
@@ -630,12 +756,14 @@ function initializeAtlas() {
     });
     const canvas = container.querySelector('canvas');
     if (canvas) {
-      canvas.setAttribute('aria-label', 'Atlas scene. Hover or focus to preview. Click or press Enter to enter a saved world, open present-day Earth, or unfold a question chip. Use plus and minus to zoom; Escape moves out one level.');
-      canvas.setAttribute('aria-describedby', 'branch-list');
+      canvas.setAttribute('aria-label', historyMode ? 'Atlas scene for the selected history. Hover to preview; click or press Enter to select an event. Use plus and minus to zoom; Escape moves out one level.'
+        : 'Atlas scene. Hover or focus to preview. Click or press Enter to enter a saved world, open present-day Earth, or unfold a question chip. Use plus and minus to zoom; Escape moves out one level.');
+      canvas.setAttribute('aria-describedby', 'history-timeline-host');
       canvas.setAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight Enter Escape + -');
     }
     renderStarMap(continuation.rootRunId ? knownRunManifests.get(continuation.rootRunId) || currentManifest : currentManifest);
     renderGeography();
+    if (historyMode) syncHistoryUi();
     return controller;
   }).catch(() => { $('globe-fallback').hidden = false; return null; });
   return atlasInitPromise;
@@ -759,14 +887,14 @@ function syncAtlasCompactButtons(level = '') {
 function syncAtlasWorldCard(level = '') {
   const card = $('atlas-world-card');
   if (!card) return;
-  const branch = branchState.branches.find(item => item.id === selectedBranchId);
-  const world = branch || selectedContext;
+  const branch = historyMode ? null : branchState.branches.find(item => item.id === selectedBranchId);
+  const world = historyMode ? selectedHistoryRecord : branch || selectedContext;
   const title = world?.title || $('hero-title')?.textContent?.trim() || 'A world to step into';
   const year = world?.year != null ? formatYear(world.year) : '';
   const thumbnail = $('atlas-world-thumbnail');
-  const event = selectedBranchId ? eventWork.get(eventKey(currentRunId, selectedBranchId)) : null;
+  const event = !historyMode && selectedBranchId ? eventWork.get(eventKey(currentRunId, selectedBranchId)) : null;
   const savedThumbnail = typeof world?.thumbnail === 'string' ? world.thumbnail : world?.thumbnail?.url;
-  const sceneUrl = event?.sceneUrl
+  const sceneUrl = historyMode ? historyMedia.sceneUrl : event?.sceneUrl
     || (branch && branch.id === branchState.heroId && hasImage ? asset('hero.png') : '')
     || savedThumbnail || world?.sceneUrl || '';
   $('atlas-world-title').textContent = title;
@@ -998,7 +1126,14 @@ function renderGeography() {
   $('geography-scenario').disabled = !hasScenario || surfaceUnavailable;
   $('geography-present').setAttribute('aria-pressed', String(mode === 'present'));
   $('geography-scenario').setAttribute('aria-pressed', String(mode === 'scenario'));
-  $('geography-status').textContent = surfaceUnavailable ? 'Scenario preview unavailable · geography data is unsupported.' : mode === 'present' ? (hasScenario ? 'Present-day reference · event adjustments remain available in Scenario.' : 'Present-day reference · no scenario geography recorded.') : `${changes.length ? `${changes.length} illustrative surface ${changes.length === 1 ? 'change' : 'changes'}` : 'Illustrative global what-if preview'} · selected event`;
+  const historyDate = historyMode ? historySession.getState().date : null;
+  $('geography-reset-adjustments').textContent = historyMode ? `Reset to history as of ${formatYear(historyDate)}` : 'Reset to event scenario';
+  const historyPlaces = historyMode ? changes.slice(0,3).map(change => geographyLabel(change).slice(0,48)) : [];
+  const hiddenPlaceCount = historyMode ? Math.max(0, changes.length - historyPlaces.length) : 0;
+  $('geography-status').textContent = surfaceUnavailable ? 'Scenario preview unavailable · geography data is unsupported.' : historyMode
+    ? mode === 'present' ? `Present-day reference · history geography remains available for ${formatYear(historyDate)}.`
+      : `As of ${formatYear(historyDate)}: ${historyPlaces.length ? `${historyPlaces.join(', ')}${hiddenPlaceCount ? `, and ${hiddenPlaceCount} more` : ''}` : 'no composed geography changes recorded'}`
+    : mode === 'present' ? (hasScenario ? 'Present-day reference · event adjustments remain available in Scenario.' : 'Present-day reference · no scenario geography recorded.') : `${changes.length ? `${changes.length} illustrative surface ${changes.length === 1 ? 'change' : 'changes'}` : 'Illustrative global what-if preview'} · selected event`;
   const legend = $('geography-legend'); legend.replaceChildren();
   const legendChanges = surfaceGeography?.changes || geographyDisplayChanges(surfaceGeographyRaw);
   for (const change of legendChanges) {
@@ -1018,10 +1153,11 @@ function renderGeography() {
     item.append(swatch, details); legend.append(item);
   }
   $('geography-detail').hidden = !changes.some(change => change.region === 'ram-setu') || hasWorldAdjustment;
-  renderStarMap(continuation.rootRunId ? knownRunManifests.get(continuation.rootRunId) || currentManifest : currentManifest);
+  if (!historyMode) renderStarMap(continuation.rootRunId ? knownRunManifests.get(continuation.rootRunId) || currentManifest : currentManifest);
   const renderState = mode === 'present' ? presentDayGeography() : preview;
   $('geography-render-warning').hidden = true;
-  atlasController?.setGeography(surfaceGeography, mode, renderState);
+  if (!historyMode) atlasController?.setGeography(surfaceGeography, mode, renderState);
+  else updateHistoryAtlasView();
   insetRenderer.set($('geography-detail').hidden ? undefined : renderState, $('geography-detail').hidden ? 'present' : mode);
 }
 function updateGeographyControl(axis, input) {
@@ -1115,13 +1251,16 @@ function openNewExploration() {
 }
 function setView(view, userSelected = false) {
   if (userSelected) continuationViewSelection = view;
+  const historySelection = historyMode && !!selectedHistoryRecord;
   const selectedHasAssets = !selectedBranchId || selectedBranchId === branchState.heroId;
   const selectedEvent = eventWork.get(eventKey(currentRunId, selectedBranchId));
-  const eventImage = selectedEvent?.sceneUrl;
-  const eventCutout = selectedEvent?.cutoutUrl;
-  const imageAvailable = (hasImage && selectedHasAssets) || !!eventImage, cutoutAvailable = (hasCutout && selectedHasAssets) || !!eventCutout, modelAvailable = hasModel && selectedHasAssets;
+  const eventImage = historySelection ? historyMedia.sceneUrl : selectedEvent?.sceneUrl;
+  const eventCutout = historySelection ? historyMedia.cutoutUrl : selectedEvent?.cutoutUrl;
+  const imageAvailable = historySelection ? !!eventImage : (hasImage && selectedHasAssets) || !!eventImage;
+  const cutoutAvailable = historySelection ? !!eventCutout : (hasCutout && selectedHasAssets) || !!eventCutout;
+  const modelAvailable = historySelection ? !!historyMedia.modelUrl : hasModel && selectedHasAssets;
   $('workspace').classList.toggle('selected-no-scene', !imageAvailable);
-  const selectedEventTitle = branchState.branches.find(branch => branch.id === selectedBranchId)?.title;
+  const selectedEventTitle = historySelection ? selectedHistoryRecord.title : branchState.branches.find(branch => branch.id === selectedBranchId)?.title;
   $('hero-image').alt = selectedEventTitle ? `Scene for ${selectedEventTitle}` : 'Generated scene';
   if (eventImage) $('hero-image').src = eventImage;
   else if (hasImage && selectedHasAssets) $('hero-image').src = asset('hero.png');
@@ -1129,17 +1268,17 @@ function setView(view, userSelected = false) {
   else if (hasCutout && selectedHasAssets) $('cutout-image').src = asset('cutout.png');
   view = availableView(view, {image:imageAvailable, cutout:cutoutAvailable, model:modelAvailable && !!modelApi});
   activeView = view;
-  updateSceneAction(selectedEvent);
-  $('event-progress').textContent = [selectedEvent?.sceneLoading && view === 'scene' ? '' : selectedEvent?.sceneMessage, selectedEvent?.childrenMessage, selectedEvent?.cutoutMessage].filter(Boolean).join(' · ');
+  updateSceneAction(historySelection ? null : selectedEvent);
+  $('event-progress').textContent = historySelection ? (imageAvailable ? 'Saved history media' : 'No saved media is attached to this event.') : [selectedEvent?.sceneLoading && view === 'scene' ? '' : selectedEvent?.sceneMessage, selectedEvent?.childrenMessage, selectedEvent?.cutoutMessage].filter(Boolean).join(' · ');
   $('event-loading-indicator').hidden = !selectedEvent?.childrenLoading || !selectedEvent?.running;
-  $('scene-view').disabled = !imageAvailable; $('cutout-view').disabled = !selectedBranchId; $('model-button').disabled = !selectedBranchId;
+  $('scene-view').disabled = !imageAvailable; $('cutout-view').disabled = historySelection ? !cutoutAvailable : !selectedBranchId; $('model-button').disabled = historySelection ? !modelAvailable || !modelApi : !selectedBranchId;
   $('hero-image').hidden = !imageAvailable || view !== 'scene';
   $('cutout-image').hidden = !cutoutAvailable || view !== 'cutout';
   $('model-view').hidden = !modelAvailable || view !== 'model';
   $('viewer-hint').hidden = view !== 'model';
   $('stage-empty').hidden = imageAvailable || (modelAvailable && view === 'model');
   syncAtlasWorldCard();
-  const sceneLoading = view === 'scene' && !!selectedEvent?.sceneLoading && !eventImage;
+  const sceneLoading = !historySelection && view === 'scene' && !!selectedEvent?.sceneLoading && !eventImage;
   $('scene-loading').hidden = !sceneLoading;
   $('scene-loading-text').textContent = selectedEvent?.sceneMessage || 'Preparing the selected scene…';
   for (const [id, name] of [['scene-view','scene'],['cutout-view','cutout'],['model-button','model']]) {
@@ -1281,6 +1420,7 @@ async function loadEvidenceForBranch(runId, branch) {
   setEvidenceOpen(button.getAttribute('aria-expanded') === 'true');
 }
 function renderEventWork() {
+  if (historyMode) { $('event-consequences').hidden = true; $('event-retry').hidden = true; return; }
   const work = eventWork.get(eventKey(currentRunId, selectedBranchId));
   const section = $('event-consequences'); section.hidden = !selectedBranchId || !work;
   const selected = branchState.branches.find(branch => branch.id === selectedBranchId);
@@ -1423,6 +1563,7 @@ function prefetchEventScenes(branches, runId, manifest) {
   }
 }
 function activateBranch(branch, retry = false, { background = false, sceneOnly = false, runId: targetRunId = currentRunId, manifest: targetManifest, persistSelection = true } = {}) {
+  if (historyMode) { const event = historySession.getState().history?.events?.find(item => item.id === `${targetRunId}:${branch?.id}`); if (event) selectHistoryEvent(event.id); return; }
   if (!branch?.id || streamBusy || replayActive) return;
   if (branch.ancestorRunId) { openAncestor(branch.ancestorRunId, branch.branchId); return; }
   if (!background && targetRunId === currentRunId) selectBranch(branch, { persistLocation: persistSelection, runId:targetRunId });
@@ -1682,6 +1823,7 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
   work.running = !!(work.sceneRunning || work.childrenRunning);
 }
 $('event-retry').addEventListener('click', () => {
+  if (historyMode) return;
   const branch = branchState.branches.find(item => item.id === selectedBranchId), work = eventWork.get(eventKey(currentRunId, selectedBranchId));
   if (!branch || !work) return;
   const action = $('event-retry').dataset.action;
@@ -1726,6 +1868,7 @@ $('event-retry').addEventListener('click', () => {
   if (action === 'retry') activateBranch(branch, true);
 });
 $('event-scene-action').addEventListener('click', () => {
+  if (historyMode) return;
   const branch = branchState.branches.find(item => item.id === selectedBranchId), work = eventWork.get(eventKey(currentRunId, selectedBranchId));
   if (!branch || !work || work.sceneQueued || work.sceneRunning) return;
   const runId = currentRunId;
@@ -1771,6 +1914,7 @@ function updateRunLocation(id, branchId = '') {
   rememberRun(id); $('runs').value = id;
 }
 function renderAncestry() {
+  if (historyMode) { $('world-navigation').hidden = true; return; }
   const nav = $('world-path'); nav.replaceChildren();
   $('world-navigation').hidden = !currentRunId && !continuation.path?.length;
   $('world-back').hidden = !continuation.parentRunId;
@@ -1785,6 +1929,7 @@ function renderAncestry() {
   const label = document.createElement('span'); label.dataset.state = 'current'; label.textContent = selectedContext ? `Exploring consequences of ${formatYear(selectedContext.year)} · ${selectedContext.title}…` : parent ? `Consequences of ${formatYear(parent.year)} · ${parent.title}` : 'Current possibilities'; nav.append(label);
 }
 async function expandBranch(branch) {
+  if (historyMode) { const event = historySession.getState().history?.events?.find(item => item.id === `${currentRunId}:${branch?.id}`); if (event) selectHistoryEvent(event.id); return; }
   if (branch?.ancestorRunId) { await openAncestor(branch.ancestorRunId, branch.branchId); return; }
   if (!branch?.id || streamBusy || replayActive) return;
   selectBranch(branch);
@@ -1911,7 +2056,7 @@ function renderHeroModels() {
     card.append(model, role, metrics); host.append(card);
   }
 }
-function reset({ preservePanel = false, preserveExpansion = false } = {}) { evidenceRequest++; $('evidence-toggle').hidden = true; $('evidence-content').replaceChildren(); $('evidence-panel').hidden = true; $('evidence-toggle').setAttribute('aria-expanded', 'false'); updateSceneAction(null); $('event-retry').hidden = true; savedPreview.clear(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; geographyPreviewControls.clear(); showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasSourceGraphSignature = ''; atlasVisibleGraphSignature = ''; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
+function reset({ preservePanel = false, preserveExpansion = false } = {}) { historySession.clear(); evidenceRequest++; $('evidence-toggle').hidden = true; $('evidence-content').replaceChildren(); $('evidence-panel').hidden = true; $('evidence-toggle').setAttribute('aria-expanded', 'false'); updateSceneAction(null); $('event-retry').hidden = true; savedPreview.clear(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; geographyPreviewControls.clear(); showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasSourceGraphSignature = ''; atlasVisibleGraphSignature = ''; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
 function setBranch(data, event = 'complete', preferredBranchId = '') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchState.phase === 'final' ? (continuation.path?.length ? 'POSSIBLE CONSEQUENCE' : 'SELECTED EVENT') : branchPhaseLabel(branchState.phase);
@@ -1943,8 +2088,8 @@ function syncBranchSelection() {
 }
 async function exists(url) { try { const response = await fetch(url, { method:'HEAD' }); return response.ok; } catch { return false; } }
 function requestModelLoad() {
-  if (!base || !modelAsset || !modelApi) return;
-  const url = asset(modelAsset);
+  const url = historyMode && selectedHistoryRecord ? historyMedia.modelUrl : base && modelAsset ? asset(modelAsset) : '';
+  if (!url || !modelApi) return;
   if (url === loadedModelUrl) { modelLoaded = true; modelLoading = false; setView(activeView); return; }
   if (url === loadingModelUrl) return;
   const requestId = ++modelRequestId;
@@ -2246,7 +2391,11 @@ async function runPrompt(prompt) {
 }
 $('prompt-form').addEventListener('submit', e => { e.preventDefault(); runPrompt($('prompt').value); });
 $('focus-atlas')?.addEventListener('click', () => { setAtlasFocused(true); atlasController?.scene?.setZoom?.(0.78); $('atlas-scene')?.focus({ preventScroll:true }); });
-$('atlas-show-tree')?.addEventListener('click', () => { setAtlasFocused(false); $('exploration-tree')?.scrollIntoView({ behavior:'smooth', block:'nearest' }); });
+$('atlas-show-tree')?.addEventListener('click', () => {
+  setAtlasFocused(false);
+  if (historyMode && isAtlasPhone()) { document.body.classList.add('atlas-panels-open'); document.body.classList.remove('atlas-details-open'); syncAtlasCompactButtons(); }
+  $('exploration-tree')?.scrollIntoView({ behavior:'smooth', block:'nearest' });
+});
 $('atlas-show-selected')?.addEventListener('click', () => { setAtlasFocused(false); $('chronicle')?.scrollIntoView({ behavior:'smooth', block:'nearest' }); });
 $('atlas-compact-tree')?.addEventListener('click', () => {
   const open = !document.body.classList.contains('atlas-panels-open');
@@ -2330,6 +2479,11 @@ window.addEventListener('hashchange', restoreLocationFromHash);
 window.addEventListener('popstate', restoreLocationFromHash);
 $('scene-view').addEventListener('click', () => { viewStatus(''); setView('scene', true); });
 $('cutout-view').addEventListener('click', () => {
+  if (historyMode) {
+    if (historyMedia.cutoutUrl) { viewStatus(''); setView('cutout', true); }
+    else viewStatus('No saved cutout is attached to this history event. New history media generation is not available here.');
+    return;
+  }
   const runId = currentRunId, branchId = selectedBranchId;
   if (!runId || !branchId) return;
   const key = eventKey(runId, branchId);
@@ -2390,6 +2544,11 @@ $('cutout-view').addEventListener('click', () => {
   }).catch(error => { work.cutoutRunning = false; if (isSelected(runId, branchId)) viewStatus(error.message || 'Could not create the cutout'); });
 });
 $('model-button').addEventListener('click', () => {
+  if (historyMode && selectedHistoryRecord) {
+    if (historyMedia.modelUrl && modelApi) { viewStatus(''); setView('model', true); }
+    else viewStatus('A saved 3D model is not attached to this history event.');
+    return;
+  }
   const selectedHasModel = (!selectedBranchId || selectedBranchId === branchState.heroId) && hasModel && modelApi;
   if (selectedHasModel) { viewStatus(''); setView('model', true); }
   else if (assetsLoading && selectedBranchId) { viewStatus(''); setView('model', true); }

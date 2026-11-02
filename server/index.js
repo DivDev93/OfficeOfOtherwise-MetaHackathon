@@ -310,7 +310,8 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       let agent;
       if (!liveMode) {
         agent = { async suggest() { throw new Error('Live history generation is disabled. Use replay mode.'); },
-          async checkRipple() { throw new Error('Live history checks are disabled. Use replay mode.'); } };
+          async checkRipple() { throw new Error('Live history checks are disabled. Use replay mode.'); },
+          async checkSuggestion() { const error = new Error('Live history compatibility checks are disabled in replay mode.'); error.code = 'suggestion_recheck_unavailable'; throw error; } };
       } else {
         const spendCapUsd = configuredSpendCap({ env: runtimeEnv, outputRoot: liveRoot });
         const dailyCapUsd = configuredDailyCap({ env: runtimeEnv, spendCapUsd });
@@ -341,13 +342,31 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     } catch { json(res, 400, { error: 'Invalid JSON object', code: 'invalid_json' }); return null; }
   }
   async function historyAction(res, service, method, input, actor) {
-    try { return json(res, 200, await service[method]({ ...input, ...actor })); }
+    try {
+      const result = await service[method]({ ...input, ...actor });
+      if (result?.question?.id && Array.isArray(result.question.histories)) {
+        const projection = await migratedHistories();
+        const question = projection.questions.find(item => item.id === result.question.id);
+        if (question) {
+          const history = result.history && question.histories.find(item => item.id === result.history.id);
+          const forkedHistory = result.forkedHistory && question.histories.find(item => item.id === result.forkedHistory.id);
+          const event = result.event && (history?.events.find(item => item.id === result.event.id)
+            || forkedHistory?.events.find(item => item.id === result.event.id));
+          result.question = question;
+          if (history) result.history = history;
+          if (forkedHistory) result.forkedHistory = forkedHistory;
+          if (event) result.event = event;
+        }
+      }
+      return json(res, 200, result);
+    }
     catch (error) {
       const status = Number.isInteger(error?.status) ? error.status : error?.name === 'SpendCapError' ? 429 : 500;
       const code = typeof error?.code === 'string' ? error.code : status === 500 ? 'history_action_failed' : 'history_action_rejected';
       return json(res, status, { error: status === 500 ? 'History action could not be completed.' : error.message, code,
         ...(Number.isSafeInteger(error?.used) ? { used: error.used } : {}), ...(Number.isSafeInteger(error?.limit) ? { limit: error.limit } : {}),
-        ...(error?.conflictsWith ? { conflictsWith: error.conflictsWith } : {}), ...(error?.reason ? { reason: error.reason } : {}) });
+        ...(error?.conflictsWith ? { conflictsWith: error.conflictsWith } : {}), ...(error?.reason ? { reason: error.reason } : {}),
+        ...(error?.suggestion ? { suggestion: clean(error.suggestion) } : {}) });
     }
   }
   function clean(value) {
@@ -402,6 +421,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     for (const record of store.list()) if (record.status === 'complete') ids.add(record.id);
     for (const id of liveRoots.keys()) if (savedRecord(id)?.status === 'complete') ids.add(id);
     const records = [];
+    const verifiedLegacyMedia = new Map();
     for (const id of [...ids].filter(safeId).sort()) {
       const item = await manifest(id);
       if (!item || item.branch?.status !== 'ok') continue;
@@ -415,16 +435,60 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         if (selectedHero && item.assets.includes('hero.png')) branchRefs.heroRef = ref('hero.png');
         if (selectedHero && item.assets.includes('cutout.png')) branchRefs.cutoutRef = ref('cutout.png');
         if (selectedHero && item.hasModel) branchRefs.modelRef = ref(item.assets.includes('model.glb') ? 'model.glb' : 'model.meshopt.glb');
+        const parent = item.continuation?.path?.at(-1);
+        const questionId = item.questionAttachment?.questionId ?? item.continuation?.rootRunId ?? item.rootRunId ?? id;
+        const causeEventId = branch.causeEventId ?? (parent ? `${parent.runId}:${parent.branchId}` : questionId);
         const scene = scenes.get(id, branch.id);
-        if (scene?.status === 'complete') branchRefs.sceneRef = { status: 'complete', url: `/event-scenes/${scene.key}.png`, runId: id, branchId: branch.id };
+        if (scene?.status === 'complete' && scene.runId === id && scene.branchId === branch.id
+            && scene.key === scenes.keyFor(id, branch.id)) {
+          let imageAvailable = false;
+          try {
+            const actualRoot = await realpath(liveRoot);
+            const actualImage = await realpath(scenes.imagePath(scene.key));
+            imageAvailable = actualImage.startsWith(actualRoot + (actualRoot.includes('\\') ? '\\' : '/'))
+              && (await stat(actualImage)).isFile();
+          } catch { /* a completed reservation without its image is not a usable reference */ }
+          if (imageAvailable) {
+            branchRefs.sceneRef = { status: 'complete', url: `/event-scenes/${scene.key}.png`, runId: id, branchId: branch.id };
+          }
+        }
         const cutout = cutouts.get(id, branch.id);
         if (cutout?.status === 'complete') branchRefs.cutoutRef = { status: 'complete', url: `/event-cutouts/${cutout.key}.png`, runId: id, branchId: branch.id };
+        const responseRefs = {};
+        if (branchRefs.sceneRef) responseRefs.sceneRef = branchRefs.sceneRef;
+        if (selectedHero) {
+          if (item.assets.includes('hero.png')) responseRefs.heroRef = ref('hero.png');
+          if (item.assets.includes('cutout.png')) responseRefs.cutoutRef = ref('cutout.png');
+          if (item.hasModel) responseRefs.modelRef = ref(item.assets.includes('model.glb') ? 'model.glb' : 'model.meshopt.glb');
+        }
+        if (Object.keys(responseRefs).length) {
+          const source = { branch, causeEventId, refs: responseRefs };
+          verifiedLegacyMedia.set(`${questionId}\u0000${id}:${branch.id}`, source);
+          verifiedLegacyMedia.set(`${questionId}\u0000suggestion:${id}:${branch.id}`, source);
+        }
         if (Object.keys(branchRefs).length) refs[`${id}:${branch.id}`] = branchRefs;
       }
       records.push({ runId: id, run: { ...item.branch, id, questionAttachment: record?.questionAttachment ?? item.questionAttachment,
         ...(item.continuation?.path?.length ? { continuation: item.continuation } : {}) }, assetRefsByBranch: refs });
     }
     const snapshot = historyStore.migrateLegacy(records);
+    // Legacy history state can predate event media refs. Project a verified ref
+    // into this response only when the saved event still matches its exact
+    // source event; never replace a persisted ref or rewrite the user's event.
+    const withVerifiedLegacyMedia = question => ({ ...question, histories: question.histories.map(history => ({
+      ...history, events: history.events.map(event => {
+        const source = verifiedLegacyMedia.get(`${question.id}\u0000${event.id}`);
+        if (!source) return event;
+        const matchesSource = ['year', 'title', 'summary', 'place', 'geography'].every(key =>
+          JSON.stringify(canonicalJson(event[key])) === JSON.stringify(canonicalJson(source.branch[key])))
+          && event.causeEventId === source.causeEventId
+          && (event.scene === undefined || event.scene === source.branch.scene);
+        if (!matchesSource) return event;
+        const missingRefs = Object.fromEntries(Object.entries(source.refs).filter(([key]) => !event[key]));
+        return Object.keys(missingRefs).length ? { ...event, ...missingRefs } : event;
+      }),
+    })) });
+    const mediaSnapshot = { ...snapshot, questions: snapshot.questions.map(withVerifiedLegacyMedia) };
     const withWindowState = question => ({ ...question, histories: question.histories.map(history => {
       const byWindow = new Map();
       for (const suggestion of history.suggestions ?? []) {
@@ -442,8 +506,8 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       }
       return { ...history, suggestionWindows: [...byWindow.values()].sort((a, b) => a.window.fromYear - b.window.fromYear || a.window.toYear - b.window.toYear) };
     }) });
-    if (!Number.isSafeInteger(asOfYear)) return { ...snapshot, questions: snapshot.questions.map(withWindowState) };
-    return { ...snapshot, asOfYear, questions: snapshot.questions.map(question => ({ ...withWindowState(question), histories: withWindowState(question).histories.map(history => {
+    if (!Number.isSafeInteger(asOfYear)) return { ...mediaSnapshot, questions: mediaSnapshot.questions.map(withWindowState) };
+    return { ...mediaSnapshot, asOfYear, questions: mediaSnapshot.questions.map(question => ({ ...withWindowState(question), histories: withWindowState(question).histories.map(history => {
       const events = history.events.filter(event => event.year <= asOfYear);
       const groups = new Map();
       for (const event of events) {

@@ -252,13 +252,13 @@ test('toolbar has real labelled controls, preview never enters, and only explici
   assert.equal(scene.travelMode, 'threads'); assert.equal(scene.ghost, false);
   assert.equal(byText(toolbar, 'Labelled pins (surface)').children[0].value, '3');
   assert.equal(byText(toolbar, 'Unfolded worlds (orbit)').children[0].value, '2');
-  const zoomSlider = byLabel(toolbar, 'Zoom (left: closer than Surface, center: Surface, right: Atlas)');
-  assert.equal(zoomSlider.type, 'range');
-  assert.equal(zoomSlider.min, '-100');
+  assert.equal(byLabel(toolbar, 'Zoom (left: closer than Surface, center: Surface, right: Atlas)'), undefined,
+    'the date bar is the only visible slider');
+  assert.equal(byLabel(toolbar, 'Zoom in').parentElement.parentElement.tagName, 'details', 'zoom buttons live in View options');
   const zoomIn = byLabel(toolbar, 'Zoom in'), zoomOut = byLabel(toolbar, 'Zoom out');
   assert.equal(zoomIn.disabled, false, 'zoom in remains available for closer Surface detail');
   zoomIn.dispatch('click');
-  assert.equal(scene.surfaceDetail, 8); assert.equal(zoomSlider.value, '-8');
+  assert.equal(scene.surfaceDetail, 8);
   zoomOut.dispatch('click');
   assert.equal(scene.surfaceDetail, 0, 'zoom out returns from detail to fitted Surface first');
   zoomOut.dispatch('click');
@@ -270,14 +270,9 @@ test('toolbar has real labelled controls, preview never enters, and only explici
   scene.zoom = 1; zoomOut.dispatch('click');
   assert.equal(scene.zoom, 1, 'zoom out is disabled at the atlas end');
   assert.equal(zoomOut.disabled, true);
-  scene.zoom = 0.4; zoomSlider.value = '65'; zoomSlider.dispatch('input');
-  assert.equal(scene.zoom, .65, 'slider moves left-to-right from surface to atlas');
-  zoomSlider.value = '-38'; zoomSlider.dispatch('input');
-  assert.equal(scene.zoom, 0); assert.equal(scene.surfaceDetail, 38, 'negative slider values control Surface detail');
-  assert.equal(zoomSlider.value, '-38');
-  zoomSlider.value = '-100'; zoomSlider.dispatch('input');
-  assert.equal(zoomIn.disabled, true, 'plus is disabled only when maximum Surface detail is reached');
-  zoomSlider.value = '0'; zoomSlider.dispatch('input');
+  scene.zoom = 0; scene.surfaceDetail = 100; zoomIn.dispatch('click');
+  assert.equal(zoomIn.disabled, true, 'plus is disabled at maximum Surface detail');
+  scene.surfaceDetail = 0; scene.zoom = 0; zoomOut.dispatch('click');
   assert.equal(api.getAttachmentIntent().mode, 'current-world');
   assert.equal(api.getAttachmentIntent().parentId, world.id);
   // Invoking the controller API represents an explicit user entry action.
@@ -321,6 +316,59 @@ test('renderer preview and entry paths are distinct; reduced motion forces direc
   assert.equal(scene.entered, enteredBeforeRejectedNodes, 'rejected nodes do not move the scene');
   assert.equal(scene.travelMode, 'cut'); assert.equal(byLabel(toolbar, 'Camera travel').disabled, true);
   assert.deepEqual(controller.getViewOptions().reducedMotion, true);
+  controller.destroy();
+});
+
+test('history projection is independent of legacy graph/geography sync and selects event records without entering worlds', async () => {
+  const doc = fakeDocument(), host = doc.createElement('div'), toolbar = doc.createElement('div');
+  const event = { id:'event-a', year:-3000, title:'Green wetlands', summary:'Rain feeds lakes.', place:{ name:'Sahara', lat:20, lon:10 },
+    sceneRef:{ path:'scenes/event-a.png', status:'complete' }, geography:{ version:1, changes:[{ id:'green', kind:'vegetation', region:'sahara', intensity:.8 }] } };
+  const suggestion = { id:'suggestion-a', year:-2400, title:'Seasonal channels', summary:'Channels water fields.', place:event.place,
+    suggestionForEventId:'channel-a', window:{ fromYear:-3000, toYear:-2001 }, verdict:'fits' };
+  const question = { id:'history-question', question:'What if the Sahara stayed green?', histories:[{ id:'history-a', events:[event], suggestions:[suggestion] }] };
+  const scene = { setWorlds(value) { this.graph = value; (this.setWorldsCalls ||= []).push(value); }, setHistoryView(value) { this.history = value; },
+    setSurfaceLabelLevel() {}, setOrbitLevel() {}, setTravelMode() {}, getZoom() { return 0; }, getSurfaceDetailZoom() { return 0; },
+    setGeography(value) { this.geography = value; } };
+  let selected = null;
+  const controller = await createAtlasController({ container:host, toolbarContainer:toolbar, document:doc,
+    rendererFactory:async (_container, callbacks) => { scene.callbacks = callbacks; return scene; },
+    questions:[question], onHistoryEventSelect(value, meta) { selected = { value, meta }; },
+  });
+  const legacyWorldSyncs = scene.setWorldsCalls.length;
+  let projection = controller.setHistoryView({ question, historyId:'history-a', date:-2500,
+    window:{ fromYear:-3000, toYear:-2001 }, suggestions:[suggestion] });
+  assert.equal(projection.pins.length, 1);
+  assert.equal(projection.suggestions.length, 1);
+  assert.equal(scene.history, projection);
+  projection = controller.setHistoryView({ question, historyId:'history-a', date:-2500, surfaceMode:'present',
+    window:{ fromYear:-3000, toYear:-2001 }, suggestions:[suggestion], composedGeography:{ version:1, changes:[] } });
+  assert.equal(projection.surfaceMode, 'present');
+  assert.deepEqual(projection.composedGeography.changes, [{ id:'green', kind:'vegetation', region:'sahara', intensity:.8 }],
+    'the active projection derives canonical geography from all as-of history events');
+  assert.equal(projection.surface.geography, null, 'present mode always renders the basemap');
+  const previewInput = Object.freeze({ version:2, seaLevelMeters:175, continentalTransforms:[], changes:[] });
+  projection = controller.setHistoryView({ question, historyId:'history-a', date:-2500,
+    window:{ fromYear:-3000, toYear:-2001 }, suggestions:[suggestion], surfaceMode:'scenario', surfaceGeography:previewInput });
+  assert.deepEqual(projection.surfaceGeography, previewInput, 'scenario preview is copied into the display projection');
+  assert.notEqual(projection.surfaceGeography, previewInput, 'preview projection does not alias mutable UI state');
+  assert.deepEqual(projection.surface.geography, previewInput, 'scene surface receives the local preview');
+  assert.deepEqual(projection.composedGeography.changes, [{ id:'green', kind:'vegetation', region:'sahara', intensity:.8 }],
+    'local surface adjustments do not rewrite the history-derived composition');
+  assert.deepEqual(event.geography.changes, [{ id:'green', kind:'vegetation', region:'sahara', intensity:.8 }],
+    'preview projection leaves the saved event record untouched');
+  controller.setGeography({ version:1, changes:[] }, 'scenario', { version:1, changes:[] });
+  controller.setGraph({ worlds:[{ id:'legacy', title:'Legacy graph node' }], questions:[], currentWorldId:'legacy' });
+  assert.equal(scene.geography, undefined, 'legacy selected-event geography cannot replace the composed history surface');
+  assert.equal(scene.setWorldsCalls.length, legacyWorldSyncs, 'legacy graph refreshes do not replace the active history projection');
+  assert.equal(controller.enterWorld('event-a'), true);
+  assert.equal(selected.value.id, 'event-a');
+  assert.equal(selected.value.sceneRef, event.sceneRef);
+  assert.equal(selected.meta.historyId, 'history-a');
+  assert.equal(selected.meta.visualKind, 'history-event');
+  assert.equal(controller.getHistoryView(), projection);
+  controller.setHistoryView(null);
+  assert.equal(scene.history, null);
+  assert.equal(scene.setWorldsCalls.length, legacyWorldSyncs + 1, 'clearing history restores the latest legacy graph');
   controller.destroy();
 });
 
