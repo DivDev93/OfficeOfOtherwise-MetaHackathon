@@ -147,7 +147,13 @@ export function normalizeQuestionHistories(question) {
   const id = text(question.id);
   if (!id) throw new Error('Question requires an id');
   const histories = Array.isArray(question.histories) ? question.histories : [];
-  return { ...question, id, histories: histories.map(history => normalizeHistory(history, { questionId: id })) };
+  const normalized = histories.map(history => normalizeHistory(history, { questionId: id }));
+  const ids = new Set();
+  for (const history of normalized) {
+    if (ids.has(history.id)) throw new Error(`Duplicate history ${history.id}`);
+    ids.add(history.id);
+  }
+  return { ...question, id, histories: normalized };
 }
 
 function unwrap(item) {
@@ -192,7 +198,19 @@ function pathEvents(record, eventIndex, questionId) {
 function samePathPrefix(path, prefix) { return prefix.length <= path.length && prefix.every((event, index) => event.id === path[index].id); }
 function stableHistoryId(events, index = 0, primary = []) {
   const divergence = index ? events.find((event, eventIndex) => primary[eventIndex]?.id !== event.id) : events[0];
-  return `history-${encodeURIComponent((divergence ?? events[0])?.id ?? 'empty')}`;
+  const key = encodeURIComponent((divergence ?? events[0])?.id ?? 'empty');
+  const id = `history-${key}`;
+  return id.length <= 240 ? id : `history-${hashPath([divergence ?? events[0]])}`;
+}
+
+function hashPath(events) {
+  const source = events.map(event => event.id).join('\u0000') || 'empty';
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < source.length; index++) {
+    hash ^= BigInt(source.charCodeAt(index));
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return `${hash.toString(16).padStart(16, '0')}-${events.length}`;
 }
 
 /** Migrate saved run/continuation records without model calls or modifying their source data. */
@@ -238,6 +256,16 @@ export function migrateSavedTree(records, { windowRadiusYears = 500, maxEraGapYe
       const existingForkEventId = path.find(event => event.forkEventId)?.forkEventId;
       return { id: stableHistoryId(events, index, visitedPaths[0]), events, ...((existingForkEventId || forkEventId) ? { forkEventId: existingForkEventId || forkEventId } : {}) };
     });
+    const idCounts = new Map();
+    for (const history of historyPaths) idCounts.set(history.id, (idCounts.get(history.id) ?? 0) + 1);
+    const assignedIds = new Set();
+    for (const history of historyPaths) {
+      if (idCounts.get(history.id) > 1) history.id = `history-${hashPath(history.events)}`;
+      const base = history.id;
+      let suffix = 2;
+      while (assignedIds.has(history.id)) history.id = `${base.slice(0, 230)}-${suffix++}`;
+      assignedIds.add(history.id);
+    }
     const visitedIds = new Set(visitedPaths.flatMap(path => path.map(event => event.id)));
     for (const record of group) {
       const path = pathEvents(record, eventIndex, questionId);

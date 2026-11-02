@@ -10,6 +10,8 @@ import * as geographyControls from '../web/geographyControls.js';
 import * as geographyLabels from '../web/geographyLabels.js';
 import * as savedPreviews from '../web/savedPreview.js';
 import { createLocalMetaKeySetup } from '../web/localMetaKey.js';
+import { createHistorySession } from '../web/historySession.js';
+import { mountHistoryPanel } from '../web/historyPanel.js';
 import { REGIONS, GEOGRAPHY_STYLES } from '../web/geographyRegions.js';
 
 const branch = (id, title, year = 500) => ({ id, title, year, summary: `${title} changes this world.`, place: { name: title, lat: 20, lon: year / 100 } });
@@ -100,7 +102,8 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     if (!fixture) return new Response('', { status: 404 });
     return Response.json(match[2] === 'branch.json' ? fixture.branch : match[2] === 'trace.json' ? { steps: [] } : fixture);
   };
-  const context = vm.createContext({ ...logic, ...geographyTexture, ...geography, ...geographyControls, ...geographyLabels, ...savedPreviews, createLocalMetaKeySetup, REGIONS, GEOGRAPHY_STYLES,
+  const context = vm.createContext({ ...logic, ...geographyTexture, ...geography, ...geographyControls, ...geographyLabels, ...savedPreviews, createLocalMetaKeySetup, createHistorySession,
+    mountHistoryPanel:(root, session) => mountHistoryPanel(root, session, { document }), REGIONS, GEOGRAPHY_STYLES,
     loadLocalTerrain: async () => ({ width:1, height:1, elevation:new Int16Array([0]), landmass:new Uint8Array([1]) }), console, fetch, AbortController, TextDecoder, Uint8Array, URLSearchParams, setTimeout:scheduleTimer, clearTimeout:cancelTimer,
     createAtlasController(options) {
       const controller = {

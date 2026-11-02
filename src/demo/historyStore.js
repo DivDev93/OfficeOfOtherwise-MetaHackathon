@@ -19,7 +19,9 @@ function mergeHistory(existing, incoming) {
   const suggestions = new Map((existing.suggestions ?? []).map(item => [item.id, item]));
   for (const suggestion of incoming.suggestions ?? []) if (!suggestions.has(suggestion.id)) suggestions.set(suggestion.id, suggestion);
   const visited = new Set(events.keys());
-  for (const [id, suggestion] of suggestions) if (visited.has(suggestion.suggestionForEventId)) suggestions.delete(id);
+  for (const [id, suggestion] of suggestions) {
+    if (visited.has(id) || visited.has(suggestion.suggestionForEventId)) suggestions.delete(id);
+  }
   return { ...existing,
     events: [...events.values()].sort((a, b) => a.year - b.year || a.id.localeCompare(b.id)),
     ...(existing.forkEventId || incoming.forkEventId ? { forkEventId: existing.forkEventId ?? incoming.forkEventId } : {}),
@@ -27,10 +29,52 @@ function mergeHistory(existing, incoming) {
   };
 }
 
+function repairDuplicateHistoryIds(existing, source) {
+  const counts = new Map();
+  for (const history of existing.histories) counts.set(history.id, (counts.get(history.id) ?? 0) + 1);
+  const duplicateIds = new Set([...counts].filter(([, count]) => count > 1).map(([id]) => id));
+  if (!duplicateIds.size) return { question: existing, recoveredIds: [] };
+  const sourceCounts = new Map();
+  for (const history of source.histories) sourceCounts.set(history.id, (sourceCounts.get(history.id) ?? 0) + 1);
+  if ([...sourceCounts.values()].some(count => count > 1)) throw new Error('Cannot safely recover duplicate history IDs while source migration IDs are still colliding');
+
+  const sourceHistories = source.histories.map(history => structuredClone(history));
+  const duplicateHistories = existing.histories.filter(history => duplicateIds.has(history.id));
+  const signatures = new Set(duplicateHistories.map(history => JSON.stringify({
+    events: history.events.map(event => event.id), suggestions: (history.suggestions ?? []).map(item => item.id).sort(),
+  })));
+  if (signatures.size !== 1) throw new Error('Cannot safely recover duplicate history IDs because the saved histories disagree');
+  const saved = duplicateHistories[0];
+  const sourceEventIds = new Set(sourceHistories.flatMap(history => history.events.map(event => event.id)));
+  const extraEvents = new Map(saved.events.filter(event => !sourceEventIds.has(event.id)).map(event => [event.id, event]));
+  const owners = new Set();
+  for (const event of extraEvents.values()) {
+    const matching = sourceHistories.map((history, index) => history.suggestions?.some(item => item.id === event.id) ? index : -1).filter(index => index >= 0);
+    if (matching.length !== 1) throw new Error('Cannot safely recover duplicate history IDs because an added event has no unique legacy suggestion lineage');
+    owners.add(matching[0]);
+  }
+  if (owners.size !== 1) throw new Error('Cannot safely recover duplicate history IDs because added events point to different histories');
+  const targetIndex = [...owners][0];
+  const target = sourceHistories[targetIndex];
+  const persistedEvents = new Map(saved.events.map(event => [event.id, event]));
+  target.events = target.events.map(event => persistedEvents.has(event.id) ? { ...event, ...structuredClone(persistedEvents.get(event.id)) } : event);
+  for (const event of extraEvents.values()) if (!target.events.some(item => item.id === event.id)) target.events.push(structuredClone(event));
+  target.events.sort((a, b) => a.year - b.year || a.id.localeCompare(b.id));
+  target.suggestions = (target.suggestions ?? []).filter(item => !target.events.some(event => event.id === item.id || event.id === item.suggestionForEventId));
+  for (const key of ['checkFlags', 'forkEventId', 'forkReason', 'origin']) if (saved[key] !== undefined) target[key] = structuredClone(saved[key]);
+  const keep = existing.histories.filter(history => !duplicateIds.has(history.id));
+  return { question: { ...existing, histories: [...keep, ...sourceHistories] }, recoveredIds: [...duplicateIds].sort() };
+}
+
 function mergeQuestion(existing, incoming) {
   const histories = [...existing.histories];
   for (const candidate of incoming.histories) {
     const candidateIds = eventIds(candidate);
+    const exact = histories.findIndex(history => history.id === candidate.id);
+    if (exact >= 0) {
+      histories[exact] = mergeHistory(histories[exact], candidate);
+      continue;
+    }
     const matches = histories.map((history, index) => ({ index, ids: eventIds(history) }))
       .filter(item => item.ids.every((id, index) => candidateIds[index] === id) || candidateIds.every((id, index) => item.ids[index] === id))
       .sort((a, b) => Math.min(b.ids.length, candidateIds.length) - Math.min(a.ids.length, candidateIds.length) || b.ids.length - a.ids.length);
@@ -64,28 +108,100 @@ export function createHistoryStore(root, now = Date.now) {
   }
   function state() {
     const value = read(statePath, 'history state');
-    if (value === null) return { schemaVersion: 1, questions: Object.create(null), updatedAt: new Date(now()).toISOString() };
+    if (value === null) return { schemaVersion: 1, questions: Object.create(null), windowBatches: {}, preferences: {}, updatedAt: new Date(now()).toISOString() };
     if (value.schemaVersion !== 1 || !value.questions || typeof value.questions !== 'object' || Array.isArray(value.questions)) {
       throw new Error('Unsupported or invalid durable history state');
     }
     return value;
   }
   const usageKey = (userId, sessionId) => createHash('sha256').update(JSON.stringify([String(userId ?? ''), String(sessionId ?? '')])).digest('hex');
+  const windowKey = ({ questionId, historyId, window }) => createHash('sha256').update(JSON.stringify([questionId, historyId, window.fromYear, window.toYear])).digest('hex');
   function usageState() {
     const value = read(usagePath, 'history usage');
-    if (value === null) return { schemaVersion: 1, counters: {} };
+    if (value === null) return { schemaVersion: 1, counters: {}, worlds: {} };
     if (value.schemaVersion !== 1 || !value.counters || typeof value.counters !== 'object' || Array.isArray(value.counters)) {
       throw new Error('Unsupported or invalid durable history usage state');
     }
+    value.worlds ??= {};
+    if (!value.worlds || typeof value.worlds !== 'object' || Array.isArray(value.worlds)) throw new Error('Unsupported or invalid durable history world ledger');
     return value;
   }
   function save(question) {
     const normalized = normalizeQuestionHistories(question);
     const current = state();
     setQuestion(current.questions, normalized.id, normalized);
+    syncWindowSuggestions(current, normalized);
     current.updatedAt = new Date(now()).toISOString();
     atomic(statePath, current);
     return normalized;
+  }
+  function saveState(current) {
+    current.updatedAt = new Date(now()).toISOString();
+    atomic(statePath, current);
+  }
+  function windowEntries(current, identity) {
+    return Object.values(current.windowBatches ?? {}).filter(entry => entry.questionId === identity.questionId
+      && entry.historyId === identity.historyId && entry.window?.fromYear === identity.window.fromYear
+      && entry.window?.toYear === identity.window.toYear).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+  function appendWindowSuggestions(current, questionId, historyId, suggestions) {
+    const question = current.questions[questionId];
+    if (!question) return null;
+    const history = question.histories.find(item => item.id === historyId);
+    if (!history) return null;
+    const all = new Map((history.suggestions ?? []).map(item => [item.id, item]));
+    for (const suggestion of suggestions) all.set(suggestion.id, suggestion);
+    const updatedHistory = { ...history, suggestions: [...all.values()].sort((a, b) => a.year - b.year || a.id.localeCompare(b.id)) };
+    const normalized = normalizeQuestionHistories({ ...question, histories: question.histories.map(item => item.id === historyId ? updatedHistory : item) });
+    setQuestion(current.questions, questionId, normalized);
+    return normalized;
+  }
+  function syncWindowSuggestions(current, question) {
+    const available = new Map(question.histories.map(history => [history.id, new Map((history.suggestions ?? []).map(item => [item.id, item]))]));
+    for (const entry of Object.values(current.windowBatches ?? {})) {
+      if (entry.questionId !== question.id) continue;
+      const suggestions = available.get(entry.historyId);
+      if (suggestions) entry.suggestions = (entry.suggestions ?? []).filter(item => suggestions.has(item.id));
+    }
+  }
+  function ensureMigratedWindowCaches(current, migratedQuestions) {
+    current.windowBatches ??= {};
+    for (const migrated of migratedQuestions) {
+      const savedQuestion = current.questions[migrated.id];
+      if (!savedQuestion) continue;
+      for (const sourceHistory of migrated.histories) {
+        const savedHistory = savedQuestion.histories.find(item => item.id === sourceHistory.id);
+        if (!savedHistory) continue;
+        const windows = new Map();
+        for (const suggestion of sourceHistory.suggestions ?? []) {
+          const window = suggestion.window;
+          if (!Number.isSafeInteger(window?.fromYear) || !Number.isSafeInteger(window?.toYear)) continue;
+          windows.set(`${window.fromYear}:${window.toYear}`, { fromYear: window.fromYear, toYear: window.toYear });
+        }
+        for (const window of windows.values()) {
+          const identity = { questionId: migrated.id, historyId: sourceHistory.id, window };
+          const baseKey = windowKey(identity);
+          const available = (savedHistory.suggestions ?? []).filter(item => item.window?.fromYear === window.fromYear && item.window?.toYear === window.toYear);
+          const existing = current.windowBatches[baseKey];
+          if (!existing) current.windowBatches[baseKey] = { batchId: baseKey, questionId: migrated.id, historyId: sourceHistory.id,
+            window, requestId: 'migration', more: false, status: 'ready', suggestions: available,
+            createdAt: new Date(now()).toISOString(), source: 'legacy-migration' };
+          else if (existing.status === 'ready') existing.suggestions = available;
+        }
+      }
+      syncWindowSuggestions(current, savedQuestion);
+    }
+  }
+  function recoverPendingWindows() {
+    const current = state();
+    let changed = false;
+    for (const entry of Object.values(current.windowBatches ?? {})) {
+      if (entry.status !== 'pending') continue;
+      entry.status = 'unknown';
+      entry.reason = 'server-restarted-during-generation';
+      changed = true;
+    }
+    if (changed) saveState(current);
   }
   function recalculateCounts(questions) {
     return {
@@ -95,20 +211,130 @@ export function createHistoryStore(root, now = Date.now) {
       suggestions: questions.reduce((sum, question) => sum + question.histories.reduce((count, history) => count + (history.suggestions?.length ?? 0), 0), 0),
     };
   }
+  // A pending paid request cannot safely be retried after a process restart.
+  try { recoverPendingWindows(); } catch { /* defer corrupt/unsupported state errors to the requested store operation */ }
   return {
-    get(id) { const questions = validId(id) ? state().questions : null; return questions && Object.hasOwn(questions, id) ? questions[id] : null; },
+    get(id) {
+      const questions = validId(id) ? state().questions : null;
+      if (!questions || !Object.hasOwn(questions, id)) return null;
+      const question = questions[id], seen = new Set();
+      for (const history of question.histories) {
+        if (seen.has(history.id)) throw new Error('Duplicate history IDs require migration reconciliation before editing');
+        seen.add(history.id);
+      }
+      return question;
+    },
     list() { return Object.values(state().questions); },
     save,
+    reserveWindow({ questionId, historyId, window, requestId, more = false, userId, sessionId, cap, now: reservedAt } = {}) {
+      if (!validId(questionId) || !validId(historyId) || !validId(requestId) || !validId(userId) || !validId(sessionId)
+          || !window || !Number.isSafeInteger(window.fromYear) || !Number.isSafeInteger(window.toYear) || window.fromYear > window.toYear
+          || !Number.isSafeInteger(cap) || cap < 1) return { status: 'invalid' };
+      const current = state();
+      const identity = { questionId, historyId, window };
+      const entries = windowEntries(current, identity);
+      if (!more) {
+        const original = entries.find(entry => !entry.more);
+        if (original?.status === 'ready') return { status: 'cached', suggestions: [...original.suggestions], requestId: original.requestId };
+        if (original?.status === 'pending') return { status: 'pending', requestId: original.requestId };
+        if (original?.status === 'unknown') return { status: 'unknown', requestId: original.requestId };
+        if (original?.status === 'failed') return { status: 'failed', requestId: original.requestId, reason: original.reason };
+      }
+      const userSessionKey = usageKey(userId, sessionId);
+      const attempts = Object.values(current.windowBatches ?? {}).filter(entry => entry.userSessionKey === userSessionKey).length;
+      if (attempts >= cap) return { status: 'capped', used: attempts, limit: cap };
+      const baseKey = windowKey(identity);
+      const batchId = more ? `${baseKey}:${requestId}` : baseKey;
+      if (current.windowBatches?.[batchId]) return { status: current.windowBatches[batchId].status, requestId: current.windowBatches[batchId].requestId };
+      current.windowBatches ??= {};
+      current.windowBatches[batchId] = { batchId, questionId, historyId, window: { ...window }, requestId, more,
+        userSessionKey, status: 'pending', suggestions: [], createdAt: reservedAt ?? new Date(now()).toISOString() };
+      saveState(current);
+      return { status: 'reserved', requestId, windowKey: batchId, used: attempts + 1, limit: cap };
+    },
+    completeWindow({ questionId, historyId, window, requestId, more = false, suggestions = [] } = {}) {
+      const current = state();
+      const entry = Object.values(current.windowBatches ?? {}).find(item => item.questionId === questionId && item.historyId === historyId
+        && item.requestId === requestId && item.more === more && item.window?.fromYear === window?.fromYear && item.window?.toYear === window?.toYear);
+      if (!entry || entry.status !== 'pending') return { status: entry?.status ?? 'missing', suggestions: entry?.suggestions ?? [] };
+      const cleanSuggestions = suggestions.map(item => ({ ...item }));
+      const question = appendWindowSuggestions(current, questionId, historyId, cleanSuggestions);
+      if (!question) return { status: 'missing', suggestions: [] };
+      entry.status = 'ready';
+      entry.suggestions = cleanSuggestions;
+      entry.completedAt = new Date(now()).toISOString();
+      saveState(current);
+      return { status: 'ready', suggestions: cleanSuggestions, question };
+    },
+    failWindow({ questionId, historyId, window, requestId, more = false, uncertain = false, reason = 'generation-failed' } = {}) {
+      const current = state();
+      const entry = Object.values(current.windowBatches ?? {}).find(item => item.questionId === questionId && item.historyId === historyId
+        && item.requestId === requestId && item.more === more && item.window?.fromYear === window?.fromYear && item.window?.toYear === window?.toYear);
+      if (!entry || entry.status !== 'pending') return { status: entry?.status ?? 'missing' };
+      entry.status = uncertain ? 'unknown' : 'failed';
+      entry.reason = reason;
+      entry.failedAt = new Date(now()).toISOString();
+      saveState(current);
+      return { status: entry.status };
+    },
+    getWindow(identity) {
+      if (!validId(identity?.questionId) || !validId(identity?.historyId) || !identity?.window) return { status: 'missing', suggestions: [] };
+      const entries = windowEntries(state(), identity);
+      const ready = entries.filter(entry => entry.status === 'ready');
+      const defaultEntry = entries.find(entry => !entry.more);
+      return { status: defaultEntry?.status ?? (ready.length ? 'ready' : 'missing'), suggestions: ready.flatMap(entry => entry.suggestions ?? []),
+        batches: entries.map(({ batchId, requestId, more, status, createdAt }) => ({ batchId, requestId, more, status, createdAt })) };
+    },
+    windows(questionId, historyId) {
+      if (!validId(questionId) || !validId(historyId)) return [];
+      const current = state();
+      const grouped = new Map();
+      for (const entry of Object.values(current.windowBatches ?? {})) {
+        if (entry.questionId !== questionId || entry.historyId !== historyId) continue;
+        const key = `${entry.window.fromYear}:${entry.window.toYear}`;
+        const group = grouped.get(key) ?? { window: { ...entry.window }, statuses: [], batches: 0, suggestionIds: new Set() };
+        group.statuses.push(entry.status);
+        group.batches++;
+        for (const suggestion of entry.suggestions ?? []) group.suggestionIds.add(suggestion.id);
+        grouped.set(key, group);
+      }
+      return [...grouped.values()].map(group => ({ window: group.window,
+        status: group.statuses.includes('ready') ? 'ready' : group.statuses.at(-1), batches: group.batches, suggestionCount: group.suggestionIds.size }));
+    },
+    getPreference(userId, sessionId) {
+      if (!validId(userId) || !validId(sessionId)) return { autoSuggest: true };
+      return { autoSuggest: state().preferences?.[usageKey(userId, sessionId)]?.autoSuggest ?? true };
+    },
+    setPreference({ userId, sessionId, autoSuggest } = {}) {
+      if (!validId(userId) || !validId(sessionId) || typeof autoSuggest !== 'boolean') throw new Error('Invalid history preference');
+      const current = state();
+      current.preferences ??= {};
+      current.preferences[usageKey(userId, sessionId)] = { autoSuggest, updatedAt: new Date(now()).toISOString() };
+      saveState(current);
+      return { autoSuggest };
+    },
     /** Merge newly discovered legacy paths without overwriting saved question/history edits. */
     migrateLegacy(records, options) {
       const migrated = migrateSavedTree(records, options);
       const current = state();
       const questions = { ...current.questions };
+      current.recoveryReceipts ??= {};
       for (const question of migrated.questions) {
-        if (Object.hasOwn(questions, question.id)) setQuestion(questions, question.id, mergeQuestion(questions[question.id], question));
+        if (Object.hasOwn(questions, question.id)) {
+          const repair = repairDuplicateHistoryIds(questions[question.id], question);
+          if (repair.recoveredIds.length) {
+            const receiptId = createHash('sha256').update(JSON.stringify([question.id, repair.recoveredIds,
+              repair.question.histories.map(history => history.id).sort()])).digest('hex');
+            current.recoveryReceipts[receiptId] ??= { kind: 'duplicate-history-ids-recovered', questionId: question.id,
+              previousHistoryIds: repair.recoveredIds, recoveredHistoryIds: repair.question.histories.map(history => history.id).sort(),
+              recoveredAt: new Date(now()).toISOString() };
+            setQuestion(questions, question.id, mergeQuestion(repair.question, question));
+          } else setQuestion(questions, question.id, mergeQuestion(questions[question.id], question));
+        }
         else setQuestion(questions, question.id, question);
       }
       current.questions = questions;
+      ensureMigratedWindowCaches(current, migrated.questions);
       current.updatedAt = new Date(now()).toISOString();
       atomic(statePath, current);
       const saved = Object.values(questions);
@@ -125,10 +351,26 @@ export function createHistoryStore(root, now = Date.now) {
       atomic(usagePath, current);
       return { ...counters };
     },
+    recordWorldEntered({ userId, sessionId, worldId } = {}) {
+      if (!validId(userId) || !validId(sessionId) || !validId(worldId)) throw new Error('World entry requires userId, sessionId and worldId');
+      const current = usageState(), key = usageKey(userId, sessionId);
+      const worldHash = createHash('sha256').update(worldId).digest('hex');
+      const worlds = current.worlds[key] ?? [];
+      const counters = current.counters[key] ?? { worldsEntered: 0, suggestionWindowsGenerated: 0, histories: 0 };
+      if (worlds.includes(worldHash)) return { counted: false, usage: { ...counters } };
+      current.worlds[key] = [...worlds, worldHash];
+      counters.worldsEntered++;
+      current.counters[key] = counters;
+      current.updatedAt = new Date(now()).toISOString();
+      atomic(usagePath, current);
+      return { counted: true, usage: { ...counters } };
+    },
     usage(userId, sessionId) {
       if (!validId(userId) || !validId(sessionId)) return { worldsEntered: 0, suggestionWindowsGenerated: 0, histories: 0 };
-      const counters = usageState().counters[usageKey(userId, sessionId)];
-      return counters ? { ...counters } : { worldsEntered: 0, suggestionWindowsGenerated: 0, histories: 0 };
+      const key = usageKey(userId, sessionId);
+      const counters = usageState().counters[key] ?? { worldsEntered: 0, suggestionWindowsGenerated: 0, histories: 0 };
+      const generated = Object.values(state().windowBatches ?? {}).filter(entry => entry.userSessionKey === key && entry.status === 'ready').length;
+      return { ...counters, suggestionWindowsGenerated: Math.max(counters.suggestionWindowsGenerated, generated) };
     },
   };
 }

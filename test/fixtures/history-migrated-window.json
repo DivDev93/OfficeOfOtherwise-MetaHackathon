@@ -1,0 +1,19 @@
+{
+  "questionId": "d67a4b82-10b4-4126-bbaa-b632390b4a4a",
+  "history": {
+    "id": "history-d67a4b82-10b4-4126-bbaa-b632390b4a4a%3Ab1",
+    "events": [
+      { "id": "d67a4b82-10b4-4126-bbaa-b632390b4a4a:b1", "year": 1650, "title": "Doggerland Plain Links Britain Europe", "checkFlags": [] }
+    ],
+    "suggestions": [
+      {
+        "id": "suggestion:40023a00-6215-45c9-802a-9b59af686995:b1",
+        "year": 1847,
+        "title": "River Naturalists Chart the Plain",
+        "window": { "fromYear": 1347, "toYear": 2347 },
+        "verdict": "fits",
+        "reason": "migrated from earlier exploration"
+      }
+    ]
+  }
+}

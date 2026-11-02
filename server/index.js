@@ -9,15 +9,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateVoiceWav, MAX_AUDIO_BYTES, createDemoTranscriber } from '../src/providers/metaVoice.js';
 import { createContinuationStore } from '../src/demo/continuationStore.js';
 import { createHistoryStore } from '../src/demo/historyStore.js';
+import { createHistoryAgent } from '../src/agents/historyAgent.js';
+import { createHistoryService } from '../src/demo/historyService.js';
+import { createMetaClient } from '../src/lib/metaClient.js';
+import { fileLedger } from '../src/lib/spendLedger.js';
 import { composeGeography } from '../web/historyModel.js';
 import { createEventSceneStore } from '../src/demo/eventSceneStore.js';
 import { createEventCutoutStore } from '../src/demo/eventCutoutStore.js';
 import { continuationFor, MAX_CONTINUATION_DEPTH } from '../src/demo/continuation.js';
 import { prepareAuthoredQuestion } from '../src/demo/authoredQuestion.js';
-import { keywordCheck } from '../src/guardrails/topicPolicy.js';
+import { keywordCheck, createTopicPolicy, createModelClassifier, categoriesFromEnv } from '../src/guardrails/topicPolicy.js';
 import { geographyText } from '../web/geography.js';
 import { SpendCapError } from '../src/lib/metaClient.js';
-import { configuredDailyCap, configuredRateLimit, validateStartupConfig } from '../src/demo/budget.js';
+import { configuredDailyCap, configuredRateLimit, configuredSpendCap, resolveLedgerPath, validateStartupConfig } from '../src/demo/budget.js';
 import { configuredExpansionLimit, createExpansionBudget } from '../src/demo/expansionBudget.js';
 import { selectRunEvidence } from '../src/evidence/index.js';
 import { selectFreshEvidence } from '../src/evidence/fresh.js';
@@ -60,7 +64,7 @@ function canonicalJson(value) {
   return value;
 }
 
-export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), evidencePath = resolve('demo/evidence/v1.json'), runPipeline, renderEventScene, segmentEventCutout, transcribeAudio, runnerFactories = {}, voiceTimeoutMs = 45_000, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now, importRunIds = [], maxContinuationDepth = MAX_CONTINUATION_DEPTH, maxConcurrentJobs = Number(env.DEMO_MAX_CONCURRENT_JOBS ?? 3), localReviewAccess = false, packagedReplayRoot = resolve(fileURLToPath(new URL('../demo/replay-history/', import.meta.url))) } = {}) {
+export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), evidencePath = resolve('demo/evidence/v1.json'), runPipeline, renderEventScene, segmentEventCutout, transcribeAudio, runnerFactories = {}, historyService: injectedHistoryService, voiceTimeoutMs = 45_000, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now, importRunIds = [], maxContinuationDepth = MAX_CONTINUATION_DEPTH, maxConcurrentJobs = Number(env.DEMO_MAX_CONCURRENT_JOBS ?? 3), localReviewAccess = false, packagedReplayRoot = resolve(fileURLToPath(new URL('../demo/replay-history/', import.meta.url))) } = {}) {
   if (!Number.isInteger(maxConcurrentJobs) || maxConcurrentJobs < 1 || maxConcurrentJobs > 8) throw new RangeError('maxConcurrentJobs must be an integer from 1 to 8');
   // Keep browser-entered Meta credentials in this server instance only. Never
   // mutate process.env or the caller's configuration object.
@@ -114,6 +118,9 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
   const expansionBudget = createExpansionBudget(expansionLimit, { filePath: writableRootIsPackage ? undefined : join(liveRoot, '.expansion-sessions.json') });
   const store = createContinuationStore(liveRoot, now);
   const historyStore = createHistoryStore(liveRoot, now);
+  let activeHistoryService = injectedHistoryService ?? null;
+  let historyServicePromise = null;
+  let historyServiceLiveMode = injectedHistoryService ? null : null;
   // The checked-in replay package is a read-only fallback. Runtime state stays
   // in liveRoot, and a live registry record always wins for a colliding ID.
   const packagedStore = packagedRoot ? createContinuationStore(packagedRoot, now) : null;
@@ -273,6 +280,12 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     return a.length > 0 && a.length === b.length && timingSafeEqual(a, b);
   }
   function sameOrigin(req) { return !req.headers.origin || [`http://${req.headers.host}`, `https://${req.headers.host}`].includes(req.headers.origin); }
+  function recordWorldEntered(req, worldId) {
+    const sessionId = expansionCookieId(req);
+    if (!expansionBudget.known(sessionId) || !safeId(worldId)) return null;
+    try { return historyStore.recordWorldEntered({ userId: 'demo', sessionId, worldId }); }
+    catch { return null; }
+  }
   let secrets = [runtimeEnv.DEMO_ACCESS_CODE, runtimeEnv.META_API_KEY, runtimeEnv.MODEL_API_KEY, runtimeEnv.CHRONOS_API_TOKEN, runtimeEnv.CHRONOS_API_BASE, runtimeEnv.CHRONOS_3D_ENDPOINT].filter(x => typeof x === 'string' && x.length > 0);
   function refreshSecrets() {
     secrets = [runtimeEnv.DEMO_ACCESS_CODE, runtimeEnv.META_API_KEY, runtimeEnv.MODEL_API_KEY, runtimeEnv.CHRONOS_API_TOKEN, runtimeEnv.CHRONOS_API_BASE, runtimeEnv.CHRONOS_3D_ENDPOINT].filter(x => typeof x === 'string' && x.length > 0);
@@ -288,6 +301,54 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     if (factoryName === 'createDemoTranscriber') return createDemoTranscriber({ ...options, env: runtimeEnv });
     const pipeline = await import('../src/demo/pipeline.js');
     return pipeline[factoryName]({ ...options, env: runtimeEnv });
+  }
+  async function getHistoryService() {
+    if (injectedHistoryService) return injectedHistoryService;
+    const liveMode = !replayOnly();
+    if (activeHistoryService && historyServiceLiveMode === liveMode) return activeHistoryService;
+    if (!historyServicePromise) historyServicePromise = Promise.resolve().then(() => {
+      let agent;
+      if (!liveMode) {
+        agent = { async suggest() { throw new Error('Live history generation is disabled. Use replay mode.'); },
+          async checkRipple() { throw new Error('Live history checks are disabled. Use replay mode.'); } };
+      } else {
+        const spendCapUsd = configuredSpendCap({ env: runtimeEnv, outputRoot: liveRoot });
+        const dailyCapUsd = configuredDailyCap({ env: runtimeEnv, spendCapUsd });
+        const ledger = fileLedger(resolveLedgerPath({ env: runtimeEnv, outputRoot: liveRoot }), { requireExisting: true });
+        const client = createMetaClient({ env: runtimeEnv, ledger, spendCapUsd, dailyCapUsd });
+        const categories = categoriesFromEnv(runtimeEnv);
+        const classifyBranches = createModelClassifier(client, { categories });
+        const policy = createTopicPolicy({ categories, classifyBranches });
+        agent = createHistoryAgent({ client, policy, model: runtimeEnv.META_TEXT_MODEL_PLANNER || 'muse-wonder-1.0',
+          rippleModel: runtimeEnv.META_TEXT_MODEL_POLICY_BRANCHES || 'muse-spark-1.3' });
+      }
+      activeHistoryService = createHistoryService({ store: historyStore, agent, perSessionWindowCap: expansionLimit, now });
+      historyServiceLiveMode = liveMode;
+      return activeHistoryService;
+    }).finally(() => { historyServicePromise = null; });
+    return historyServicePromise;
+  }
+  async function historyRequestBody(req, res) {
+    let body = '';
+    for await (const chunk of req) {
+      body += chunk;
+      if (Buffer.byteLength(body) > 8192) { json(res, 413, { error: 'Request too large', code: 'request_too_large' }); return null; }
+    }
+    try {
+      const input = JSON.parse(body);
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Expected an object');
+      return input;
+    } catch { json(res, 400, { error: 'Invalid JSON object', code: 'invalid_json' }); return null; }
+  }
+  async function historyAction(res, service, method, input, actor) {
+    try { return json(res, 200, await service[method]({ ...input, ...actor })); }
+    catch (error) {
+      const status = Number.isInteger(error?.status) ? error.status : error?.name === 'SpendCapError' ? 429 : 500;
+      const code = typeof error?.code === 'string' ? error.code : status === 500 ? 'history_action_failed' : 'history_action_rejected';
+      return json(res, status, { error: status === 500 ? 'History action could not be completed.' : error.message, code,
+        ...(Number.isSafeInteger(error?.used) ? { used: error.used } : {}), ...(Number.isSafeInteger(error?.limit) ? { limit: error.limit } : {}),
+        ...(error?.conflictsWith ? { conflictsWith: error.conflictsWith } : {}), ...(error?.reason ? { reason: error.reason } : {}) });
+    }
   }
   function clean(value) {
     if (typeof value === 'string') return secrets.reduce((s, secret) => s.split(secret).join('[redacted]'), value);
@@ -364,8 +425,25 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         ...(item.continuation?.path?.length ? { continuation: item.continuation } : {}) }, assetRefsByBranch: refs });
     }
     const snapshot = historyStore.migrateLegacy(records);
-    if (!Number.isSafeInteger(asOfYear)) return snapshot;
-    return { ...snapshot, asOfYear, questions: snapshot.questions.map(question => ({ ...question, histories: question.histories.map(history => {
+    const withWindowState = question => ({ ...question, histories: question.histories.map(history => {
+      const byWindow = new Map();
+      for (const suggestion of history.suggestions ?? []) {
+        const window = suggestion.window;
+        if (!Number.isSafeInteger(window?.fromYear) || !Number.isSafeInteger(window?.toYear)) continue;
+        const key = `${window.fromYear}:${window.toYear}`;
+        const cached = byWindow.get(key) ?? { window: { fromYear: window.fromYear, toYear: window.toYear }, status: 'ready', batches: 1, suggestionCount: 0 };
+        cached.suggestionCount++;
+        byWindow.set(key, cached);
+      }
+      for (const cached of historyStore.windows(question.id, history.id)) {
+        const key = `${cached.window.fromYear}:${cached.window.toYear}`;
+        byWindow.set(key, { ...byWindow.get(key), ...cached,
+          suggestionCount: Math.max(byWindow.get(key)?.suggestionCount ?? 0, cached.suggestionCount) });
+      }
+      return { ...history, suggestionWindows: [...byWindow.values()].sort((a, b) => a.window.fromYear - b.window.fromYear || a.window.toYear - b.window.toYear) };
+    }) });
+    if (!Number.isSafeInteger(asOfYear)) return { ...snapshot, questions: snapshot.questions.map(withWindowState) };
+    return { ...snapshot, asOfYear, questions: snapshot.questions.map(question => ({ ...withWindowState(question), histories: withWindowState(question).histories.map(history => {
       const events = history.events.filter(event => event.year <= asOfYear);
       const groups = new Map();
       for (const event of events) {
@@ -512,6 +590,45 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         }
         return json(res, 200, localMetaSetupState(req));
       }
+      if (path === '/api/history/preferences' && (req.method === 'GET' || req.method === 'PUT')) {
+        if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.', code: 'unauthorized' });
+        const sessionId = expansionCookieId(req);
+        if (!expansionBudget.known(sessionId)) return json(res, 403, { error: 'A valid browser session is required.', code: 'invalid_history_session' });
+        const service = await getHistoryService(), actor = { userId: 'demo', sessionId };
+        if (req.method === 'GET') return json(res, 200, service.preference(actor.userId, actor.sessionId));
+        if (req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') return json(res, 415, { error: 'Use a JSON request body.', code: 'unsupported_media_type' });
+        const input = await historyRequestBody(req, res);
+        if (!input) return;
+        if (Object.keys(input).some(key => key !== 'autoSuggest') || typeof input.autoSuggest !== 'boolean') return json(res, 400, { error: 'autoSuggest must be a boolean.', code: 'invalid_preference' });
+        try { return json(res, 200, service.setPreference({ ...actor, autoSuggest: input.autoSuggest })); }
+        catch (error) { return json(res, Number.isInteger(error?.status) ? error.status : 400, { error: error.message, code: error.code ?? 'invalid_preference' }); }
+      }
+      const historyActionNames = new Map([
+        ['/api/history/suggest', ['POST', 'suggest']], ['/api/history/weave', ['POST', 'weave']],
+        ['/api/history/fork', ['POST', 'fork']], ['/api/history/ripple-check', ['POST', 'rippleCheck']],
+        ['/api/history/keep', ['POST', 'keepEvent']], ['/api/history/regenerate', ['POST', 'regenerateEvent']],
+      ]);
+      const historyActionRoute = historyActionNames.get(path);
+      if (historyActionRoute && req.method === historyActionRoute[0]) {
+        if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.', code: 'unauthorized' });
+        if (req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') return json(res, 415, { error: 'Use a JSON request body.', code: 'unsupported_media_type' });
+        const sessionId = expansionCookieId(req);
+        if (!expansionBudget.known(sessionId)) return json(res, 403, { error: 'A valid browser session is required.', code: 'invalid_history_session' });
+        const input = await historyRequestBody(req, res);
+        if (!input) return;
+        const [method] = historyActionRoute.slice(1), actor = { userId: 'demo', sessionId };
+        if (method === 'suggest' && replayOnly() && !injectedHistoryService) {
+          const history = historyStore.get(input.questionId)?.histories?.find(item => item.id === input.historyId);
+          const cached = history?.suggestions?.some(item => item.window?.fromYear === input.window?.fromYear && item.window?.toYear === input.window?.toYear)
+            || historyStore.getWindow({ questionId: input.questionId, historyId: input.historyId, window: input.window }).status === 'ready';
+          if (!cached || input.more === true) return json(res, 503, { error: 'Live history generation is disabled. Use replay mode.', code: 'replay_only' });
+        }
+        if ((method === 'rippleCheck' || method === 'regenerateEvent') && replayOnly() && !injectedHistoryService) {
+          return json(res, 503, { error: 'Live history checks are disabled. Use replay mode.', code: 'replay_only' });
+        }
+        const service = await getHistoryService();
+        return historyAction(res, service, method, input, actor);
+      }
       if (req.method === 'GET' && path === '/api/history') {
         if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.' });
         const records = new Map(store.list().map(record => [record.id, record]));
@@ -635,6 +752,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           }
           if (!Buffer.isBuffer(result?.buffer) || result.mime !== 'image/png' || result.buffer.length < 8 || !result.buffer.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) throw new Error('Invalid image');
           cutouts.complete(reservation, result.buffer);
+          recordWorldEntered(req, createHash('sha256').update(JSON.stringify([input.runId, input.branchId])).digest('hex'));
           if (!res.destroyed) json(res, 200, { status: 'complete', url: `/event-cutouts/${reservation.key}.png`, reused: false });
         } catch (error) {
           const budgetExhausted = error instanceof SpendCapError && error.continuationRetryable === true;
@@ -699,6 +817,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           const result = await runner({ prompt });
           if (!Buffer.isBuffer(result?.buffer) || result.mime !== 'image/png' || result.buffer.length < 8 || !result.buffer.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) throw new Error('Invalid image');
           scenes.complete(reservation, result.buffer);
+          recordWorldEntered(req, createHash('sha256').update(JSON.stringify([input.runId, input.branchId])).digest('hex'));
           if (!res.destroyed) json(res, 200, { status: 'complete', url: `/event-scenes/${reservation.key}.png`, reused: false });
         } catch (error) {
           const budgetExhausted = error instanceof SpendCapError && error.continuationRetryable === true;
@@ -928,6 +1047,11 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
             if (continuing && (await manifest(reservedRunId))?.branch?.status !== 'ok') throw new Error('Continuation was not saved');
             const completion = clean({ ...result, directory: undefined, ...(continuation ? { continuation } : {}), ...(questionAttachment ? { questionAttachment: persistedQuestionAttachment } : {}), reused: false });
             if (safeId(result?.runId ?? '')) store.save({ id: result.runId, status: 'complete', rootDivergence: divergence, ...(continuation ? { continuation } : {}), ...(questionAttachment ? { questionAttachment: persistedQuestionAttachment } : {}), completion });
+            const generatedAssets = await manifest(reservedRunId);
+            if (generatedAssets?.hasModel || generatedAssets?.assets?.includes('hero.png') || generatedAssets?.assets?.includes('cutout.png')) {
+              const heroId = safeId(generatedAssets.branch?.hero?.branchId) ? generatedAssets.branch.hero.branchId : 'world';
+              recordWorldEntered(req, createHash('sha256').update(JSON.stringify([reservedRunId, heroId])).digest('hex'));
+            }
             if (edge) store.finish(edge, 'complete');
             emit('complete', { ...completion, ...renderMetadata(result?.branch), step: 'complete' });
           } catch (error) {

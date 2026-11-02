@@ -1,0 +1,47 @@
+{
+  "question": {
+    "id": "lake-chad",
+    "question": "What if Lake Chad stayed larger through the late Holocene?"
+  },
+  "history": {
+    "id": "history-1",
+    "events": [
+      {
+        "id": "channels-2400-bce",
+        "year": -2400,
+        "place": { "name": "Lake Chad basin", "lat": 13.2, "lon": 14.1 },
+        "title": "Timed channels water dry fields",
+        "summary": "Communities use seasonal channels to direct lake water toward fields.",
+        "causeEventId": "lake-chad",
+        "era": "Late Holocene"
+      }
+    ]
+  },
+  "window": { "fromYear": -3500, "toYear": -2000 },
+  "suggestions": [
+    {
+      "year": -3000,
+      "place": { "name": "Lake Chad basin", "lat": 13.2, "lon": 14.1 },
+      "title": "Lake Chad contracts to marshland",
+      "summary": "A long dry interval contracts the lake to marshland, reducing water available to the channels.",
+      "causeEventId": "lake-chad",
+      "era": "Late Holocene",
+      "geography": { "version": 1, "changes": [] },
+      "verdict": "conflicts",
+      "conflictsWith": "channels-2400-bce",
+      "reason": "A marsh by 3000 BCE leaves too little open lake water for the timed channels described in 2400 BCE."
+    },
+    {
+      "year": -2300,
+      "place": { "name": "Lake Chad basin", "lat": 13.2, "lon": 14.1 },
+      "title": "Shoreline gardens track seasonal water",
+      "summary": "Gardeners adapt planting to seasonal shoreline changes while the channels continue to carry water.",
+      "causeEventId": "channels-2400-bce",
+      "era": "Late Holocene",
+      "geography": { "version": 1, "changes": [] },
+      "verdict": "fits",
+      "conflictsWith": null,
+      "reason": "Seasonal shoreline gardens can coexist with the existing channel system."
+    }
+  ]
+}

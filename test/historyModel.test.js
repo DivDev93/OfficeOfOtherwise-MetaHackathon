@@ -97,6 +97,29 @@ test('history ID stays stable when an existing selected-hero path is extended', 
   assert.deepEqual(after.events.map(item => item.id), ['stable-root:a', 'stable-child:d']);
 });
 
+test('migration assigns unique bounded IDs to four leaves sharing the same divergent root', () => {
+  const a = { ...branches.a, id: 'a' }, b = { ...branches.b, id: 'b' };
+  const root = saved('deep-root', [a], { hero: { branchId: 'a' } });
+  const middle = saved('deep-middle', [b], { continuation: { rootRunId: 'deep-root', path: [
+    { runId: 'deep-root', branchId: 'a', ...a },
+  ] }, hero: { branchId: 'b' } });
+  const leaves = ['c1', 'c2', 'c3', 'c4'].map((branchId, index) => {
+    const leaf = { id: branchId, year: -2700 + index, title: `Leaf ${branchId}`, summary: `Visited ${branchId}.`, place: { lat: 13, lon: 14 } };
+    return saved(`deep-leaf-${branchId}`, [], { continuation: { rootRunId: 'deep-root', path: [
+      { runId: 'deep-root', branchId: 'a', ...a },
+      { runId: 'deep-middle', branchId: 'b', ...b },
+      { runId: `deep-leaf-${branchId}`, branchId, ...leaf },
+    ] } });
+  });
+  const histories = migrateSavedTree([root, middle, ...leaves]).questions[0].histories;
+  assert.equal(histories.length, 4);
+  assert.equal(new Set(histories.map(history => history.id)).size, 4);
+  assert.ok(histories.every(history => history.id.length <= 240));
+  assert.ok(histories.every(history => history.events[0].id === 'deep-root:a' && history.events[1].id === 'deep-middle:b'),
+    'each sibling keeps the full shared visited prefix');
+  assert.deepEqual(histories.map(history => history.events.at(-1).id).sort(), leaves.map((_, index) => `deep-leaf-c${index + 1}:c${index + 1}`).sort());
+});
+
 test('normalization sorts events, validates causal references, and derives stable gap eras', () => {
   const history = normalizeHistory({ id: 'h', events: [event('later', 1000), event('early', -1000)] }, { questionId: 'q', maxEraGapYears: 500 });
   assert.deepEqual(history.events.map(item => item.id), ['early', 'later']);
@@ -106,6 +129,7 @@ test('normalization sorts events, validates causal references, and derives stabl
   assert.equal(deriveEras([event('b', 0 + 1), event('a', -100)], { maxGapYears: 200 }).get('a'), 'Era 1 · 100 BCE–1 CE');
   assert.throws(() => normalizeHistory({ events: [event('x', 10, 'x', { causeEventId: 'missing' })] }, { questionId: 'q' }), /Cause event|First event/);
   assert.throws(() => normalizeQuestionHistories({ id: 'q', histories: [{ events: [event('x', 10), event('x', 11)] }] }), /Duplicate/);
+  assert.throws(() => normalizeQuestionHistories({ id: 'q', histories: [{ id: 'same', events: [] }, { id: 'same', events: [] }] }), /Duplicate history/);
 });
 
 test('normalization keeps explicit question causes on later events and preserves history metadata', () => {
