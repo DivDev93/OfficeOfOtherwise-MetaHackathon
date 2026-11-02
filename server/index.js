@@ -8,6 +8,8 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateVoiceWav, MAX_AUDIO_BYTES, createDemoTranscriber } from '../src/providers/metaVoice.js';
 import { createContinuationStore } from '../src/demo/continuationStore.js';
+import { createHistoryStore } from '../src/demo/historyStore.js';
+import { composeGeography } from '../web/historyModel.js';
 import { createEventSceneStore } from '../src/demo/eventSceneStore.js';
 import { createEventCutoutStore } from '../src/demo/eventCutoutStore.js';
 import { continuationFor, MAX_CONTINUATION_DEPTH } from '../src/demo/continuation.js';
@@ -111,6 +113,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
   }
   const expansionBudget = createExpansionBudget(expansionLimit, { filePath: writableRootIsPackage ? undefined : join(liveRoot, '.expansion-sessions.json') });
   const store = createContinuationStore(liveRoot, now);
+  const historyStore = createHistoryStore(liveRoot, now);
   // The checked-in replay package is a read-only fallback. Runtime state stays
   // in liveRoot, and a live registry record always wins for a colliding ID.
   const packagedStore = packagedRoot ? createContinuationStore(packagedRoot, now) : null;
@@ -332,6 +335,49 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     }
     return result.sort((a, b) => a.id.localeCompare(b.id));
   }
+  async function migratedHistories(asOfYear) {
+    const ids = new Set((await listRuns()).map(item => item.id));
+    for (const id of packagedIds) ids.add(id);
+    for (const record of store.list()) if (record.status === 'complete') ids.add(record.id);
+    for (const id of liveRoots.keys()) if (savedRecord(id)?.status === 'complete') ids.add(id);
+    const records = [];
+    for (const id of [...ids].filter(safeId).sort()) {
+      const item = await manifest(id);
+      if (!item || item.branch?.status !== 'ok') continue;
+      const record = savedRecord(id);
+      const refs = {};
+      for (const branch of item.branch.branches ?? []) {
+        if (!safeId(branch?.id)) continue;
+        const branchRefs = {};
+        const selectedHero = item.branch.hero?.branchId === branch.id;
+        const ref = file => ({ status: 'complete', url: `/runs/${encodeURIComponent(id)}/${file}`, path: `${id}/${file}`, runId: id, branchId: branch.id });
+        if (selectedHero && item.assets.includes('hero.png')) branchRefs.heroRef = ref('hero.png');
+        if (selectedHero && item.assets.includes('cutout.png')) branchRefs.cutoutRef = ref('cutout.png');
+        if (selectedHero && item.hasModel) branchRefs.modelRef = ref(item.assets.includes('model.glb') ? 'model.glb' : 'model.meshopt.glb');
+        const scene = scenes.get(id, branch.id);
+        if (scene?.status === 'complete') branchRefs.sceneRef = { status: 'complete', url: `/event-scenes/${scene.key}.png`, runId: id, branchId: branch.id };
+        const cutout = cutouts.get(id, branch.id);
+        if (cutout?.status === 'complete') branchRefs.cutoutRef = { status: 'complete', url: `/event-cutouts/${cutout.key}.png`, runId: id, branchId: branch.id };
+        if (Object.keys(branchRefs).length) refs[`${id}:${branch.id}`] = branchRefs;
+      }
+      records.push({ runId: id, run: { ...item.branch, id, questionAttachment: record?.questionAttachment ?? item.questionAttachment,
+        ...(item.continuation?.path?.length ? { continuation: item.continuation } : {}) }, assetRefsByBranch: refs });
+    }
+    const snapshot = historyStore.migrateLegacy(records);
+    if (!Number.isSafeInteger(asOfYear)) return snapshot;
+    return { ...snapshot, asOfYear, questions: snapshot.questions.map(question => ({ ...question, histories: question.histories.map(history => {
+      const events = history.events.filter(event => event.year <= asOfYear);
+      const groups = new Map();
+      for (const event of events) {
+        const label = event.era ?? 'Undated era';
+        if (!groups.has(label)) groups.set(label, []);
+        groups.get(label).push(event);
+      }
+      const eras = [...groups].map(([label, members]) => ({ label, fromYear: members[0].year,
+        toYear: members.at(-1).year, eventIds: members.map(event => event.id) }));
+      return { ...history, asOf: { year: asOfYear, events, eras, geography: composeGeography(history.events, asOfYear) } };
+    }) })) };
+  }
   async function runSource(id) {
     const roots = [liveRoots.get(id), packagedIds.has(id) ? packagedRoot : null, runsRoot].filter(Boolean);
     for (const candidate of [...new Set(roots)]) {
@@ -477,6 +523,13 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           if (item) runs.push({ id: item.id, title: item.title, divergence: record.rootDivergence ?? item.divergence, ...(record.continuation ? { parentRunId: record.continuation.parentRunId, parentBranchId: record.continuation.parentBranchId } : {}), ...(record.questionAttachment ? { questionAttachment: record.questionAttachment } : {}), updatedAt: record.updatedAt });
         }
         return json(res, 200, { runs: runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) });
+      }
+      if (req.method === 'GET' && path === '/api/histories') {
+        if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'Histories need an access code.' });
+        const rawYear = url.searchParams.get('asOfYear');
+        const asOfYear = rawYear === null ? undefined : /^-?\d+$/.test(rawYear) ? Number(rawYear) : NaN;
+        if (asOfYear !== undefined && (!Number.isSafeInteger(asOfYear) || asOfYear === 0)) return json(res, 400, { error: 'asOfYear must be a nonzero integer.' });
+        return json(res, 200, await migratedHistories(asOfYear));
       }
       if ((req.method === 'GET' || req.method === 'HEAD') && path === '/health') {
         const cookieId = expansionCookieId(req);
