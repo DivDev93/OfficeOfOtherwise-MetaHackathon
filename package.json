@@ -14,7 +14,7 @@
     "./lib/*": "./src/lib/*.js"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test \"test/*.test.js\"",
     "harness": "node --env-file-if-exists=.env harness/run.js",
     "demo": "node --env-file-if-exists=.env server/index.js",
     "cache-demo": "node --env-file-if-exists=.env scripts/cache-demo.js",

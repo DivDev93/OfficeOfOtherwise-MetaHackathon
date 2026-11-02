@@ -1,5 +1,6 @@
 import { ORBIT_UNFOLDED_LEVEL, SURFACE_LABEL_LEVEL, stableWorldId } from '../atlasLayout.js';
 import { projectHistoryAtlas } from '../historyAtlas.js';
+import { buildHistorySpineLayout } from '../historySpines.js';
 import { migrateSavedRuns } from './worldModel.js';
 
 export const ATLAS_AXIS_MODES = Object.freeze([
@@ -249,6 +250,7 @@ export async function createAtlasController({
   currentRunId = null, selectedBranchId = null, currentWorldId = null,
   onPreview = () => {}, onEnter = () => {}, onQuestionPreview = () => {}, onQuestionEnter = () => {}, onMetrics = () => {}, onLevelChange = () => {},
   onAttachmentIntent = () => {}, onViewOptionsChange = () => {}, onHistoryEventSelect = () => {},
+  onHistorySelect = () => {}, onQuestionSelect = () => {},
   getZoomOutTarget = () => null,
   visitedStorage = undefined,
   document: documentObject = container?.ownerDocument, window: windowObject = documentObject?.defaultView,
@@ -290,6 +292,7 @@ export async function createAtlasController({
   toolbar.replaceChildren?.(); toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', 'Atlas controls');
   const viewOptionsDetails = documentObject.createElement('details');
   viewOptionsDetails.className = 'atlas-view-options';
+  viewOptionsDetails.setAttribute('data-atlas-zoom-ignore', 'true');
   const viewOptionsSummary = documentObject.createElement('summary'); viewOptionsSummary.textContent = 'View options';
   viewOptionsDetails.append(viewOptionsSummary); toolbar.append(viewOptionsDetails);
   const viewOptionsBody = documentObject.createElement('div'); viewOptionsBody.className = 'atlas-view-options-body'; viewOptionsDetails.append(viewOptionsBody);
@@ -316,6 +319,9 @@ export async function createAtlasController({
   travelLabel.append(travel); viewOptionsBody.append(travelLabel);
   const ghost = makeControl(documentObject, 'input', 'Ghost trail', viewOptionsBody).control; ghost.type = 'checkbox'; ghost.checked = false;
   const attachment = radioGroup(documentObject, viewOptionsBody, 'Attach a new question to', 'atlas-question-attachment', [['current', 'Current world'], ['present', 'Present-day Earth']], viewOptions.attachment);
+  const legacyOrbitField = unfold.parentElement;
+  const historyLegacyFields = [legacyOrbitField, axisLabel, travelLabel, ghost.parentElement];
+  const setHistoryControlVisibility = active => { for (const field of historyLegacyFields) if (field) field.hidden = Boolean(active); };
 
   const currentWorld = () => data.worlds.find(world => world.id === currentId) || null;
   const focusPlace = makeButton('Focus place', 'Focus selected location on Surface');
@@ -391,12 +397,26 @@ export async function createAtlasController({
         if (disposed || !historyProjection || !event) return false;
         onHistoryEventSelect(event, {
           questionId: historyProjection.questionId,
-          historyId: historyProjection.historyId,
+          historyId: String(event.historyId ?? historyProjection.historyId),
           date: historyProjection.asOfYear,
           visualKind: event.visualKind,
           source: anchor?.source || 'pointer',
           anchor: anchor || null,
         });
+        return true;
+      },
+      onHistorySelect: (historyId, anchor) => {
+        if (disposed || !historyProjection || String(historyProjection.historyId) === String(historyId)) return false;
+        onHistorySelect(String(historyId), { questionId:historyProjection.questionId,
+          date:historyProjection.asOfYear, source:anchor?.source || 'pointer', anchor:anchor || null });
+        return true;
+      },
+      onQuestionSelect: (questionId, anchor) => {
+        if (disposed || !historyProjection) return false;
+        const question = questionRecords.get(String(questionId))
+          || historyProjection.questions?.find(item => String(item.id) === String(questionId));
+        if (!question) return false;
+        onQuestionSelect(String(question.id), { question, source:anchor?.source || 'pointer', anchor:anchor || null });
         return true;
       },
       onMetrics,
@@ -469,13 +489,19 @@ export async function createAtlasController({
       if (snapshot == null) {
         historyProjection = null;
         historyProjectionSignature = '';
+        setHistoryControlVisibility(false);
         scene.setHistoryView?.(null);
         scene.setWorlds?.({ worlds: data.worlds, questions: data.questions, currentId });
         updatePlaceControls();
         return null;
       }
-      const question = snapshot.question || questionRecords.get(String(snapshot.questionId ?? ''));
+      const activeQuestionId = String(snapshot.activeQuestionId ?? snapshot.questionId ?? snapshot.question?.id ?? '');
+      const question = snapshot.question || questionRecords.get(activeQuestionId)
+        || snapshot.questions?.find(item => String(item.id) === activeQuestionId);
       const asOfYear = snapshot.asOfYear ?? snapshot.date;
+      const spineQuestions = Array.isArray(snapshot.questions) ? [...snapshot.questions] : [...questionRecords.values()];
+      for (const item of spineQuestions) if (item?.id != null) questionRecords.set(String(item.id), item);
+      if (question && !spineQuestions.some(item => String(item.id) === activeQuestionId)) spineQuestions.push(question);
       const projection = {
         ...projectHistoryAtlas(question, {
         historyId: snapshot.historyId ?? snapshot.history?.id,
@@ -484,7 +510,14 @@ export async function createAtlasController({
         suggestions: snapshot.suggestions,
         }),
         surfaceMode: snapshot.surfaceMode === 'present' ? 'present' : 'scenario',
+        activeQuestionId,
+        questions:spineQuestions,
+        showOrbit: Boolean(snapshot.showOrbit),
       };
+      projection.spineLayout = buildHistorySpineLayout({ questions:spineQuestions, activeQuestionId,
+        activeHistoryId:projection.historyId, asOfYear:projection.asOfYear, window:projection.window,
+        suggestions:projection.suggestions });
+      projection.siblingEarths = projection.spineLayout.siblingEarths;
       // Geography controls provide a local display preview. Keep it separate
       // from the event-derived as-of composition used by the history model.
       const suppliedSurfaceGeography = snapshot.surfaceGeography ?? snapshot.composedGeography;
@@ -504,6 +537,7 @@ export async function createAtlasController({
       }
       const signature = JSON.stringify(projection);
       historyProjection = projection;
+      setHistoryControlVisibility(true);
       if (signature !== historyProjectionSignature) {
         historyProjectionSignature = signature;
         scene.setHistoryView?.(projection);
@@ -555,9 +589,16 @@ export async function createAtlasController({
     enterWorld(id, { zoom = 0 } = {}) {
       if (disposed) return false;
       if (historyProjection) {
-        const selected = [...historyProjection.pins, ...historyProjection.suggestions].find(item => item.id === String(id));
+        const sibling = historyProjection.siblingEarths?.find(item => item.id === String(id));
+        if (sibling) {
+          onHistorySelect(String(sibling.historyId), { questionId:historyProjection.questionId, date:historyProjection.asOfYear,
+            source:'controller-explicit-entry', anchor:null });
+          return true;
+        }
+        const selected = [...historyProjection.pins, ...historyProjection.suggestions].find(item => item.id === String(id))
+          || historyProjection.spineLayout?.nodes?.find(node => node.eventId === String(id))?.event;
         if (!selected) return false;
-        onHistoryEventSelect(selected, { questionId: historyProjection.questionId, historyId: historyProjection.historyId,
+        onHistoryEventSelect({ ...selected, historyId:selected.historyId || historyProjection.spineLayout?.nodes?.find(node => node.eventId === selected.id)?.historyId || historyProjection.historyId }, { questionId: historyProjection.questionId, historyId: selected.historyId || historyProjection.historyId,
           date: historyProjection.asOfYear, visualKind: selected.visualKind, source: 'controller-explicit-entry', anchor: null });
         return true;
       }

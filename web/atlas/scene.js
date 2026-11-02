@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { defaultWorldImageUrl } from './imageRefs.js';
 import { createWorldTextureFactory } from './worldTextures.js';
-import { historyPinColorRole, layoutHistoryPins } from '../historyAtlas.js';
+import { formatHistoryQuestionChip, historyAtlasFrameBounds, historyOrbitMarkerScale, historyOrbitPositions, historyPinColorRole, historySurfaceVisibility, historyYearToAtlasX, historyZoomPresentation, layoutHistoryPins, shouldShowPossibilityOutline } from '../historyAtlas.js';
+import { buildHistorySceneRecords, projectHistorySpineGeometry } from '../historySpines.js';
 import { projectGeographyLocation } from '../terrainRaster.js';
 import { clusterOpacityAtPresentation, orbitClusteredIdsForPresentation, planWorldClusters } from './clusters.js';
 import { containsFanRegion, createFanHitRegion, fanMemberOffsets } from './screenLayout.js';
@@ -10,7 +11,7 @@ import { createAtlasP2Renderer } from './p2Renderer.js';
 import { bindAtlasScreenLabelButton, isAtlasScreenLabelAction } from './screenLabelActions.js';
 import { planAtlasReveal, renderableAtlasRevealPlan } from './revealPlanner.js';
 import { buildSurfaceArcRoute, interpolateAttachedAtlasEdgeRoute } from './routeMorph.js';
-import { dragModeForZoom, panDeltaForDrag, surfaceDragAngles, surfaceDetailFromPinch, surfaceDetailFromWheel, zoomFromPinch, zoomFromWheel } from './interaction.js';
+import { atlasZoomGestureBlocked, dragModeForZoom, panDeltaForDrag, surfaceDragAngles, surfaceDetailFromPinch, surfaceDetailFromWheel, zoomFromPinch, zoomFromWheel } from './interaction.js';
 import { createOrbitChildLabelLeader, createWorldLabelCandidates, edgeMarker, layoutOrbitChildLabels, placeOrbitFallbackDock, placeOrbitFallbackPanel, placeScreenLabels, projectedSphereDiameterPixels, resolveOrbitFallbackMount, shortQuestionTitle, visibleViewportObstacleRects, viewportObstacleRectsFromCenters, worldLabelText } from './labels.js';
 import {
   GHOST_TRAIL_DEFAULT, arrivalParentWorldId, cutTravelOpacity, interpolateTravelPoint, preservesTravelSource, smoothTravelProgress, travelZoomAt,
@@ -24,7 +25,7 @@ import {
   ATLAS_LEVEL_MAX, ORBIT_UNFOLDED_LEVEL, SURFACE_LABEL_LEVEL,
   ATLAS_PIN_GEOMETRY_RADIUS, surfacePinAnchorRadius,
   pinScaleAtPresentation, pinAnchorRadiusAtPresentation,
-  altitudeForZoom, atlasPresentationState, atlasZoomState, clampAtlasLevel, createWorldRegistry,
+  altitudeForZoom, atlasPresentationState, clampAtlasLevel, createWorldRegistry,
   layoutAtlasWorlds, layoutOrbitNeighborhood, measuredFps, surfaceFacingOrientation,
   worldRadiusForScreenPixels, nearestProjectedAnchorHit, projectedWorldTarget, targetOccludedByEarth, pointerRayDistanceAtTargetDepth, nearestDirectionalNeighbor, selectSurfaceWorldLabelIds,
   cappedTextureSize, allowEarthBodySelection, fitCenteredCameraDistance, fitSurfaceCameraDistance,
@@ -175,6 +176,10 @@ function worldColor(entry, currentId, focusedId = null) {
   if (historyRole === 'gold') return GOLD;
   if (historyRole === 'cyan-hover') return HISTORY_CYAN_HOVER;
   if (historyRole === 'cyan') return CYAN;
+  if (historyRole === 'spine-trunk-hover') return HISTORY_GOLD_HOVER;
+  if (historyRole === 'spine-trunk') return GOLD;
+  if (historyRole === 'spine-sibling-hover') return PARCHMENT.clone().lerp(GOLD, 0.38);
+  if (historyRole === 'spine-sibling') return MUTED.clone().lerp(PARCHMENT, 0.26);
   const kind = `${world.kind || ''} ${world.type || ''} ${world.tokenType || ''} ${world.theme || ''}`.toLowerCase();
   if (entry.id === currentId || entry.lineage) return GOLD;
   if (/question|chronos|time.?token/.test(kind)) return PARCHMENT;
@@ -275,6 +280,8 @@ export function createAtlasScene(container, {
   onPreview = () => {},
   onEnter = () => {},
   onHistoryEventSelect = () => {},
+  onHistorySelect = () => {},
+  onQuestionSelect = () => {},
   onQuestionPreview = () => {},
   onQuestionEnter = () => {},
   onMetrics = () => {},
@@ -343,6 +350,20 @@ export function createAtlasScene(container, {
 
   const atlasGroup = new THREE.Group();
   scene.add(atlasGroup);
+  const historySpineThreads = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({
+    color: '#ffffff', vertexColors: true, transparent: true, opacity: 0, depthWrite: false,
+  }));
+  historySpineThreads.name = 'History real trunk and sibling spines';
+  historySpineThreads.visible = false;
+  atlasGroup.add(historySpineThreads);
+  const historySpineTubes = new THREE.Group();
+  historySpineTubes.name = 'Readable history spine strokes';
+  historySpineTubes.visible = false;
+  atlasGroup.add(historySpineTubes);
+  const historyChipAnchors = new THREE.Group();
+  historyChipAnchors.name = 'Other-question anchors on the real-history trunk';
+  historyChipAnchors.visible = false;
+  atlasGroup.add(historyChipAnchors);
   const earthGeometry = new THREE.SphereGeometry(1, 64, 48);
   const miniEarthTexture = new THREE.Texture();
   miniEarthTexture.colorSpace = THREE.SRGBColorSpace;
@@ -511,7 +532,7 @@ export function createAtlasScene(container, {
   const stageFps = new Map();
   const domListeners = [];
   let worlds = [], questions = [], entries = [], currentId = null, arrivalFromId = null, zoom = 0, surfaceDetailZoom = 0, rotation = 0;
-  let historyProjection = null, legacySnapshot = null;
+  let historyProjection = null, historyGeometry = null, historyOrbitEnabled = false, legacySnapshot = null;
   let surfaceFacingAngle = 0, surfaceFacingPitch = 0, rotationPitch = 0;
   let orbitNeighborhoodIds = new Set();
   let liveCameraDistance = altitudeForZoom(zoom);
@@ -540,6 +561,9 @@ export function createAtlasScene(container, {
     target.addEventListener(type, handler, options);
     domListeners.push(() => target.removeEventListener(type, handler, options));
   }
+  function zoomGestureOverInterface(event) {
+    return atlasZoomGestureBlocked(event, renderer.domElement, container.ownerDocument);
+  }
   function updateCanvasOpacity() {
     renderer.domElement.style.opacity = String(travelOpacity * axisFadeOpacity * reducedMotionOpacity);
   }
@@ -556,7 +580,60 @@ export function createAtlasScene(container, {
     domListeners.push(() => motionQuery.removeEventListener('change', onMotionPreference));
   }
   function stageForZoom(value) {
+    if (historyProjection && !historyOrbitEnabled) return value < 0.22 ? 'surface' : 'atlas';
     return value < 0.22 ? 'surface' : value < 0.57 ? 'lift' : value < 0.84 ? 'orbit' : 'atlas';
+  }
+  function presentationForZoom(value = zoom) {
+    if (!historyProjection) return atlasPresentationState(value, motionReduced);
+    return historyZoomPresentation(value, historyOrbitEnabled);
+  }
+  function setHistorySpineGeometry(layout) {
+    historyGeometry = projectHistorySpineGeometry(layout);
+    const roleByHistory = new Map((layout?.spines || []).map(spine => [String(spine.historyId), spine.role]));
+    const positions = [], colors = [];
+    for (const segment of historyGeometry.segments) {
+      positions.push(segment.from.x, segment.from.y, segment.from.z, segment.to.x, segment.to.y, segment.to.z);
+      const color = segment.kind === 'trunk' || segment.kind === 'real-history-trunk'
+        || roleByHistory.get(String(segment.historyId)) === 'active'
+        ? GOLD : MUTED.clone().lerp(PARCHMENT, 0.22);
+      colors.push(color.r,color.g,color.b,color.r,color.g,color.b);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geometry.computeBoundingSphere();
+    historySpineThreads.geometry.dispose();
+    historySpineThreads.geometry = geometry;
+    historySpineThreads.visible = Boolean(historyProjection && positions.length);
+    for (const child of historySpineTubes.children) {
+      historySpineTubes.remove(child); child.geometry?.dispose(); child.material?.dispose();
+    }
+    for (const segment of historyGeometry.segments) {
+      const dx = segment.to.x - segment.from.x, dy = segment.to.y - segment.from.y, dz = segment.to.z - segment.from.z;
+      const length = Math.hypot(dx, dy, dz);
+      if (!length) continue;
+      const active = segment.kind === 'trunk' || segment.kind === 'real-history-trunk'
+        || roleByHistory.get(String(segment.historyId)) === 'active';
+      const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, length, 7, 1, false),
+        new THREE.MeshBasicMaterial({ color:active ? GOLD : MUTED.clone().lerp(PARCHMENT, 0.22),
+          transparent:true, opacity:1, depthWrite:false, depthTest:false }));
+      tube.position.set((segment.from.x + segment.to.x) / 2, (segment.from.y + segment.to.y) / 2, (segment.from.z + segment.to.z) / 2);
+      tube.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(dx, dy, dz).normalize());
+      tube.frustumCulled = false;
+      historySpineTubes.add(tube);
+    }
+    historySpineTubes.visible = Boolean(historyProjection && historyGeometry.segments.length);
+    for (const child of historyChipAnchors.children) {
+      historyChipAnchors.remove(child); child.geometry?.dispose(); child.material?.dispose();
+    }
+    for (const chip of historyGeometry.chips) {
+      const parchment = chip.origin === 'user-written' ? '#d8c49b' : '#b8b0a0';
+      const anchor = new THREE.Mesh(new THREE.SphereGeometry(0.075, 12, 8),
+        new THREE.MeshBasicMaterial({ color:parchment, depthWrite:false }));
+      anchor.position.set(chip.x, 0, 0.07);
+      historyChipAnchors.add(anchor);
+    }
+    historyChipAnchors.visible = Boolean(historyProjection && historyGeometry.chips.length);
   }
   function currentEntry() { return entries.find(entry => entry.id === currentId) || null; }
   const projectedGlobeByTexture = new WeakMap();
@@ -625,7 +702,7 @@ export function createAtlasScene(container, {
       entry.atlasRealSphere = realSphereIds.has(entry.id);
       entry.folded = foldedIds.has(entry.id);
     }
-    p2Renderer.update(atlasTimeline, { opacity: atlasZoomState(zoom).atlas, axisMode });
+    p2Renderer.update(atlasTimeline, { opacity: presentationForZoom(zoom).state.atlas, axisMode });
   }
   function withScreenOffset(point, offset) {
     if (!offset || (!offset.x && !offset.y)) return point;
@@ -707,6 +784,7 @@ export function createAtlasScene(container, {
   }
 
   function atlasFrameBounds() {
+    if (historyProjection) return historyAtlasFrameBounds(historyGeometry, entries, currentId);
     const folded = new Set(atlasTimeline?.foldedIds || []);
     const foldedQuestionIds = new Set((atlasTimeline?.chips || []).map(chip => String(chip.questionId)));
     const xs = [...(atlasTimeline?.positions?.values?.() || [])].filter(point => !folded.has(point.id)).map(point => point.x);
@@ -849,7 +927,42 @@ export function createAtlasScene(container, {
         return [entry.id, { x: point.x, y: point.y, z: point.z }];
       })) : null;
     entries = historyProjection ? layoutHistoryPins(worlds, currentId) : layoutAtlasWorlds(worlds, currentId);
-    const orbitPositions = historyProjection ? new Map(entries.map(entry => [entry.id, { ...entry.atlas }])) : layoutOrbitNeighborhood(entries, currentId);
+    if (historyProjection) {
+      const geometryById = new Map((historyGeometry?.positions || []).map(point => [point.id, point]));
+      const nodeByEventId = new Map((historyProjection.spineLayout?.nodes || []).filter(node => node.eventId)
+        .map(node => [String(node.eventId), node.id]));
+      const yearList = (historyProjection.spineLayout?.nodes || []).map(node => Number(node.year)).filter(Number.isFinite);
+      const yearMin = yearList.length ? Math.min(...yearList) : Number(historyProjection.asOfYear);
+      const yearMax = yearList.length ? Math.max(...yearList) : yearMin + 1;
+      let suggestionLane = 0;
+      for (const entry of entries) {
+        if (entry.world.historySurface) {
+          entry.atlas = { x:-0.15, y:-1.45, z:0.1 };
+          entry.orbit = { x:0, y:0, z:0 };
+          continue;
+        }
+        if (entry.world.visualKind === 'history-sibling') {
+          const siblingIndex = Math.max(0, (historyProjection.siblingEarths || []).findIndex(item => item.id === entry.id));
+          const siblingCount = Math.max(1, historyProjection.siblingEarths?.length || 1);
+          const angle = Math.PI * 2 * siblingIndex / siblingCount;
+          entry.orbit = { x:Math.cos(angle) * 1.45, y:Math.sin(angle) * 1.08, z:0 };
+          entry.atlas = { x:-3.6 + siblingIndex * 0.65, y:-1.7, z:-0.15 };
+          continue;
+        }
+        const nodeId = entry.world.historySpineNodeId || nodeByEventId.get(entry.id);
+        const nodePoint = geometryById.get(nodeId);
+        if (nodePoint) entry.atlas = { x:nodePoint.x, y:nodePoint.y, z:nodePoint.z };
+        else if (entry.world.visualKind === 'history-suggestion') {
+          const outside = Number(entry.world.year) < yearMin || Number(entry.world.year) > yearMax;
+          const lane = outside ? suggestionLane++ : 0;
+          entry.atlas = { x:historyYearToAtlasX(entry.world.year, yearMin, yearMax), y:0.7 + (lane % 5) * 0.12, z:0 };
+        }
+        entry.orbit = { ...entry.atlas };
+      }
+    }
+    const orbitPositions = historyProjection
+      ? historyOrbitPositions(entries)
+      : layoutOrbitNeighborhood(entries, currentId);
     orbitPositionsById = orbitPositions;
     for (const entry of entries) entry.orbit = orbitPositions.get(entry.id) || entry.atlas;
     const parentIds = new Set(worlds.filter(world => world.parentId != null).map(world => String(world.parentId)));
@@ -925,10 +1038,15 @@ export function createAtlasScene(container, {
         }
       }
       entry.surfaceLabel = historyProjection ? Boolean(entry.world.highlighted) : surfaceLabels.has(entry.id) || Boolean(clusterPlan.surface.fannedClusterId && visibleSurface.has(entry.id));
-      entry.surfaceVisible = historyProjection ? entry.id !== currentId : entry.current || visibleSurface.has(entry.id) || entry.id === arrivalFromId;
-      entry.orbitVisible = historyProjection ? entry.id !== currentId : visibleOrbit.has(entry.id) || entry.current;
-      if (historyProjection && worldRecord.unenteredOutline) {
-        atlasGroup.remove(worldRecord.unenteredOutline); worldRecord.unenteredOutline.material.dispose(); worldRecord.unenteredOutline = null;
+      entry.surfaceVisible = historyProjection ? Boolean(entry.world.historySurfacePin) && entry.id !== currentId : entry.current || visibleSurface.has(entry.id) || entry.id === arrivalFromId;
+      entry.orbitVisible = historyProjection
+        ? (entry.world.visualKind === 'history-sibling' && historyOrbitEnabled) || entry.id === currentId
+        : visibleOrbit.has(entry.id) || entry.current;
+      if (!shouldShowPossibilityOutline({ historyMode:Boolean(historyProjection), isCurrent:entry.id === currentId,
+        selectable:entry.world.selectable !== false })) {
+        if (worldRecord.unenteredOutline) {
+          atlasGroup.remove(worldRecord.unenteredOutline); worldRecord.unenteredOutline.material.dispose(); worldRecord.unenteredOutline = null;
+        }
       } else if (entry.id !== currentId && entry.world.selectable !== false) {
         if (!worldRecord.unenteredOutline) {
           const material = new THREE.SpriteMaterial({ map: unenteredOutlineTexture, color: '#87d9ed', transparent: true, depthWrite: false, opacity: 0 });
@@ -973,7 +1091,7 @@ export function createAtlasScene(container, {
 
     const childEntries = historyProjection ? [] : entries.filter(entry => entry.child && entry.id !== currentId);
     const linePositions = new Float32Array(childEntries.length * 6);
-    const layoutState = atlasPresentationState(zoom, motionReduced).state;
+    const layoutState = presentationForZoom(zoom).state;
     const layoutMarkerRadius = pinAnchorRadiusAtPresentation(surfaceEarthRadius(layoutState), layoutState.lift, layoutState.atlas);
     childEntries.forEach((entry, index) => {
       const from = surfacePoint(entry, layoutMarkerRadius).add(earthMesh.position);
@@ -1033,8 +1151,13 @@ export function createAtlasScene(container, {
     renderer.domElement.dataset.atlasLevel = zoomStage;
     if (announce) onZoomChange(zoom);
     if (previousSurfaceDetailZoom !== surfaceDetailZoom) onSurfaceDetailChange(surfaceDetailZoom, zoom);
-    const presentation = atlasPresentationState(zoom, motionReduced);
+    const presentation = presentationForZoom(zoom);
     const state = presentation.state;
+    historySpineThreads.visible = Boolean(historyProjection && state.atlas > 0.015 && historyGeometry?.segments?.length);
+    historySpineThreads.material.opacity = historyProjection ? state.atlas : 0;
+    historySpineTubes.visible = Boolean(historyProjection && state.atlas > 0.015 && historyGeometry?.segments?.length);
+    for (const tube of historySpineTubes.children) tube.material.opacity = historyProjection ? state.atlas : 0;
+    historyChipAnchors.visible = Boolean(historyProjection && state.atlas > 0.015 && historyGeometry?.chips?.length);
     const revealCandidate = zoom >= 0.84 && !travelState && !axisTransition && atlasTimeline && entries.length
       ? planAtlasReveal({ timeline:atlasTimeline, entries, orbitPositions:orbitPositionsById, currentId, zoom })
       : null;
@@ -1058,13 +1181,17 @@ export function createAtlasScene(container, {
       earthPosition = travelEarthPosition(timestamp, state) || earthPosition;
     }
     earthMesh.position.copy(earthPosition);
-    earthMesh.scale.setScalar(state.earthScale * (1 - 0.12 * state.atlas));
+    const currentEarthVisibility = historyProjection ? historySurfaceVisibility(state.atlas) : 1;
+    earthMesh.visible = currentEarthVisibility > 0.005;
+    earthMesh.scale.setScalar(state.earthScale * (1 - 0.12 * state.atlas) * currentEarthVisibility);
     currentRing.position.copy(earthMesh.position);
     currentRing.scale.setScalar(earthMesh.scale.x * 1.45);
-    currentRing.material.opacity = 0.9 * Math.max(state.orbit, state.atlas);
+    currentRing.material.opacity = historyProjection
+      ? 0.9 * state.orbit * currentEarthVisibility
+      : 0.9 * Math.max(state.orbit, state.atlas);
     currentRing.visible = currentRing.material.opacity > 0.01;
     atmosphere.position.copy(earthMesh.position);
-    atmosphere.scale.setScalar(state.earthScale * (1 - 0.12 * state.atlas) * 1.025);
+    atmosphere.scale.setScalar(state.earthScale * (1 - 0.12 * state.atlas) * currentEarthVisibility * 1.025);
     const currentQuestionId = String(current?.world?.questionId ?? '');
     const questionRootRevealId = `${String.fromCharCode(0)}question-root:${currentQuestionId}`;
     const plannedQuestionAnchor = revealPlan?.positions.get(questionRootRevealId);
@@ -1096,6 +1223,9 @@ export function createAtlasScene(container, {
     applySurfaceOrientation(1 - state.lift, timestamp);
     atlasGroup.updateMatrixWorld(true);
     const frame = atlasFrameBounds();
+    if (historyProjection) container.dataset.historyFrameBounds = JSON.stringify(Object.fromEntries(
+      Object.entries(frame).map(([key, coordinate]) => [key, Number(coordinate.toFixed(3))])));
+    else container.removeAttribute?.('data-history-frame-bounds');
     const atlasCenter = new THREE.Vector3((frame.left + frame.right) / 2, (frame.bottom + frame.top) / 2, 0);
     const cameraFocus = travelState && !travelState.cut ? earthMesh.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3().lerp(atlasCenter, state.atlas);
     cameraFocus.x += panOffset.x; cameraFocus.y += panOffset.y;
@@ -1157,6 +1287,10 @@ export function createAtlasScene(container, {
     const visibleEntries = entries.filter(entry => {
       if (revealPlan && (!revealWorldIds.has(entry.id) || revealAlpha(entry.id) <= 0.005)) return false;
       if (travellingIds.has(entry.id) || (atlasSettled && folded.has(entry.id)) || (!revealPlan && clusteredIds.has(entry.id))) return false;
+      if (historyProjection && entry.world.visualKind === 'history-sibling' && !historyOrbitEnabled) return false;
+      if (historyProjection && historyOrbitEnabled && state.atlas < 0.08 && state.orbit > 0.15
+        && entry.world.visualKind !== 'history-sibling' && entry.id !== currentId) return false;
+      if (historyProjection && state.atlas >= 0.08 && entry.world.visualKind === 'history-sibling') return false;
       if (state.surface > 0.15 && zoom < 0.57) return entry.surfaceVisible;
       if (state.orbit > 0.15 && zoom < 0.84) return entry.orbitVisible;
       return true;
@@ -1168,7 +1302,7 @@ export function createAtlasScene(container, {
     const sphereLimit = historyProjection ? visibleEntries.length : Math.max(0, MAX_SPHERE_INSTANCES - 1); // Surface history pins are dynamically sized below.
     const instanceEntries = visibleEntries.filter(entry => entry.id !== currentId
       && !isGenerationPlaceholderWorld(entry.world)
-      && (state.atlas < 0.45 || realSphereIds.has(entry.id)))
+      && (historyProjection || state.atlas < 0.45 || realSphereIds.has(entry.id)))
       .slice(0, sphereLimit);
     instanceIds.length = 0;
     const instanceColor = new THREE.Color();
@@ -1204,7 +1338,8 @@ export function createAtlasScene(container, {
       mesh.count = groupEntries.length;
       groupEntries.forEach((entry, index) => {
         instanceIds.push(entry.id);
-        const scale = markerScale;
+        const scale = historyProjection
+          ? historyOrbitMarkerScale(markerScale, entry.world) : markerScale;
         const point = worldPosition(entry, state, timestamp, markerRadius);
         dummy.position.copy(point);
         const facing = surfaceFacingOrientation(projectedGlobe(entry));
@@ -1360,7 +1495,13 @@ export function createAtlasScene(container, {
     const towardCameraForLabels = camera.getWorldPosition(new THREE.Vector3()).sub(labelEarthCenter);
     const horizonThreshold = surfaceEarthRadius(state) / Math.max(surfaceEarthRadius(state), towardCameraForLabels.length()) + 0.005;
     towardCameraForLabels.normalize();
-    const labelEntries = historyProjection ? entries.filter(entry => !entry.world.historySurface) : entries;
+    const labelEntries = historyProjection
+      ? entries.filter(entry => historyOrbitEnabled && state.atlas < 0.08 && state.orbit > 0.15
+        ? entry.world.visualKind === 'history-sibling'
+        : state.atlas > 0.1
+          ? Boolean(entry.world.historySpineNodeId || entry.world.visualKind === 'history-suggestion')
+          : Boolean(entry.world.historySurfacePin))
+      : entries;
     const worldCandidates = createWorldLabelCandidates(labelEntries, {
       currentId, focusedId: hoveredId,
       project: entry => {
@@ -1391,6 +1532,8 @@ export function createAtlasScene(container, {
       ? projectPoint(worldPosition(undatedLineageEntry, state, timestamp, markerRadius).applyMatrix4(atlasGroup.matrixWorld))
       : null;
     const candidates = worldCandidates.map(candidate => {
+      const historyWorld = historyProjection ? entries.find(entry => entry.id === candidate.id)?.world : null;
+      if (historyWorld?.visualKind === 'history-spine-sibling') return { ...candidate, kind:'history-spine-sibling' };
       if (state.atlas <= 0.5) return candidate;
       if (candidate.id === currentId) return { ...candidate, priority:Math.max(candidate.priority || 0, 124) };
       if (mobileLabels && candidate.id === undatedLineageWorldId) {
@@ -1467,6 +1610,17 @@ export function createAtlasScene(container, {
       if (point.visible) nodeRects.push({ x: point.x, y: point.y, width: diameter, height: diameter });
     }
     if (state.atlas > 0.04) {
+      if (historyProjection && historyGeometry) {
+        for (const chip of historyGeometry.chips) {
+          const point = projectPoint(new THREE.Vector3(chip.x, 0, 0.08).applyMatrix4(atlasGroup.matrixWorld));
+          const fullText = questions.find(question => String(question.id) === String(chip.questionId))?.question || chip.label;
+          const label = formatHistoryQuestionChip({ title:fullText, historyCount:chip.historyCount, year:chip.year });
+          if (point.visible) candidates.push({ id:`history-chip:${chip.questionId}`, questionId:String(chip.questionId),
+            text:label.text, fullText:label.fullText,
+            origin:chip.origin, place:chip.place, ...point, y:point.y + 20,
+            width:Math.min(mobileLabels ? 190 : 240, safeBounds.right - safeBounds.left), height:24, priority:94, kind:'chip' });
+        }
+      }
       for (const { chip, sprite } of p2Renderer.getQuestionChipTargets()) {
         if (!chip || !sprite.visible) continue;
         const point = projectPoint(sprite.getWorldPosition(new THREE.Vector3()));
@@ -1577,6 +1731,18 @@ export function createAtlasScene(container, {
       if (actionable) element.style.cursor = 'pointer';
       element.style.opacity = revealPlan?.positions.has(placement.id) ? String(revealAlpha(placement.id)) : '1';
       element.style.color = '#ece4d4';
+      if (placement.kind === 'world' && historyProjection) {
+        const world = worlds.find(item => stableWorldId(item) === String(placement.id));
+        if (world?.historySpineRole === 'sibling') {
+          element.style.color = '#aeb6b7'; element.style.opacity = '0.68';
+        } else if (world?.historySpineRole === 'trunk') {
+          element.style.color = '#e0bd76'; element.style.opacity = '0.92';
+        } else element.style.opacity = '1';
+      }
+      if (placement.kind === 'chip' && historyProjection) {
+        const chip = historyProjection.spineLayout?.chips?.find(item => String(item.questionId) === String(placement.questionId));
+        element.style.color = chip?.origin === 'user-written' ? '#eadfca' : '#ece4d4';
+      }
       element.style.fontSize = placement.kind === 'axis' || placement.kind === 'tick' ? '12px' : '12.5px';
       activeLabelIds.add(placement.id);
     }
@@ -2181,9 +2347,11 @@ export function createAtlasScene(container, {
   function setHistoryView(projection = null) {
     if (!projection) {
       if (!historyProjection) return false;
+      clearSceneHover();
       historyProjection = null;
       container.removeAttribute?.('data-history-mode');
       container.removeAttribute?.('data-history-id');
+      container.removeAttribute?.('data-history-frame-bounds');
       container.removeAttribute?.('data-history-as-of-year');
       container.removeAttribute?.('data-history-event-pin-count');
       container.removeAttribute?.('data-history-suggestion-pin-count');
@@ -2192,6 +2360,16 @@ export function createAtlasScene(container, {
       container.removeAttribute?.('data-history-latest-event-id');
       container.removeAttribute?.('data-history-pin-roles');
       container.removeAttribute?.('data-history-geography-mode');
+      container.removeAttribute?.('data-history-orbit-enabled');
+      container.removeAttribute?.('data-history-spine-count');
+      container.removeAttribute?.('data-history-spine-node-count');
+      container.removeAttribute?.('data-history-spine-segment-count');
+      container.removeAttribute?.('data-history-question-chip-count');
+      historyGeometry = null; historyOrbitEnabled = false;
+      historySpineThreads.visible = false; historySpineThreads.material.opacity = 0;
+      historySpineTubes.visible = false;
+      for (const tube of historySpineTubes.children) tube.material.opacity = 0;
+      historyChipAnchors.visible = false;
       const restore = legacySnapshot;
       legacySnapshot = null;
       worlds = Array.isArray(restore?.worlds) ? restore.worlds : [];
@@ -2204,23 +2382,20 @@ export function createAtlasScene(container, {
       return true;
     }
     if (!projection.activeHistory || !Array.isArray(projection.pins) || !Array.isArray(projection.suggestions)) return false;
+    const nextQuestionId = String(projection.questionId);
+    const nextHistoryId = String(projection.historyId);
     const enteringHistory = !historyProjection;
+    if (enteringHistory || String(historyProjection.questionId) !== nextQuestionId
+      || String(historyProjection.historyId) !== nextHistoryId) clearSceneHover();
     if (enteringHistory) {
       legacySnapshot = { worlds, questions, currentId };
       zoom = 0; surfaceDetailZoom = 0; panOffset.set(0, 0);
       rotation = 0; rotationPitch = 0;
     }
     historyProjection = projection;
-    const questionId = String(projection.questionId);
-    const eventWorlds = [...projection.pins, ...projection.suggestions].map(item => ({
-      ...item,
-      id: String(item.id),
-      questionId,
-      parentId: null,
-      lat: Number(item.lat ?? item.place?.lat),
-      lon: Number(item.lon ?? item.place?.lon),
-      selectable: true,
-    }));
+    const questionId = nextQuestionId;
+    const spineLayout = projection.spineLayout || { nodes:[], segments:[], chips:[], spines:[], siblingEarths:[] };
+    const { eventWorlds, suggestionWorlds, siblingEarths } = buildHistorySceneRecords(projection);
     const latestPlace = projection.latestEvent?.place || {};
     const surfaceId = `history-surface:${encodeURIComponent(questionId)}:${encodeURIComponent(String(projection.historyId))}`;
     const surfaceWorld = {
@@ -2238,9 +2413,12 @@ export function createAtlasScene(container, {
       historySurface: true,
       selectable: false,
     };
-    worlds = [...eventWorlds, surfaceWorld];
-    questions = [{ id:questionId, question:projection.question || '', rootRunId:questionId }];
+    worlds = [...eventWorlds, ...suggestionWorlds, ...siblingEarths, surfaceWorld];
+    questions = Array.isArray(projection.questions) ? projection.questions
+      : [{ id:questionId, question:projection.question || '', rootRunId:questionId }];
     currentId = surfaceId;
+    historyOrbitEnabled = (projection.spineLayout?.spines?.length ?? 0) >= 2 && projection.showOrbit === true;
+    setHistorySpineGeometry(spineLayout);
     arrivalFromId = null; travelState = null; axisTransition = null;
     hasGeographyPreview = false; geographyPreviewWorldId = null; geographyPreviewState = undefined;
     fanOffsets = new Map(); fanRegion = null; hoveredClusterId = null;
@@ -2260,6 +2438,11 @@ export function createAtlasScene(container, {
       cyan:projection.suggestions.length,
     });
     container.dataset.historyGeographyMode = projection.surfaceMode === 'present' ? 'present' : 'scenario';
+    container.dataset.historyOrbitEnabled = String(historyOrbitEnabled);
+    container.dataset.historySpineCount = String(spineLayout.spines?.length || 0);
+    container.dataset.historySpineNodeCount = String(spineLayout.nodes?.length || 0);
+    container.dataset.historySpineSegmentCount = String(spineLayout.segments?.length || 0);
+    container.dataset.historyQuestionChipCount = String(spineLayout.chips?.length || 0);
     updateLayout(); drawCurrentMarker(); applyZoom(zoom, false);
     return true;
   }
@@ -2278,6 +2461,10 @@ export function createAtlasScene(container, {
     const world = worlds.find(item => stableWorldId(item) === worldId);
     if (!world || world.selectable === false) return false;
     if (historyProjection) {
+      if (world.visualKind === 'history-sibling' && world.selectableHistoryId) {
+        onHistorySelect(world.selectableHistoryId, { source:'scene-api', worldId });
+        return true;
+      }
       onHistoryEventSelect(world, { source:'scene-api', worldId });
       return true;
     }
@@ -2347,6 +2534,10 @@ export function createAtlasScene(container, {
   function explicitEnter(world, anchor) {
     if (!world || world.selectable === false) return false;
     if (historyProjection) {
+      if (world.visualKind === 'history-sibling' && world.selectableHistoryId) {
+        onHistorySelect(world.selectableHistoryId, anchor || { source:'scene-api', worldId:stableWorldId(world) });
+        return true;
+      }
       onHistoryEventSelect(world, anchor || { source:'scene-api', worldId:stableWorldId(world) });
       return true;
     }
@@ -2433,7 +2624,7 @@ export function createAtlasScene(container, {
   function projectedAnchor(id, source = 'keyboard', pointerX = null, pointerY = null) {
     const entry = entries.find(item => item.id === String(id));
     if (!entry) return { source, worldId: String(id), clientX: pointerX, clientY: pointerY, projectedX: null, projectedY: null };
-    const state = atlasPresentationState(zoom, motionReduced).state;
+    const state = presentationForZoom(zoom).state;
     const local = hitWorldPosition(entry, state);
     scene.updateMatrixWorld(true); camera.updateMatrixWorld(true);
     const ndc = local.applyMatrix4(atlasGroup.matrixWorld).project(camera);
@@ -2460,6 +2651,13 @@ export function createAtlasScene(container, {
     if (changed) applyZoom(zoom, false);
   }
 
+  function clearSceneHover() {
+    if (hoveredId || hoveredReference) setFocusedWorld(null, null);
+    if (hoveredQuestionId) onQuestionPreview(null, null);
+    hoveredQuestionId = null; hoveredReference = false; hoveredClusterId = null;
+    renderer.domElement.dataset.focusedQuestionId = ''; container.dataset.focusedQuestionId = '';
+  }
+
   function neighborForKey(key) {
     const originId = hoveredId || currentId;
     const origin = entries.find(entry => entry.id === originId);
@@ -2484,7 +2682,7 @@ export function createAtlasScene(container, {
     };
   }
 
-  function targetVisiblePastEarth(point, state = atlasPresentationState(zoom, motionReduced).state) {
+  function targetVisiblePastEarth(point, state = presentationForZoom(zoom).state) {
     if (state.surface <= 0.15) return true;
     const depth = projectedPointDepth(point);
     return !targetOccludedByEarth(depth.distance, depth.earthDistance, state.surface);
@@ -2493,7 +2691,7 @@ export function createAtlasScene(container, {
   function hitWorldTarget(event) {
     const bounds = eventPoint(event);
     scene.updateMatrixWorld(true); camera.updateMatrixWorld(true);
-    const state = atlasPresentationState(zoom, motionReduced).state;
+    const state = presentationForZoom(zoom).state;
     const currentEarthHit = raycaster.intersectObject(earthMesh, false)[0];
     const occlusionDistance = currentEarthHit?.distance ?? Number.POSITIVE_INFINITY;
     const candidates = new Set([...instanceIds, ...lodIds]);
@@ -2544,7 +2742,7 @@ export function createAtlasScene(container, {
     return { ...PRESENT_DAY_REFERENCE };
   }
   function hitPresentEarth(event) {
-    if (historyProjection || !p2Renderer.presentEarth.visible || atlasPresentationState(zoom, motionReduced).state.atlas <= 0.15) return null;
+    if (historyProjection || !p2Renderer.presentEarth.visible || presentationForZoom(zoom).state.atlas <= 0.15) return null;
     scene.updateMatrixWorld(true); camera.updateMatrixWorld(true);
     const center = p2Renderer.presentEarth.getWorldPosition(new THREE.Vector3());
     const cameraSpace = center.clone().applyMatrix4(camera.matrixWorldInverse);
@@ -2563,13 +2761,13 @@ export function createAtlasScene(container, {
       distanceSquared: dx * dx + dy * dy, hitDistance: point.distanceTo(raycaster.ray.origin) };
   }
   function hitQuestionChip(event) {
-    if (historyProjection || atlasPresentationState(zoom, motionReduced).state.atlas <= 0.15) return null;
+    if (historyProjection || presentationForZoom(zoom).state.atlas <= 0.15) return null;
     const bounds = eventPoint(event);
     const pointerRayOrigin = raycaster.ray.origin.clone();
     const pointerRayDirection = raycaster.ray.direction.clone();
     const pointerEarthDistance = raycaster.intersectObject(earthMesh, false)[0]?.distance ?? Number.POSITIVE_INFINITY;
     const cameraForward = camera.getWorldDirection(new THREE.Vector3());
-    const state = atlasPresentationState(zoom, motionReduced).state;
+    const state = presentationForZoom(zoom).state;
     let best = null, bestDistance = 22;
     for (const { chip, sprite } of p2Renderer.getQuestionChipTargets()) {
       if (!chip || !sprite.visible) continue;
@@ -2661,6 +2859,11 @@ export function createAtlasScene(container, {
       if (world) explicitEnter(world, projectedAnchor(id, source, pointerX, pointerY));
     } else if (kind === 'question' || kind === 'chip') {
       const question = questionForChip({ questionId });
+      if (historyProjection && kind === 'chip') {
+        onQuestionSelect(String(question.id), { source, questionId:String(question.id),
+          clientX:pointerX, clientY:pointerY, projectedX:Number(element.dataset.labelX), projectedY:Number(element.dataset.labelY) });
+        return;
+      }
       const chip = atlasTimeline?.chips?.find(item => String(item.questionId) === String(question.id)) || { questionId:String(question.id) };
       expandQuestionChip(chip, questionAnchor(question, source, pointerX, pointerY,
         Number(element.dataset.labelX), Number(element.dataset.labelY)));
@@ -2702,7 +2905,7 @@ export function createAtlasScene(container, {
     const bounds = eventPoint(event);
     const active = [...clusterSprites.values()].filter(sprite => sprite.visible && sprite.material.opacity > 0.05);
     const earthDistance = raycaster.intersectObject(earthMesh, false)[0]?.distance ?? Number.POSITIVE_INFINITY;
-    const state = atlasPresentationState(zoom, motionReduced).state;
+    const state = presentationForZoom(zoom).state;
     const boundsHits = raycaster.intersectObjects(active, false);
     const hits = [];
     for (const intersection of boundsHits) {
@@ -2760,6 +2963,7 @@ export function createAtlasScene(container, {
   }
 
   listen(renderer.domElement, 'pointerdown', event => {
+    if (zoomGestureOverInterface(event)) return;
     if (event.pointerType !== 'touch' && event.button !== 0) return;
     renderer.domElement.setPointerCapture?.(event.pointerId);
     if (event.pointerType === 'touch') {
@@ -2775,8 +2979,17 @@ export function createAtlasScene(container, {
     drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, lastX: event.clientX, lastY: event.clientY, rotation };
   });
   listen(renderer.domElement, 'pointermove', event => {
-    if (event.pointerType === 'touch' && activePointers.has(event.pointerId)) {
-      activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const activeTouch = event.pointerType === 'touch' && activePointers.has(event.pointerId);
+    if (activeTouch) activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (zoomGestureOverInterface(event)) {
+      if (activeTouch && pinchGesture && activePointers.size >= 2) {
+        const [first, second] = [...activePointers.values()];
+        pinchGesture = { distance:Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)), zoom, surfaceDetail:surfaceDetailZoom };
+      }
+      if (drag?.pointerId === event.pointerId) { drag.lastX = event.clientX; drag.lastY = event.clientY; }
+      return;
+    }
+    if (activeTouch) {
       if (pinchGesture && activePointers.size >= 2) {
         const [first, second] = [...activePointers.values()];
         const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
@@ -2794,7 +3007,7 @@ export function createAtlasScene(container, {
       if (dragModeForZoom(zoom * 100) === 'rotate') {
         const angles = surfaceDragAngles(rotation, rotationPitch, surfaceFacingPitch, dx, dy);
         rotation = angles.yaw; rotationPitch = angles.pitch;
-        applySurfaceOrientation(1 - atlasPresentationState(zoom, motionReduced).state.lift);
+        applySurfaceOrientation(1 - presentationForZoom(zoom).state.lift);
       } else {
         const delta = panDeltaForDrag(dx, dy, {
           cameraDistance: liveCameraDistance, fovDegrees: camera.fov,
@@ -2896,6 +3109,7 @@ export function createAtlasScene(container, {
     applyZoom(zoom, false);
   });
   listen(renderer.domElement, 'wheel', event => {
+    if (zoomGestureOverInterface(event)) return;
     event.preventDefault();
     if (zoom <= 0.001 && event.deltaY < 0) {
       setSurfaceDetailZoom(surfaceDetailFromWheel(surfaceDetailZoom, event.deltaY, { deltaMode: event.deltaMode, viewportHeight: renderer.domElement.clientHeight }));
@@ -2926,7 +3140,7 @@ export function createAtlasScene(container, {
         hoveredQuestionId = null; renderer.domElement.dataset.focusedQuestionId = ''; container.dataset.focusedQuestionId = '';
         const world = next.world;
         setFocusedWorld(world, projectedAnchor(next.id, 'keyboard'));
-      } else if (event.key === 'ArrowRight' && !historyProjection && atlasPresentationState(zoom, motionReduced).state.atlas > 0.5 && p2Renderer.presentEarth.visible) {
+      } else if (event.key === 'ArrowRight' && !historyProjection && presentationForZoom(zoom).state.atlas > 0.5 && p2Renderer.presentEarth.visible) {
         if (hoveredQuestionId) onQuestionPreview(null, null);
         hoveredQuestionId = null; renderer.domElement.dataset.focusedQuestionId = ''; container.dataset.focusedQuestionId = '';
         const reference = virtualPresentEarth();
@@ -2937,8 +3151,11 @@ export function createAtlasScene(container, {
         applyZoom(zoom, false);
       }
     } else if (event.key === 'Enter' && hoveredQuestionId) {
-      const chip = atlasTimeline?.chips?.find(item => String(item.questionId) === hoveredQuestionId);
-      if (chip) expandQuestionChip(chip, questionAnchor(questionForChip(chip), 'keyboard'));
+      const chip = historyProjection
+        ? historyGeometry?.chips?.find(item => String(item.questionId) === hoveredQuestionId)
+        : atlasTimeline?.chips?.find(item => String(item.questionId) === hoveredQuestionId);
+      if (chip && historyProjection) onQuestionSelect(String(chip.questionId), questionAnchor(questionForChip(chip), 'keyboard'));
+      else if (chip) expandQuestionChip(chip, questionAnchor(questionForChip(chip), 'keyboard'));
     } else if (event.key === 'Enter' && hoveredReference) {
       onEnter(virtualPresentEarth(), { source: 'keyboard', worldId: 'present-day-earth' });
     } else if (event.key === 'Enter' && hoveredId) {
@@ -3020,7 +3237,7 @@ export function createAtlasScene(container, {
         axisTransition = null;
         applyZoom(zoom, false, timestamp);
       }
-    } else if (!travelState) applySurfaceOrientation(1 - atlasPresentationState(zoom, motionReduced).state.lift, timestamp);
+    } else if (!travelState) applySurfaceOrientation(1 - presentationForZoom(zoom).state.lift, timestamp);
     renderer.render(scene, camera);
     const level = stageForZoom(zoom);
     const frameWindow = appendContinuousFrame(stageFrameWindow, stageFrameLevel, level, timestamp);

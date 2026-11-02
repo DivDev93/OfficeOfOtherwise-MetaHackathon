@@ -40,7 +40,10 @@ test('Atlas controller is the only spatial entry surface and previews stay separ
   assert.match(app, /onQuestionPreview:\(question, anchor\) => showAtlasPreview/);
   assert.match(app, /onQuestionEnter:\(\) => \{\}/);
   assert.match(app, /const intent = atlasController\?\.getAttachmentIntent/);
-  assert.match(app, /await streamRun\('\/api\/run', \{ divergence:prompt, attachment \}/);
+  assert.match(app, /await fetch\('\/api\/history\/questions', \{ method:'POST'/, 'explicit prompt submission creates a saved history through the history API');
+  assert.match(app, /mode:'history-event', questionId:activeHistory\.questionId, historyId:activeHistory\.historyId, eventId:selectedHistoryRecord\.id/,
+    'history event selection is the attachment context');
+  assert.doesNotMatch(app, /await streamRun\('\/api\/run'/, 'the legacy divergence runner is no longer the history entry route');
   assert.match(app, /setGraph\(graph\)/);
 });
 

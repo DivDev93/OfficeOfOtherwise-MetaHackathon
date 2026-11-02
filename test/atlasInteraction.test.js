@@ -1,6 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dragModeForZoom, panDeltaForDrag, surfaceDragAngles, surfaceDetailFromPinch, surfaceDetailFromWheel, zoomFromPinch, zoomFromWheel } from '../web/atlas/interaction.js';
+import { atlasZoomGestureBlocked, dragModeForZoom, panDeltaForDrag, surfaceDragAngles, surfaceDetailFromPinch, surfaceDetailFromWheel, zoomFromPinch, zoomFromWheel } from '../web/atlas/interaction.js';
+
+test('canvas zoom gestures are blocked by overlay controls found in the event path or hit-test stack', () => {
+  const canvas = {};
+  const rail = { matches: selector => selector.includes('[data-atlas-zoom-ignore]') };
+  const documentObject = { elementsFromPoint: () => [canvas, rail] };
+  const event = { target:canvas, clientX:20, clientY:30, composedPath:() => [canvas] };
+  assert.equal(atlasZoomGestureBlocked(event, canvas, documentObject), true, 'overlay stack blocks wheel and captured pinch continuation');
+  assert.equal(atlasZoomGestureBlocked({ ...event, composedPath:() => [canvas, rail] }, canvas, { elementsFromPoint:() => [canvas] }), true,
+    'native control in the event path blocks zoom');
+  assert.equal(atlasZoomGestureBlocked(event, canvas, { elementsFromPoint:() => [canvas] }), false, 'bare canvas remains zoomable');
+});
 
 test('surface dragging rotates in both directions and clamps at the poles', () => {
   const moved = surfaceDragAngles(0, 0, 0, 50, 40);

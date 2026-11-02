@@ -14,46 +14,13 @@ import { createHistorySession } from '../web/historySession.js';
 import { mountHistoryTimeline } from '../web/historyTimeline.js';
 import { mountHistoryTimebar } from '../web/historyTimebar.js';
 import { composeGeography } from '../web/historyModel.js';
+import { historyAtlasStatus } from '../web/historyAtlas.js';
 import { REGIONS, GEOGRAPHY_STYLES } from '../web/geographyRegions.js';
 
 const branch = (id, title, year = 500) => ({ id, title, year, summary: `${title} changes this world.`, place: { name: title, lat: 20, lon: year / 100 } });
 const choice = branch('a', 'Open observatory');
 const next = branch('b', 'Ocean observatories', 600);
 const run = (id, selected = choice, continuation = {}) => ({ id, branch: { status: 'ok', divergence: `What if ${id}?`, branches: [selected], hero: { branchId: selected.id } }, continuation: { rootRunId: id, path: [], children: [], ...continuation } });
-
-test('continuation actions reopen completed children without access, and lock incomplete/duplicate generation', () => {
-  assert.deepEqual(continuationAction({ runId: 'root', branchId: 'a', mode: 'replay-only', children: [{ branchId: 'a', runId: 'child', status: 'complete' }] }), { type: 'open', runId: 'child' });
-  assert.equal(continuationAction({ runId: 'root', branchId: 'a', mode: 'live-enabled', access: true }).type, 'generate');
-  assert.equal(continuationAction({ runId: 'run-at-limit', branchId: 'a', path: Array(6), mode: 'live-enabled', access: true }).type, 'limit');
-  assert.match(continuationAction({ runId: 'run-at-limit', branchId: 'a', path: Array(6), mode: 'live-enabled', access: true }).message, /six-step.*return to an earlier world/i);
-  assert.deepEqual(continuationAction({ runId: 'run-at-limit', branchId: 'a', path: Array(6), children: [{ branchId: 'a', runId: 'saved-child', status: 'complete' }] }), { type: 'open', runId: 'saved-child' }, 'a saved descendant remains openable at the limit');
-  assert.equal(continuationAction({ runId: 'run-before-limit', branchId: 'a', path: Array(5), mode: 'live-enabled', access: true }).type, 'generate', 'the sixth selected event is still allowed');
-  assert.equal(continuationAction({ runId: 'root', branchId: 'a', mode: 'replay-only', access: true }).type, 'unavailable');
-  assert.match(continuationAction({ runId: 'root', branchId: 'a', mode: 'replay-only' }).message, /running locally with your own Meta API key/i);
-  assert.doesNotMatch(continuationAction({ runId: 'root', branchId: 'a', mode: 'replay-only' }).message, /access code/i);
-  assert.match(continuationAction({ runId: 'root', branchId: 'a', mode: 'live-enabled', access: false }).message, /access code for live generation/i);
-  assert.equal(continuationAction({ runId: 'root', branchId: 'a', mode: 'live-enabled', access: true, busy: true }).type, 'wait');
-  assert.equal(continuationAction({ children: [{ branchId: 'a', runId: 'child', status: 'failed' }], branchId: 'a', mode: 'live-enabled', access: true }).type, 'unavailable');
-});
-
-test('six-step terminal keeps the selected scene, alternatives, and ancestor path while skipping another continuation', async () => {
-  const alternative = branch('alt', 'Study another path', 700);
-  const root = run('at-limit', choice, { path: Array.from({ length: 6 }, (_, index) => ({ runId:`ancestor-${index}`, branchId:`choice-${index}`, title:`Earlier path ${index + 1}`, year:400 + index })) });
-  root.branch.branches.push(alternative); root.assets = ['hero.png'];
-  const app = harness({ 'at-limit': root }, undefined, false);
-  app.get('access').value = 'fixture-access';
-  await tick();
-  await app.ui.loadRun('at-limit', { animate:false, autoConsequences:false });
-  app.ui.activateBranch(choice);
-  for (let index = 0; index < 12; index++) await tick();
-  assert.equal(app.posts.some(post => post.url === '/api/continue'), false, 'the known terminal state does not make a doomed continuation request');
-  assert.equal(app.get('hero-image').src, '/runs/at-limit/hero.png', 'the selected event keeps its own saved scene');
-  assert.equal(app.get('branch-list').children.length, 2, 'alternative events remain selectable');
-  assert.match(textContentDeep(app.get('event-progress')), /six-step continuation limit.*return to an earlier world/i);
-  assert.equal(app.get('branch-list').children[0].children[0].textContent, 'Step limit reached');
-  assert.equal(app.get('world-navigation').hidden, false);
-  assert.equal(app.get('world-path').children.filter((_, index) => index < 12 && index % 2 === 0).length, 6, 'all earlier choices remain available for backtracking');
-});
 
 test('causal arcs follow actual ancestry and selected parent, never join sibling choices', () => {
   const parent = branch('p', 'Chosen cause', -200), sibling = branch('s', 'Another possibility', 700);
@@ -74,7 +41,7 @@ function element(tagName = 'div') {
   return { tagName, children: [], value: '', hidden: false, textContent: '', dataset: {}, style: {}, classList: { add(...names) { names.forEach(name => classes.add(name)); }, remove(...names) { names.forEach(name => classes.delete(name)); }, contains(name) { return classes.has(name); }, toggle(name, enabled = !classes.has(name)) { enabled ? classes.add(name) : classes.delete(name); return enabled; } },
     append(...nodes) { this.children.push(...nodes); }, replaceChildren(...nodes) { this.children = nodes; }, add(node) { this.children.push(node); },
     setAttribute(key, value) { attributes.set(key, value); }, getAttribute(key) { return attributes.get(key); }, addEventListener(type, callback) { listeners.set(type, callback); }, dispatch(type) { return listeners.get(type)?.({target:this,currentTarget:this}); }, dispatchWithTarget(type,target) { return listeners.get(type)?.({target,currentTarget:this}); }, click() { return listeners.get('click')?.({target:this,currentTarget:this}); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; listeners.get('keydown')?.(event); return event; }, matches(selector) { return selector === ':popover-open' && !!this.popoverOpen; }, hidePopover() { this.popoverOpen = false; this.hidePopoverCalls = (this.hidePopoverCalls || 0) + 1; }, scrollIntoView() {}, focus() { this.focused = true; listeners.get('focus')?.({target:this}); },
-    querySelector() { return this.copy ||= element(); }, querySelectorAll() { return this.children.filter(child => child.dataset?.branchId); }, queryAll(tag) { return [...(this.tagName === tag ? [this] : []), ...this.children.flatMap(child => child.queryAll?.(tag) || [])]; }, closest(selector) { if (selector === 'button[data-action]' && this.tagName === 'button' && this.dataset?.action) return this; if (selector === 'button[data-history-id]' && this.tagName === 'button' && this.dataset?.historyId) return this; if (selector === 'button[data-year]' && this.tagName === 'button' && this.dataset?.year) return this; return null; }, removeAttribute(key) { attributes.delete(key); },
+    querySelector(selector) { const className=selector.startsWith('.')?selector.slice(1):''; const search=node=>node?.className===className?node:(node?.children||[]).map(search).find(Boolean)||null; return search(this)|| (this.copy ||= element()); }, contains(node) { return node===this || this.children.some(child=>child===node||child.contains?.(node)); }, querySelectorAll() { return this.children.filter(child => child.dataset?.branchId); }, queryAll(tag) { return [...(this.tagName === tag ? [this] : []), ...this.children.flatMap(child => child.queryAll?.(tag) || [])]; }, closest(selector) { if (selector === 'button[data-action]' && this.tagName === 'button' && this.dataset?.action) return this; if (selector === 'button[data-history-id]' && this.tagName === 'button' && this.dataset?.historyId) return this; if (selector === 'button[data-year]' && this.tagName === 'button' && this.dataset?.year) return this; return null; }, removeAttribute(key) { attributes.delete(key); },
     pointerenter() { listeners.get('pointerenter')?.({target:this}); }, pointerleave() { listeners.get('pointerleave')?.({target:this}); },
     blur() { this.focused=false; listeners.get('blur')?.({target:this}); },
     getBoundingClientRect() { return {left:80,top:100,right:180,bottom:140,width:100,height:40}; } };
@@ -104,10 +71,13 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     if (!fixture) return new Response('', { status: 404 });
     return Response.json(match[2] === 'branch.json' ? fixture.branch : match[2] === 'trace.json' ? { steps: [] } : fixture);
   };
-  const context = vm.createContext({ ...logic, ...geographyTexture, ...geography, ...geographyControls, ...geographyLabels, ...savedPreviews, createLocalMetaKeySetup, createHistorySession,
+  const context = vm.createContext({ ...logic, ...geographyTexture, ...geography, ...geographyControls, ...geographyLabels, ...savedPreviews, createLocalMetaKeySetup, createHistorySession, historyAtlasStatus,
     mountHistoryTimeline, mountHistoryTimebar, composeGeography, REGIONS, GEOGRAPHY_STYLES,
     loadLocalTerrain: async () => ({ width:1, height:1, elevation:new Int16Array([0]), landmass:new Uint8Array([1]) }), console, fetch, AbortController, TextDecoder, Uint8Array, URLSearchParams, setTimeout:scheduleTimer, clearTimeout:cancelTimer,
     createAtlasController(options) {
+      const optionsDetails = document.createElement('details'); optionsDetails.className='atlas-view-options';
+      const optionsBody = document.createElement('div'); optionsBody.className='atlas-view-options-body';
+      optionsDetails.append(optionsBody); options.toolbarContainer?.replaceChildren(optionsDetails);
       const controller = {
         optionsRef:options, graph:options.graph || {}, nodes:options.graph?.mapNodes || [], selectedId:options.graph?.currentWorldId || null,
         scene:{ currentId:options.graph?.currentWorldId || null, level:'surface', enterWorld(id, settings = {}) { this.currentId = id; this.lastEntry = { id, settings }; atlasEntryHistory.push(id); }, setGeography(geography, mode, renderState) { this.geographyPreview = { geography, mode, renderState }; }, setZoom(value) { this.zoom = value; }, getZoom() { return this.zoom || 0; }, getLevel() { return this.level; } },
@@ -131,7 +101,7 @@ function harness(fixtures, onPost = async () => { throw new Error('Unexpected ge
     localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) }, Option: function(text, value) { return { text, value }; },
   });
   const source = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/import\('\.\/visuals\.js'\)\.then\(async \(\{createModelViewer\}\) => \{[\s\S]*?\}\)\.catch\(\(\) => \{ modelApi = null; setView\(activeView\); \}\);/, '');
-  vm.runInContext(`${source}\n globalThis.ui = {loadRun,selectBranch,activateBranch,selectStarMapNode,expandBranch,runPrompt,setView,setSurfaceMode,setAtlasLevel:applyAtlasGeographyLevel,toggleAtlasGeographyPanel,refreshHistory,toggleArchiveHistory,setHistoryContextForTest:value=>historySession.setContext(value),setHistoryDateForTest:value=>historySession.setDate(value),selectHistoryEventForTest:id=>selectHistoryEvent(id),setHistoryAtlasLevelForTest:level=>atlasController.optionsRef.onLevelChange?.({level}),breakHistoryRendererForTest:()=>{atlasController.setHistoryView=()=>{throw new Error('fixture renderer failure');};},setCurrentRunContextForTest:id=>{currentRunId=id;currentManifest=knownRunManifests.get(id)||currentManifest;continuation=currentManifest?.continuation||continuation;renderExplorationTree();},setAtlasAttachmentIntent:value=>{atlasController.attachment=value;},setGlobe:api=>{Object.assign(atlasController.scene,api);renderGeography();},setModelApi:api=>{modelApi=api;},syncOtherQuestionsForTest:(level,mapNodes)=>{window.matchMedia=()=>({matches:true});atlasController.scene.level=level;syncAtlasOtherQuestionToggle(mapNodes);},previewGlobe:(branch,anchor)=>showAtlasPreview(branch,anchor),eventWorkFor:(runId,branchId)=>{const work=eventWork.get(eventKey(runId,branchId));return work?{...work}:null;},state:()=>({currentRunId,atlasCurrentWorldRunId,continuation,streamBusy,selectedContext,hasImage,activeView,continuationViewSelection,surfaceGeography,surfaceMode,historyMode,history:historySession.getState(),historyAtlasView:atlasController.getHistoryView(),selectedHistoryRecord,hasStory:document.body.classList.contains('has-story'),invitationOpen:document.body.classList.contains('invitation-open'),starMapNodes:atlasNodes,atlasAttachmentIntent,serverExpansionUsed,expansionLimit,enteredNodesCount:enteredNodes.size,pendingExpansionCount:pendingExpansionNodes.size,selectedBranchId,selectedWork:{...eventWork.get(eventKey(currentRunId,selectedBranchId))},activePreview:savedPreview.activePreview,previewHidden:savedPreview.element.hidden})};`, context);
+  vm.runInContext(`${source}\n globalThis.ui = {loadRun,selectBranch,activateBranch,selectStarMapNode,expandBranch,runPrompt,setView,setSurfaceMode,setAtlasLevel:applyAtlasGeographyLevel,toggleAtlasGeographyPanel,refreshHistory,loadServiceModeForTest:loadServiceMode,toggleArchiveHistory,setHistoryContextForTest:value=>historySession.setContext(value),setHistoryDateForTest:value=>historySession.setDate(value),selectHistoryEventForTest:id=>selectHistoryEvent(id),setHistoryAtlasLevelForTest:level=>atlasController.optionsRef.onLevelChange?.({level}),breakHistoryRendererForTest:()=>{atlasController.setHistoryView=()=>{throw new Error('fixture renderer failure');};},setCurrentRunContextForTest:id=>{currentRunId=id;currentManifest=knownRunManifests.get(id)||currentManifest;continuation=currentManifest?.continuation||continuation;renderExplorationTree();},setAtlasAttachmentIntent:value=>{atlasController.attachment=value;},setGlobe:api=>{Object.assign(atlasController.scene,api);renderGeography();},setModelApi:api=>{modelApi=api;},syncOtherQuestionsForTest:(level,mapNodes)=>{window.matchMedia=()=>({matches:true});atlasController.scene.level=level;syncAtlasOtherQuestionToggle(mapNodes);},previewGlobe:(branch,anchor)=>showAtlasPreview(branch,anchor),eventWorkFor:(runId,branchId)=>{const work=eventWork.get(eventKey(runId,branchId));return work?{...work}:null;},state:()=>({currentRunId,atlasCurrentWorldRunId,continuation,streamBusy,selectedContext,hasImage,activeView,continuationViewSelection,surfaceGeography,surfaceMode,historyMode,history:historySession.getState(),historyAtlasView:atlasController.getHistoryView(),selectedHistoryRecord,hasStory:document.body.classList.contains('has-story'),invitationOpen:document.body.classList.contains('invitation-open'),starMapNodes:atlasNodes,atlasAttachmentIntent,serverExpansionUsed,expansionLimit,enteredNodesCount:enteredNodes.size,pendingExpansionCount:pendingExpansionNodes.size,selectedBranchId,selectedWork:{...eventWork.get(eventKey(currentRunId,selectedBranchId))},activePreview:savedPreview.activePreview,previewHidden:savedPreview.element.hidden})};`, context);
   return { ui: context.ui, get, posts, gets, heads, atlasWorldHistory, atlasEntryHistory, atlasHistoryViews, storage, location, starMap: context.starMap, document, window, setReducedMotion(matches) { reducedMotionMatches = Boolean(matches); for (const listener of reducedMotionListeners) listener({ matches:reducedMotionMatches }); }, navigate(hash, ...events) { location.hash = hash; for (const event of events) window.dispatch(event); } };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -219,6 +189,163 @@ test('active history mode drives the real timeline, timebar and Atlas without se
   assert.match(app.get('history-render-status').textContent,/Atlas rendering is unavailable/);
 });
 
+test('history spines switch questions and sibling histories at the retained date without generation', async () => {
+  const makeHistory = (id, events) => ({ id, events, suggestions:[], suggestionWindows:[] });
+  const questions = [
+    { id:'question-one', title:'Question one', divergenceYear:400, histories:[
+      makeHistory('history-one', [{id:'one-old',year:100,title:'One old'},{id:'one-latest',year:700,title:'One latest'}]),
+      makeHistory('history-one-sibling', [{id:'one-sibling',year:600,title:'Sibling event'}]),
+    ] },
+    { id:'question-two', title:'Question two', divergenceYear:500, histories:[
+      makeHistory('history-two', [{id:'two-old',year:200,title:'Two old'},{id:'two-latest',year:800,title:'Too new'}]),
+    ] },
+  ];
+  const app = harness({}, undefined, true, '', undefined, undefined, false, undefined, undefined, undefined, undefined, undefined, async url => {
+    if (url === '/api/history/preferences') return Response.json({autoSuggest:true});
+    if (url.startsWith('/api/histories?')) return Response.json({questions});
+    return null;
+  });
+  await tick();
+  app.ui.setHistoryContextForTest({questionId:'question-one',historyId:'history-one',eventId:'one-latest',date:650});
+  for (let i=0;i<10&&!app.ui.state().history.history;i++) await tick();
+  assert.equal(app.ui.state().historyAtlasView.questions.length,2);
+  const orbitToggle = app.get('history-orbit-toggle');
+  assert.equal(orbitToggle.textContent,'Show Orbit level');
+  assert.equal(orbitToggle.hidden,false);
+  const optionsPanel = findNode(app.get('atlas-toolbar'),node=>node?.className==='atlas-view-options-body');
+  assert.ok(optionsPanel?.children.includes(orbitToggle),'Orbit toggle is inside interactive View options, not under the header overlay');
+  app.starMap.options.onQuestionPreview(questions[1],{clientX:20,clientY:30});
+  assert.equal(app.ui.state().previewHidden,false,'Atlas hover opens a metadata preview');
+  app.starMap.options.onHistorySelect('history-one-sibling',{date:650,questionId:'question-one',source:'pointer'});
+  assert.equal(app.ui.state().history.historyId,'history-one-sibling');
+  assert.equal(app.ui.state().history.date,650);
+  app.starMap.options.onQuestionSelect('question-two',{source:'pointer'});
+  assert.equal(app.ui.state().history.questionId,'question-two');
+  assert.equal(app.ui.state().previewHidden,true,'switching questions clears a preview owned by the previous spine');
+  assert.equal(app.ui.state().history.date,650);
+  assert.equal(app.ui.state().history.selectedEventId,'two-old');
+  assert.equal(app.ui.state().historyAtlasView.activeQuestionId,'question-two');
+  assert.equal(app.ui.state().historyAtlasView.showOrbit,false,'Orbit remains opt-in');
+  assert.equal(orbitToggle.hidden,true,'Orbit level is unavailable for a question with one history');
+  assert.deepEqual(app.posts,[],'selecting history spines and question chips is read-only');
+});
+
+test('history API failure keeps the active rail in a status state instead of exposing the legacy nested tree', async () => {
+  const app = harness({}, undefined, true, '', undefined, undefined, false, undefined, undefined, undefined, undefined, undefined, async url => {
+    if (url === '/api/history/preferences') return Response.json({autoSuggest:false});
+    if (url.startsWith('/api/histories?')) return new Response('unavailable',{status:503});
+    return null;
+  });
+  await tick();
+  app.ui.setHistoryContextForTest({questionId:'missing-question',historyId:'missing-history',eventId:'missing-event',date:650});
+  for (let i=0;i<10&&app.ui.state().history.loading;i++) await tick();
+  assert.equal(app.document.body.classList.contains('history-requested'),true);
+  assert.equal(app.get('history-timeline-host').hidden,false);
+  const historyStatus = findNode(app.get('history-timeline-host'),node=>node?.className==='history-timeline-status');
+  assert.match(historyStatus?.textContent || '',/Could not load|No saved history/);
+  assert.deepEqual(app.posts,[]);
+});
+
+test('fresh question authoring opens Meta setup in replay mode and proceeds after local key configuration', async () => {
+  const question = {id:'written-q',title:'User question',divergenceYear:500,histories:[{id:'written-h',events:[],suggestions:[],suggestionWindows:[{window:{fromYear:1,toYear:1000},status:'ready',batches:1,suggestionCount:0}]}]};
+  const history = question.histories[0];
+  let health = {status:'ok',replayOnly:true,localReplayHistoryAccess:true,setupAvailable:true,voiceEnabled:false,metaKeyConfigured:false,metaKeyOverrideActive:false};
+  const app = harness({}, async url => {
+    if (url === '/api/local-meta-key') {
+      health = {status:'ok',replayOnly:false,localReplayHistoryAccess:false,localReviewAccess:true,setupAvailable:true,voiceEnabled:false,metaKeyConfigured:true,metaKeyOverrideActive:true};
+      return Response.json({setupAvailable:true,metaKeyConfigured:true,metaKeyOverrideActive:true,replayOnly:false,localReviewAccess:true,localReplayHistoryAccess:false});
+    }
+    assert.equal(url,'/api/history/questions');
+    return Response.json({question,history,dateWindow:{fromYear:1,toYear:1000}});
+  }, true, '', undefined, undefined, false, undefined, undefined, undefined, undefined, undefined, async url => {
+    if (url === '/health') return Response.json(health);
+    if (url === '/api/history/preferences') return Response.json({autoSuggest:false});
+    if (url.startsWith('/api/histories?')) return Response.json({questions:[question]});
+    return null;
+  });
+  await tick();
+  assert.equal(app.get('service-mode').textContent,'Saved histories · local replay');
+  assert.match(app.get('footer-service-mode').textContent,/configure a Meta API key for fresh questions/i);
+  assert.equal(app.get('live-submit').getAttribute('aria-label'),'Configure a Meta API key to create a fresh history');
+  assert.equal(app.get('live-submit').disabled,false,'the replay-only CTA opens setup instead of submitting a question');
+  await app.ui.runPrompt('What if river observatories changed?');
+  assert.equal(app.posts.length,0,'keyless replay access cannot create a new history');
+  assert.equal(app.get('meta-key-setup').open,true,'the keyless submit opens the existing local setup panel');
+  assert.match(app.get('status').textContent,/Configure a Meta API key.*fresh history/);
+  app.get('meta-key-input').value='fixture-meta-key'; app.get('meta-key-use').click();
+  for (let i=0;i<10&&app.get('live-submit').getAttribute('aria-label')!=='Create a fresh history';i++) await tick();
+  await tick();
+  assert.equal(app.posts[0].url,'/api/local-meta-key');
+  assert.equal(app.get('live-submit').getAttribute('aria-label'),'Create a fresh history');
+  await app.ui.runPrompt('What if river observatories changed?');
+  for (let i=0;i<10&&app.ui.state().history.loading;i++) await tick();
+  assert.equal(app.posts[1].url,'/api/history/questions');
+  assert.equal(app.posts[1].body.question,'What if river observatories changed?');
+  assert.deepEqual(app.posts[1].body.attachment,{mode:'present-day',divergenceYear:2026});
+  assert.equal(app.ui.state().history.date,500);
+  assert.equal(app.ui.state().history.historyId,'written-h');
+  assert.equal(app.get('history-timebar-host').hidden,false,'an empty history still shows its date controls');
+  assert.equal(app.ui.state().history.suggestions.length,0,'creation does not force a seed weave or suggestion');
+  assert.match(app.get('hero-title').textContent,/No saved event at 500 CE/);
+  assert.equal(app.posts.some(post=>post.url==='/api/run'),false);
+  assert.equal(app.ui.state().historyMode,true,JSON.stringify(app.ui.state().history));
+  const nativeLocation = new URLSearchParams(app.location.hash.slice(1));
+  assert.equal(nativeLocation.get('question'),'written-q');
+  assert.equal(nativeLocation.get('history'),'written-h');
+  assert.equal(nativeLocation.get('date'),'500');
+});
+
+test('native history URL reopens the exact question, history, date and event without POST or Meta access', async () => {
+  const event = {id:'event-native',year:900,title:'Canopy observatories',summary:'A saved event.',place:{name:'Sahara',lat:20,lon:10},sceneRef:'/event-scenes/'+'c'.repeat(64)+'.png'};
+  const history = {id:'history-native',events:[event],suggestions:[],suggestionWindows:[]};
+  const question = {id:'question-native',question:'What if observatories spread?',title:'Observatories',divergenceYear:700,origin:'user-written',histories:[history]};
+  const hash = '#question=question-native&history=history-native&date=900&event=event-native';
+  const app = harness({}, undefined, true, hash, undefined, undefined, false, undefined, undefined, undefined, undefined, undefined, async url => {
+    if (url === '/health') return Response.json({status:'ok',localReplayHistoryAccess:true,voiceEnabled:false});
+    if (url === '/api/history/preferences') return Response.json({autoSuggest:true});
+    if (url.startsWith('/api/histories?')) return Response.json({questions:[question]});
+    return null;
+  });
+  await tick();
+  for (let i=0;i<10&&app.ui.state().history.loading;i++) await tick();
+  assert.equal(app.ui.state().history.questionId,question.id);
+  assert.equal(app.ui.state().history.historyId,history.id);
+  assert.equal(app.ui.state().history.date,900);
+  assert.equal(app.ui.state().history.selectedEventId,event.id);
+  assert.equal(app.get('hero-title').textContent,'900 CE · Canopy observatories');
+  assert.equal(app.document.body.classList.contains('has-story'),true,'a canonical reload restores the story toolbar as well as the selected history');
+  assert.equal(app.location.hash,hash);
+  assert.deepEqual(app.posts,[],'canonical reload only reads persisted history and event media refs');
+  assert.equal(app.ui.state().historyMode,true);
+});
+
+test('history scene and cutout generation use explicit history identities and never run on selection', async () => {
+  const event = {id:'event-new',year:500,title:'A saved history event',summary:'Written by the history service'};
+  const history = {id:'h-media',events:[event],suggestions:[],suggestionWindows:[]};
+  const question = {id:'q-media',title:'Media question',divergenceYear:500,histories:[history]};
+  const app = harness({}, async url => {
+    const kind = url.endsWith('/scene') ? 'scene' : 'cutout';
+    return Response.json({status:'complete',url:`/history-media/${(kind==='scene'?'a':'b').repeat(64)}.png`});
+  }, true, '', undefined, undefined, false, undefined, undefined, undefined, undefined, undefined, async url => {
+    if (url === '/health') return Response.json({status:'ok',localReplayHistoryAccess:true,voiceEnabled:false});
+    if (url === '/api/history/preferences') return Response.json({autoSuggest:false});
+    if (url.startsWith('/api/histories?')) return Response.json({questions:[question]});
+    return null;
+  });
+  await tick();
+  app.ui.setHistoryContextForTest({questionId:question.id,historyId:history.id,eventId:event.id,date:500});
+  for (let i=0;i<10&&!app.ui.state().history.history;i++) await tick();
+  assert.deepEqual(app.posts,[],'opening a saved history event does not generate media');
+  app.get('event-scene-action').click(); await tick(); await tick();
+  assert.deepEqual(app.posts.at(-1).body,{questionId:question.id,historyId:history.id,eventId:event.id});
+  assert.equal(app.posts.at(-1).url,'/api/history/scene');
+  assert.match(app.get('hero-image').src,/^\/history-media\/[a-f\d]{64}\.png$/);
+  app.get('cutout-view').click(); await tick(); await tick();
+  assert.equal(app.posts.at(-1).url,'/api/history/cutout');
+  assert.deepEqual(app.posts.at(-1).body,{questionId:question.id,historyId:history.id,eventId:event.id});
+  assert.equal(app.posts.some(post=>post.url==='/api/event-scene'||post.url==='/api/event-cutout'),false);
+});
+
 test('local Meta key setup refreshes live feature mode and keeps the key out of browser storage', async () => {
   const secret = 'fixture-only-meta-key';
   let health = { status:'ok', replayOnly:true, voiceEnabled:false, localReviewAccess:false, setupAvailable:true, metaKeyConfigured:false, metaKeyOverrideActive:false, expansionLimit:20, expansionUsed:0 };
@@ -240,1282 +367,6 @@ test('local Meta key setup refreshes live feature mode and keeps the key out of 
   assert.equal(app.get('meta-key-clear').disabled, false);
   assert.match(app.get('meta-key-config-status').textContent, /local-session override is active/i);
   assert.equal([...app.storage.values()].some(value => String(value).includes(secret)), false);
-});
-
-test('geography follows saved selection, survives pending continuation, toggles, and clears on legacy navigation despite late bytes', async () => {
-  const condition = { id:'green-sahara',region:'sahara',kind:'vegetation',intensity:0.8,assumption:'Green landscape persists.',uncertainty:'Extent is illustrative.' };
-  const parentChoice = {...choice,geography:{version:1,changes:[condition]}};
-  const root = run('geo-root',parentChoice), legacy = run('legacy',next), future = run('future',{...next,geography:parentChoice.geography});
-  let release; const pendingResponse = new Promise(resolve=>{release=resolve;});
-  const app = harness({'geo-root':root,legacy,future},()=>pendingResponse); await tick();
-
-  await app.ui.loadRun('geo-root',{animate:false,autoConsequences:false});
-  const selectedWorld = () => app.starMap.nodes.find(node => node.runId === 'geo-root' && node.branchId === parentChoice.id);
-  assert.equal(selectedWorld().geography.changes[0].id,'green-sahara');
-  app.ui.setSurfaceMode('present'); assert.equal(selectedWorld().geography,null,'present-day toggle removes the selected-world scenario overlay in the Atlas graph');
-  app.ui.setSurfaceMode('scenario'); assert.equal(selectedWorld().geography.changes[0].id,'green-sahara');
-  app.get('access').value='fixture-only';
-  const pending = app.ui.expandBranch(parentChoice);
-  assert.equal(app.ui.state().continuation.path[0].geography.changes[0].id,'green-sahara');
-  await app.ui.loadRun('legacy',{animate:false});
-  release(complete(future)); await pending;
-  assert.equal(app.starMap.nodes.find(node => node.runId === 'legacy' && node.branchId === next.id)?.geography,undefined);
-  assert.match(app.get('geography-status').textContent,/no scenario geography recorded/);
-});
-
-test('fresh reload without access learns the opened world title and retains it when archive arrives later', async () => {
-  const child = run('child', next, { rootRunId: 'root', parentRunId: 'root', parentBranchId: 'a', path: [{ runId: 'root', branchId: 'a', ...choice }] });
-  child.title = next.title;
-  let release;
-  const archive = new Promise(resolve => { release = resolve; });
-  const app = harness({ child }, undefined, true, '#run=child', () => archive);
-  await tick();
-  const currentLabel = () => app.get('runs').children.find(option => option.value === 'child')?.text;
-  assert.match(currentLabel(), /600 CE · Ocean observatories/);
-  assert.match(currentLabel(), /^↳ /, 'the manifest supplies parent metadata too');
-  release(Response.json({ runs: [] })); await tick();
-  assert.match(currentLabel(), /600 CE · Ocean observatories/, 'slow ID-only history cannot overwrite known metadata');
-  assert.equal(app.get('runs').value, 'child');
-  assert.equal(app.get('access').value, ''); assert.equal(app.posts.length, 0);
-  assert.equal(app.gets.filter(url => url === '/runs/child').length, 1, 'reuse the manifest already needed to open this world');
-  assert.equal(app.gets.includes('/api/history'), false);
-  assert.deepEqual(JSON.parse(app.storage.get('otherwise-run-history')), ['child'], 'local history continues to store IDs only');
-
-  const fastArchive = harness({ child }, undefined, true); await tick();
-  await fastArchive.ui.loadRun('child', { animate: false });
-  assert.match(fastArchive.get('runs').children.find(option => option.value === 'child').text, /600 CE · Ocean observatories/, 'opening after archive completion also updates the selector');
-});
-
-test('saved descendants inherit omitted geography from ancestry but invalid explicit geography stays unsupported', async () => {
-  const geography = {version:1,changes:[{id:'sahara-green',region:'sahara',kind:'vegetation',intensity:0.7,assumption:'Green Sahara persists.',uncertainty:'Regional extent is illustrative.'}]};
-  const path = [{runId:'earlier',branchId:choice.id,...choice,geography}];
-  const inherited = run('inherited',next,{rootRunId:'earlier',parentRunId:'earlier',path});
-  const invalid = run('invalid',{...next,geography:{version:1,changes:[{region:'unknown'}]}},{rootRunId:'earlier',path});
-  const app = harness({inherited,invalid},undefined,true); await tick();
-  await app.ui.loadRun('inherited',{animate:false});
-  assert.equal(app.ui.state().surfaceGeography.changes[0].id,'sahara-green');
-  assert.match(app.get('geography-status').textContent,/illustrative surface change/);
-  await app.ui.loadRun('invalid',{animate:false});
-  assert.equal(app.ui.state().surfaceGeography,undefined);
-  assert.match(app.get('geography-status').textContent,/unsupported/);
-});
-
-test('actual UI reopens saved descendants without POST, and restores ancestry from manifest', async () => {
-  const child = run('child', next, { rootRunId: 'root', parentRunId: 'root', parentBranchId: 'a', path: [{ runId: 'root', branchId: 'a', ...choice }] });
-  const root = run('root', choice, { children: [{ branchId: 'a', runId: 'child', status: 'complete' }] });
-  const app = harness({ root, child }, undefined, true); await tick();
-  await app.ui.loadRun('root', { animate: false, autoConsequences:false });
-  assert.equal(app.posts.length, 0, 'programmatic hero selection is navigation only');
-  await app.ui.expandBranch(choice);
-  assert.equal(app.ui.state().currentRunId, 'child'); assert.equal(app.posts.length, 0);
-  assert.equal(app.ui.state().continuation.path[0].year, 500);
-  assert.equal(app.location.hash, '#run=child');
-  assert.match(app.storage.get('otherwise-run-history'), /child/);
-  assert.equal(app.get('world-back').hidden, false);
-});
-
-test('actual UI locks duplicate clicks, clears old assets, and rejects late stream after replay navigation', async () => {
-  let release; const waiting = new Promise(resolve => { release = resolve; });
-  const root = run('root'), other = run('other', next), child = run('child', next);
-  root.assets = ['hero.png'];
-  const app = harness({ root, other, child }, async () => waiting); await tick();
-  await app.ui.loadRun('root', { animate: false, autoConsequences:false });
-  app.get('access').value = 'fixture-only';
-  assert.equal(app.ui.state().hasImage, true, 'the parent has a scene that must be cleared');
-  const pending = app.ui.expandBranch(choice);
-  assert.equal(app.ui.state().streamBusy, true); assert.equal(app.ui.state().hasImage, false);
-  assert.equal(app.ui.state().hasStory, true, 'the selected cause stays visible before proposals arrive');
-  assert.match(app.get('hero-title').textContent, /Open observatory/);
-  await app.ui.expandBranch(choice); assert.equal(app.posts.length, 1);
-  await app.ui.loadRun('other', { animate: false });
-  release(complete(child)); await pending;
-  assert.equal(app.ui.state().currentRunId, 'other'); assert.match(app.get('hero-title').textContent, /Ocean observatories/);
-  assert.equal(app.location.hash, '#run=other');
-  assert.equal(app.get('live-submit').disabled, false, 'navigating away from an old stream restores Explore');
-});
-
-test('late SSE bytes cannot replace a world selected after streaming starts, and hash restores on reload', async () => {
-  const root = run('root'), other = run('other', next), child = run('child', next);
-  let controller;
-  const body = new ReadableStream({ start(stream) { controller = stream; } });
-  const app = harness({ root, other, child }, async () => new Response(body), false, '#run=root');
-  await tick();
-  assert.equal(app.ui.state().currentRunId, 'root', 'the app restores the hash during initialization');
-  app.get('access').value = 'fixture-only';
-  const pending = app.ui.expandBranch(choice); await tick();
-  controller.enqueue(new TextEncoder().encode(`event: propose\ndata: ${JSON.stringify({ pending: true, candidateCount: 3 })}\n\n`)); await tick();
-  await app.ui.loadRun('other', { animate: false });
-  controller.enqueue(new TextEncoder().encode(`event: complete\ndata: ${JSON.stringify({ runId: 'child', branch: child.branch })}\n\n`)); controller.close();
-  await pending;
-  assert.equal(app.ui.state().currentRunId, 'other'); assert.equal(app.location.hash, '#run=other');
-});
-
-test('fresh Explore root can expand and a new root does not inherit earlier ancestry', async () => {
-  const root = run('fresh'), child = run('child', next, { rootRunId: 'fresh', parentRunId: 'fresh', parentBranchId: 'a', path: [{ runId: 'fresh', branchId: 'a', ...choice }] });
-  let roots = 0;
-  const app = harness({ fresh: root, child }, async (url, options) => {
-    if (url === '/api/run') { roots++; return complete(root); }
-    if (url === '/api/event-scene') return Response.json({status:'complete',url:'/runs/fresh/event-a.png'});
-    assert.deepEqual(JSON.parse(options.body), { runId: 'fresh', branchId: 'a' }); return complete(child);
-  }); await tick(); app.get('access').value = 'fixture-only';
-  await app.ui.runPrompt('What if observatories spread?');
-  assert.equal(app.ui.state().currentRunId, 'fresh');
-  await app.ui.expandBranch(choice); assert.equal(app.ui.state().currentRunId, 'child');
-  await app.ui.runPrompt('What if a different root?');
-  assert.equal(roots, 2); assert.equal(app.ui.state().currentRunId, 'fresh');
-  assert.equal(app.ui.state().continuation.path.length, 0);
-  assert.ok([...app.storage.values()].every(value => !value.includes('fixture-only')));
-});
-
-test('fresh root completion waits for explicit event entry and does not generate preview scenes', async () => {
-  const root = run('fresh-root', choice); root.assets = ['hero.png'];
-  const childHero = branch('b', 'Ocean observatories', 600), childAlt = branch('c', 'Coastal observatories', 650);
-  const child = run('child', childHero, {rootRunId:'fresh-root',parentRunId:'fresh-root',parentBranchId:'a',path:[{runId:'fresh-root',branchId:'a',...choice}]});
-  child.branch.branches.push(childAlt); child.assets = ['hero.png'];
-  const continuationRequests = [];
-  const app = harness({[root.id]:root,[child.id]:child}, async (url, options) => {
-    if (url === '/api/run') return complete(root);
-    if (url === '/api/continue') {
-      const body = JSON.parse(options.body); continuationRequests.push([body.runId,body.branchId]);
-      return complete(child);
-    }
-    assert.equal(url, '/api/event-scene');
-    const body = JSON.parse(options.body);
-    return Response.json({status:'complete',url:`/runs/${body.runId}/event-${body.branchId}.png`});
-  }, false, '', undefined, undefined, true, async () => Response.json({status:'missing'}));
-  await tick(); app.get('access').value = 'fixture';
-  await app.ui.runPrompt('What if observatories spread?');
-  assert.deepEqual(continuationRequests, []);
-  assert.equal(app.posts.some(post => post.url === '/api/event-scene'), false);
-  app.ui.activateBranch(choice);
-  for (let i = 0; i < 24 && !continuationRequests.length; i++) await tick();
-  assert.deepEqual(continuationRequests, [['fresh-root','a']]);
-  assert.equal(app.posts.some(post => post.url === '/api/event-scene'), false, 'scene previews never trigger generation');
-  assert.equal(app.ui.state().currentRunId, 'fresh-root');
-  assert.match(app.get('hero-title').textContent, /Open observatory/);
-  assert.equal(app.starMap.selectedId, 'fresh-root::a', 'the newly explored event remains the selected root hero');
-});
-
-test('fresh root stream exposes accessible stage progress before SSE and clears it on success', async () => {
-  const root = run('progress-root', choice); root.assets = ['hero.png'];
-  let controller;
-  const body = new ReadableStream({start(stream) { controller = stream; }});
-  const rootResponse = new Response(body, {headers:{'content-type':'text/event-stream'}});
-  const app = harness({[root.id]:root}, async url => url === '/api/run' ? rootResponse : Response.json({status:'uncertain',error:'Fixture ends child generation'}, {status:400}), false, '', undefined, undefined, true);
-  await tick(); app.get('access').value = 'fixture';
-  const pending = app.ui.runPrompt('What if observatories spread?'); await tick();
-  assert.equal(app.get('root-generation-status').hidden, false, 'progress is visible before the first stream event');
-  assert.equal(app.get('root-generation-indicator').hidden, false, 'the visible root progress includes an animated indicator');
-  assert.equal(app.get('root-generation-status').getAttribute('role'), 'status');
-  assert.equal(app.get('root-generation-status').getAttribute('aria-live'), 'polite');
-  assert.match(app.get('root-generation-message').textContent, /Checking your question/);
-  const send = (event, data) => controller.enqueue(new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-  send('policy', {allowed:true}); await tick();
-  assert.match(app.get('root-generation-message').textContent, /topic policy/);
-  send('propose', root.branch); await tick();
-  assert.match(app.get('root-generation-message').textContent, /Developing possible futures/);
-  send('review', root.branch); await tick();
-  assert.match(app.get('root-generation-message').textContent, /Reviewing possible futures/);
-  send('complete', {runId:root.id,branch:root.branch}); controller.close(); await pending;
-  assert.equal(app.get('root-generation-status').hidden, true, 'successful completion clears the root progress message');
-  assert.equal(app.get('root-generation-indicator').hidden, true, 'the root progress animation stops at completion');
-});
-
-test('fresh root progress stops for guardrail and transport errors while retaining the terminal message', async () => {
-  const terminal = async (id, event, data) => {
-    let controller;
-    const body = new ReadableStream({start(stream) { controller = stream; }});
-    const app = harness({[id]:run(id)}, async () => new Response(body, {headers:{'content-type':'text/event-stream'}}), false, '', undefined, undefined, true);
-    await tick(); app.get('access').value = 'fixture';
-    const pending = app.ui.runPrompt('What if a question?'); await tick();
-    const payload = JSON.stringify(data);
-    controller.enqueue(new TextEncoder().encode(`event: ${event}\ndata: ${payload}\n\n`)); controller.close();
-    await pending;
-    assert.equal(app.get('root-generation-status').hidden, false);
-    assert.equal(app.get('root-generation-indicator').hidden, true);
-    assert.equal(app.get('root-generation-message').textContent, event === 'complete' ? 'This question needs a reframe' : 'This question could not be completed');
-  };
-  const blocked = run('blocked-root'); blocked.branch = {status:'blocked',branches:[],hero:{branchId:null}};
-  await terminal('blocked-root', 'complete', {runId:'blocked-root',branch:blocked.branch});
-  await terminal('error-root', 'error', {message:'This question could not be completed'});
-});
-
-test('selecting a prefetched child hero starts its own continuation once', async () => {
-  const root = run('root', choice); root.assets = ['hero.png'];
-  const child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]}); child.assets = ['hero.png'];
-  const grandchild = run('grandchild', branch('g','Grandchild',700));
-  const app = harness({root,child,grandchild}, async (url, options) => {
-    assert.equal(url, '/api/continue');
-    const body = JSON.parse(options.body);
-    return complete(body.runId === 'root' ? child : grandchild);
-  }, false, '', undefined, undefined, false);
-  await tick(); app.get('access').value = 'fixture'; await app.ui.loadRun('root', {animate:false});
-  app.ui.activateBranch(choice);
-  for (let i = 0; i < 24 && !app.get('event-children').children.length; i++) await tick();
-  assert.equal(app.get('event-children').children.length, 1);
-  await app.get('event-children').children[0].click();
-  for (let i = 0; i < 24 && app.posts.filter(post => post.url === '/api/continue').length < 2; i++) await tick();
-  assert.deepEqual(app.posts.filter(post => post.url === '/api/continue').map(post => [post.body.runId,post.body.branchId]), [['root','a'],['child','b']]);
-  assert.equal(app.ui.state().currentRunId, 'child');
-  assert.match(app.get('hero-title').textContent, /Ocean observatories/);
-});
-
-test('tree navigation selects the clicked descendant before activation and never expands its unclicked hero', async () => {
-  const root = run('root', choice); root.assets = ['hero.png'];
-  root.continuation.children = [{branchId:'a',runId:'child',status:'complete'}];
-  const childHero = branch('b','Ocean observatories',600), clicked = branch('c','Coastal observatories',650);
-  const child = run('child', childHero, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  child.branch.branches.push(clicked); child.assets = ['hero.png'];
-  const grandchild = run('grandchild', branch('g','Tide observatories',700));
-  const continuationRequests = [];
-  const app = harness({root,child,grandchild}, async (url, options) => {
-    if (url === '/api/event-scene') return Response.json({status:'complete',url:'/runs/child/event-c.png'});
-    assert.equal(url, '/api/continue');
-    const body = JSON.parse(options.body); continuationRequests.push([body.runId,body.branchId]);
-    return complete(grandchild);
-  }, false, '', undefined, undefined, true, () => Response.json({status:'missing'}));
-  await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false});
-  for(let i=0;i<12;i++) await tick();
-  const childRunNode = findNode(app.get('exploration-tree-status'), node => node?.className === 'tree-run' && node.dataset.runId === 'child');
-  const clickedNode = findNode(childRunNode, node => node?.className === 'tree-event' && node.dataset.branchId === 'c');
-  await clickedNode.click();
-  for(let i=0;i<24 && !continuationRequests.length;i++) await tick();
-  assert.deepEqual(continuationRequests, [['child','c']]);
-  assert.equal(app.ui.state().currentRunId,'child');
-  assert.match(app.get('hero-title').textContent,/Coastal observatories/);
-});
-
-test('cached tree navigation selects the requested continuation branch before the child run hero reaches the Atlas', async () => {
-  const rootEvent=branch('b2','Sundaland River Plain Unites Islands',1800);
-  const root=run('d67',rootEvent,{children:[{branchId:'b2',runId:'d9',status:'complete'}]});
-  const parentEvent=branch('b2','Forest Pharmacy Catalogued in Kuching',1902);
-  const parent=run('d9',parentEvent,{rootRunId:'d67',parentRunId:'d67',parentBranchId:'b2',path:[{runId:'d67',branchId:'b2',...rootEvent}],children:[{branchId:'b2',runId:'acc2',status:'complete'}]});
-  const childHero=branch('b1','Medicinal Resin Chemistry Advances',1931);
-  const requested=branch('b3','Canopy Walkway Exploration Network',1978);
-  const child=run('acc2',childHero,{rootRunId:'d67',parentRunId:'d9',parentBranchId:'b2',path:[{runId:'d67',branchId:'b2',...rootEvent},{runId:'d9',branchId:'b2',...parentEvent}]});
-  child.branch.branches.push(requested);
-  const app=harness({d67:root,d9:parent,acc2:child},async()=>{throw new Error('Saved tree selection must not generate');},true);
-  await tick();
-  await app.ui.loadRun('acc2',{animate:false,autoConsequences:false});
-  await app.ui.loadRun('d9',{animate:false,autoConsequences:false,selectedBranchId:'b2'});
-  for(let i=0;i<12;i++) await tick();
-  const event=findNode(app.get('exploration-tree-status'),node=>node?.className==='tree-event'&&node.dataset.runId==='acc2'&&node.dataset.branchId==='b3');
-  assert.ok(event,'the nested saved continuation event is present in the tree');
-  app.atlasWorldHistory.length=0; app.atlasEntryHistory.length=0;
-  await event.click();
-  assert.equal(app.ui.state().currentRunId,'acc2');
-  assert.equal(app.ui.state().selectedBranchId,'b3');
-  assert.equal(app.starMap.selectedId,'acc2::b3');
-  assert.doesNotMatch(app.get('hero-title').textContent,/Medicinal Resin Chemistry Advances/);
-  assert.match(app.get('hero-title').textContent,/1978 CE · Canopy Walkway Exploration Network/);
-  assert.ok(app.atlasWorldHistory.length>0);
-  assert.equal(app.atlasWorldHistory.includes('acc2::b1'),false,'the unrequested child hero never becomes current during navigation');
-  assert.equal(app.atlasEntryHistory.includes('acc2::b1'),false,'the unrequested child hero is never explicitly entered');
-  assert.equal(app.atlasWorldHistory.at(-1),'acc2::b3');
-  assert.equal(app.location.hash,'#run=acc2&event=b3');
-});
-
-test('tree and Atlas hover or keyboard focus preview saved metadata without selecting or requesting anything', async () => {
-  const alternate=branch('alt','Mammoth steppe',-4500), root=run('preview-root',choice); root.branch.branches.push(alternate); root.assets=['hero.png'];
-  const app=harness({'preview-root':root},async()=>{throw new Error('Preview must never dispatch a model route');},false);
-  await tick(); await app.ui.loadRun('preview-root',{animate:false,autoConsequences:false});
-  for(let i=0;i<8;i++) await tick();
-  const node=findNode(app.get('exploration-tree-status'),item=>item?.className==='tree-event'&&item.dataset.branchId==='alt');
-  assert.ok(node);
-  const selectedBefore=app.ui.state().selectedBranchId;
-  const sceneChecksBefore=app.gets.filter(url=>url.startsWith('/api/event-scene?')).length;
-  node.pointerenter();
-  assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
-  assert.match(app.ui.state().activePreview.summary,/Mammoth steppe changes this world/);
-  assert.equal(app.ui.state().activePreview.sceneReference,null,'an unknown foreign scene is not inferred from the root hero');
-  assert.equal(app.ui.state().selectedBranchId,selectedBefore);
-  node.pointerleave(); assert.equal(app.ui.state().previewHidden,false,'the preview stays available briefly while the pointer can enter it');
-  await new Promise(resolve => setTimeout(resolve, 240));
-  assert.equal(app.ui.state().previewHidden,true,'the preview dismisses after the pointer-transfer delay');
-  node.focus(); assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
-  node.blur(); assert.equal(app.ui.state().previewHidden,false,'focused previews also allow transfer into the preview');
-  await new Promise(resolve => setTimeout(resolve, 240));
-  assert.equal(app.ui.state().previewHidden,true);
-  const atlasNode = app.starMap.nodes.find(item => item.runId === 'preview-root' && item.branchId === 'alt');
-  app.starMap.options.onPreview(atlasNode, { source:'pointer', clientX:150, clientY:180 });
-  assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
-  assert.equal(app.ui.state().selectedBranchId,selectedBefore,'Atlas preview does not move the selected world');
-  app.starMap.options.onPreview(null);
-  assert.equal(app.ui.state().previewHidden,false,'Atlas pointer exit keeps the preview alive during transfer');
-  await new Promise(resolve => setTimeout(resolve, 240));
-  assert.equal(app.ui.state().previewHidden,true);
-  app.ui.previewGlobe(alternate,node);
-  assert.equal(app.ui.state().activePreview.title,'Mammoth steppe');
-  assert.equal(app.ui.state().selectedBranchId,selectedBefore);
-  app.ui.previewGlobe(null,node); assert.equal(app.ui.state().previewHidden,false);
-  await new Promise(resolve => setTimeout(resolve, 240));
-  assert.equal(app.ui.state().previewHidden,true);
-  assert.equal(app.posts.length,0,'preview surfaces never call generation APIs');
-  assert.equal(app.gets.filter(url=>url.startsWith('/api/event-scene?')).length,sceneChecksBefore,'previewing adds no scene lookup');
-});
-
-test('starmap hydrates read-only and explicit event selection preserves run-scoped identity and requests consequences', async () => {
-  const reviewedChoice = { ...choice, causalLink:'A measured shift in seasonal rainfall made year-round observation practical.', theme:'geography-ecology', boldness:0.62, score:7.5 };
-  const root = run('root', reviewedChoice, { children: [{ branchId: 'a', runId: 'child', status: 'complete' }] });
-  root.assets = ['hero.png', 'model.glb'];
-  const alternate = branch('alt', 'Mammoth steppe', -4500);
-  choice.causalLink = 'A measured shift in seasonal rainfall made year-round observation practical.';
-  choice.scene = 'a descriptive prompt, never a preview URL';
-  root.branch.branches.push(alternate);
-  const reusedId = branch('a', 'Ocean observatories', 600);
-  const childAlt = branch('child-alt', 'Coastal observatories', 650);
-  const child = run('child', reusedId, { rootRunId:'root', parentRunId:'root', parentBranchId:'a', path:[{runId:'root',branchId:'a',...choice}] });
-  child.branch.branches.push(childAlt);
-  child.assets = ['hero.png'];
-  let appSceneChecks = 0;
-  const app = harness({ root, child }, async url => {
-    assert.equal(url, '/api/continue');
-    return Response.json({status:'uncertain',error:'Fixture stops before generation'}, {status:400});
-  }, false, '', undefined, undefined, false, async url => {
-    const params = new URL(url, 'http://local.test').searchParams;
-    if (params.get('runId') === 'root' && params.get('branchId') === 'alt' && appSceneChecks++ === 0) return Response.json({status:'missing'});
-    return Response.json({status:'complete',url:`/runs/${params.get('runId')}/event-${params.get('branchId')}.png`});
-  });
-  await tick();
-  await app.ui.loadRun('root', { animate:false, autoConsequences:false });
-  for (let i = 0; i < 8; i++) await tick();
-  const rootEvent = app.starMap.nodes.find(node => node.runId === 'root' && node.branchId === 'a');
-  const childEvent = app.starMap.nodes.find(node => node.runId === 'child' && node.branchId === 'a');
-  const childAltEvent = app.starMap.nodes.find(node => node.runId === 'child' && node.branchId === 'child-alt');
-  assert.ok(rootEvent && childEvent, 'the same branch key in separate runs remains two distinct events');
-  assert.notEqual(rootEvent.id, childEvent.id);
-  assert.equal(childEvent.parentId, rootEvent.id);
-  assert.equal(rootEvent.consequencesStatus, 'Saved');
-  assert.equal(rootEvent.summary, choice.summary);
-  assert.equal(rootEvent.causalLink, choice.causalLink);
-  assert.equal(rootEvent.location, choice.place.name, 'map previews receive a location label instead of the branch coordinate object');
-  assert.equal(typeof rootEvent.location, 'string');
-  assert.equal(rootEvent.scene, '/runs/root/hero.png', 'the preview receives a confirmed local scene URL, not prompt text');
-  assert.equal(rootEvent.thumbnail, '/runs/root/hero.png', 'only a manifest-listed local hero asset is used');
-  assert.equal(rootEvent.heroSelected, true, 'the exact selected event owns the saved hero image ref');
-  assert.deepEqual(JSON.parse(JSON.stringify(rootEvent.heroRef)), { status:'complete', url:'/runs/root/hero.png', runId:'root', branchId:'a' });
-  assert.equal(rootEvent.sceneRef, undefined, 'a hero image is kept distinct from generated event-scene refs');
-  assert.equal(rootEvent.ready, true, 'the saved root hero scene enables the map event');
-  assert.equal(rootEvent.theme, 'geography-ecology');
-  assert.equal(rootEvent.boldness, 0.62, 'an explicit normalized boldness takes priority over the review score');
-  assert.equal(rootEvent.reviewScore, 7.5, 'the saved ranking score is preserved separately');
-  const alternateEvent = app.starMap.nodes.find(node => node.runId === 'root' && node.branchId === 'alt');
-  assert.equal(alternateEvent.ready, false, 'an event with no confirmed scene stays pending');
-  assert.equal(app.starMap.selectedId, rootEvent.id);
-  assert.equal(app.heads.filter(url => url.startsWith('/runs/child/') && /model(?:\.meshopt)?\.glb$/.test(url)).length, 0, 'saved graph hydration does not request child models');
-  assert.equal(app.posts.length, 0);
-  app.starMap.select(rootEvent.id);
-  for (let i = 0; i < 8; i++) await tick();
-  assert.equal(app.posts.length, 0, 'clicking an event with a saved child reopens its results without generation');
-  const globeSelections = [];
-  app.ui.setGlobe({ setGeography(){}, setBranches(){}, select(branch){ globeSelections.push(branch?.id); }, enterWorld(id){ this.currentId=id; globeSelections.push(id); } });
-  app.ui.activateBranch(alternate);
-  for (let i = 0; i < 8; i++) await tick();
-  const sceneReadyAlternate = app.starMap.nodes.find(node => node.runId === 'root' && node.branchId === 'alt');
-  assert.equal(sceneReadyAlternate.ready, false, 'missing saved scenes stay unavailable as previews');
-  assert.equal(sceneReadyAlternate.consequencesStatus, 'Not explored');
-  assert.equal(app.posts.length, 0, 'scene lookup without access does not generate consequences');
-  app.starMap.select(childAltEvent.id);
-  for (let i = 0; i < 8; i++) await tick();
-  assert.equal(app.ui.state().currentRunId, 'child');
-  assert.equal(app.starMap.selectedId, childAltEvent.id, 'navigation restores the exact nonhero selected event identity');
-  assert.equal(app.get('hero-title').textContent.includes('Coastal observatories'), true, 'the auto-selected child hero never replaces the requested map event');
-  assert.equal(globeSelections.at(-1), 'child::child-alt', 'tree and Atlas scene stay linked to the exact selected event ID');
-  assert.equal(app.posts.length, 0, 'read-only graph hydration and no-access selection make no generation request');
-  app.get('access').value = 'fixture';
-  app.starMap.select(childAltEvent.id);
-  for (let i = 0; i < 12 && app.posts.length === 0; i++) await tick();
-  assert.deepEqual(app.posts.map(post => [post.url, post.body.runId, post.body.branchId]), [['/api/continue','child','child-alt']], 'an explicit event selection starts consequence lookup for that exact run and branch');
-});
-
-test('Atlas reload hydration rebuilds previously opened question roots without changing the selected world', async () => {
-  const active = run('active-question', choice), prior = run('prior-question', branch('p', 'Coral observatories', 650));
-  const app = harness({ 'active-question':active, 'prior-question':prior }, undefined, true, '',
-    () => Response.json({ runs:[{ id:'active-question' }, { id:'prior-question' }] }), undefined, false);
-  await tick();
-  await app.ui.loadRun('active-question', { animate:false, autoConsequences:false });
-  await app.ui.refreshHistory();
-  for (let index = 0; index < 12 && !app.starMap.nodes.some(node => node.runId === 'prior-question'); index++) await tick();
-  assert.ok(app.starMap.nodes.some(node => node.runId === 'prior-question' && node.branchId === 'p'));
-  assert.equal(app.ui.state().currentRunId, 'active-question');
-  assert.equal(app.starMap.selectedId, app.starMap.nodes.find(node => node.runId === 'active-question' && node.branchId === choice.id).id,
-    'read-only hydration does not auto-enter another saved question');
-  assert.equal(app.posts.length, 0);
-});
-
-test('Earth comparison panel automatically tucks away beyond Lift and returns at Surface', async () => {
-  const root = run('atlas-levels', choice);
-  const app = harness({ 'atlas-levels':root }); await tick();
-  await app.ui.loadRun('atlas-levels', { animate:false, autoConsequences:false });
-  app.ui.setAtlasLevel('surface'); assert.equal(app.get('geography-panel').hidden, false);
-  app.ui.setAtlasLevel('lift'); assert.equal(app.get('geography-panel').hidden, false);
-  app.ui.setAtlasLevel('orbit'); assert.equal(app.get('geography-panel').hidden, true);
-  app.ui.setAtlasLevel('atlas'); assert.equal(app.get('geography-panel').hidden, true);
-  app.ui.toggleAtlasGeographyPanel(); assert.equal(app.get('geography-panel').hidden, false, 'View options can reopen comparison at Orbit or Atlas level');
-  app.ui.setAtlasLevel('orbit'); assert.equal(app.get('geography-panel').hidden, false, 'explicit comparison remains open until dismissed');
-  app.ui.toggleAtlasGeographyPanel(); assert.equal(app.get('geography-panel').hidden, true);
-  app.ui.setAtlasLevel('surface'); assert.equal(app.get('geography-panel').hidden, true, 'the explicit hide choice persists across level changes');
-  app.ui.toggleAtlasGeographyPanel(); assert.equal(app.get('geography-panel').hidden, false);
-});
-
-test('reduced-motion Lift keeps the original panel set accessible until the instant Orbit handoff', async () => {
-  const fixture = run('reduced-lift-panels', choice); fixture.assets = ['hero.png'];
-  const app = harness({ 'reduced-lift-panels':fixture }); await tick();
-  await app.ui.loadRun('reduced-lift-panels', { animate:false, autoConsequences:false });
-  app.setReducedMotion(true);
-  app.ui.setAtlasLevel('lift');
-  app.get('atlas-scene').dataset.atlasLevel = 'lift';
-  assert.equal(app.get('geography-panel').inert, false, 'the visible comparison panel remains keyboard available throughout Lift');
-  assert.equal(app.get('geography-panel').getAttribute('aria-hidden'), 'false');
-  assert.equal(app.get('exploration-tree').inert, false, 'the visible story tree remains keyboard available throughout Lift');
-  assert.equal(app.get('atlas-world-details').inert, false, 'the visible story sheet remains keyboard available throughout Lift');
-  assert.equal(app.get('atlas-compact-controls').inert, true, 'the hidden compact controls stay out of keyboard navigation');
-  assert.equal(app.get('atlas-world-card').inert, true, 'the hidden compact card stays out of keyboard navigation');
-  app.ui.setAtlasLevel('orbit');
-  app.get('atlas-scene').dataset.atlasLevel = 'orbit';
-  assert.equal(app.get('geography-panel').hidden, true);
-  assert.equal(app.get('geography-panel').inert, true, 'the hidden old panel leaves keyboard navigation at Orbit');
-  assert.equal(app.get('atlas-compact-controls').inert, false, 'the incoming compact controls become keyboard available at Orbit');
-  assert.equal(app.get('atlas-world-card').inert, false, 'the incoming card becomes keyboard available at Orbit');
-  app.ui.setAtlasLevel('lift');
-  app.get('atlas-scene').dataset.atlasLevel = 'lift';
-  app.setReducedMotion(false);
-  assert.equal(app.get('geography-panel').inert, true, 'changing the preference mid-Lift resynchronizes accessibility state');
-  assert.equal(app.get('exploration-tree').inert, true);
-});
-
-test('compact Atlas card follows the selected world and its quick controls update expanded state', async () => {
-  const fixture = run('compact', choice); fixture.assets = ['hero.png'];
-  const app = harness({ compact:fixture }); await tick();
-  await app.ui.loadRun('compact', { animate:false, autoConsequences:false });
-  assert.equal(app.get('atlas-world-title').textContent, choice.title);
-  assert.equal(app.get('atlas-world-year').textContent, '500 CE');
-  assert.equal(app.get('atlas-world-thumbnail').hidden, false);
-  assert.equal(app.get('atlas-world-thumbnail').src, '/runs/compact/hero.png');
-  app.ui.setAtlasLevel('orbit');
-  app.get('atlas-scene').dataset.atlasLevel = 'orbit';
-  app.get('atlas-compact-tree').click();
-  assert.equal(app.document.body.classList.contains('atlas-panels-open'), true);
-  assert.equal(app.get('atlas-compact-tree').getAttribute('aria-expanded'), 'true');
-  app.get('atlas-open-details').click();
-  assert.equal(app.document.body.classList.contains('atlas-panels-open'), false, 'opening details closes the story-tree sheet');
-  assert.equal(app.document.body.classList.contains('atlas-details-open'), true);
-  assert.equal(app.get('atlas-open-details').getAttribute('aria-expanded'), 'true');
-  assert.equal(app.get('atlas-world-card').inert, true, 'the compact card leaves the keyboard order while full details are open');
-  assert.equal(app.get('atlas-world-card').getAttribute('aria-hidden'), 'true');
-  assert.equal(app.get('atlas-close-details').hidden, false, 'a separate close action remains in the full-details heading');
-  assert.equal(app.get('atlas-close-details').getAttribute('aria-expanded'), 'true');
-  await new Promise(resolve => setTimeout(resolve, 160));
-  assert.equal(app.get('atlas-close-details').focused, true, 'opening details moves focus to the available close action');
-  app.get('atlas-close-details').click();
-  assert.equal(app.document.body.classList.contains('atlas-details-open'), false, 'the full-details close action returns to compact Orbit');
-  assert.equal(app.get('atlas-close-details').hidden, true);
-  assert.equal(app.get('atlas-open-details').focused, true, 'closing details returns focus to its opener');
-  assert.equal(app.get('atlas-world-card').inert, false, 'the compact card becomes keyboard accessible again');
-  app.ui.setAtlasLevel('orbit');
-  assert.equal(app.get('atlas-compact-controls').inert, false, 'Orbit exposes the native quick-action buttons to keyboard navigation');
-  assert.equal(app.get('atlas-compact-controls').getAttribute('aria-hidden'), 'false');
-  assert.equal(app.get('atlas-world-card').inert, false, 'Orbit exposes the compact card and open-details button');
-  app.ui.setAtlasLevel('surface');
-  assert.equal(app.document.body.classList.contains('atlas-details-open'), false, 'Surface restores the full panels');
-  assert.equal(app.get('atlas-compact-controls').inert, true, 'the hidden compact strip leaves the keyboard tab order at Surface');
-  assert.equal(app.get('atlas-compact-controls').getAttribute('aria-hidden'), 'true');
-  assert.equal(app.get('atlas-world-card').inert, true, 'the hidden compact card leaves the keyboard tab order at Surface');
-  app.ui.setAtlasLevel('orbit');
-  app.get('atlas-compact-new').click();
-  assert.equal(app.ui.state().invitationOpen, true, 'New exploration opens the prompt instead of leaving it behind the collapsed rail');
-  assert.equal(app.get('atlas-compact-new').getAttribute('aria-expanded'), 'true', 'the compact New exploration control exposes its open state');
-  assert.equal(app.get('atlas-compact-controls').inert, true, 'the visually hidden compact controls leave the keyboard order while the prompt is open');
-  assert.equal(app.get('atlas-compact-controls').getAttribute('aria-hidden'), 'true');
-  app.get('show-invitation').click();
-  assert.equal(app.ui.state().invitationOpen, false);
-  assert.equal(app.get('atlas-compact-new').getAttribute('aria-expanded'), 'false');
-  app.ui.setAtlasLevel('orbit');
-  assert.equal(app.get('atlas-compact-controls').inert, false, 'closing the prompt restores compact keyboard controls');
-});
-
-test('details-close focus delay is cancelled on a fast close and rescheduled on reopen', async () => {
-  const fixture = run('compact-focus-reopen', choice);
-  const app = harness({ 'compact-focus-reopen':fixture }); await tick();
-  await app.ui.loadRun('compact-focus-reopen', { animate:false, autoConsequences:false });
-  app.ui.setAtlasLevel('orbit'); app.get('atlas-scene').dataset.atlasLevel = 'orbit';
-  const close = app.get('atlas-close-details');
-  app.get('atlas-open-details').click();
-  close.click();
-  assert.notEqual(close.focused, true, 'a fast close cancels pending focus into the hidden heading');
-  app.get('atlas-open-details').click();
-  await new Promise(resolve => setTimeout(resolve, 160));
-  assert.equal(app.document.body.classList.contains('atlas-details-open'), true);
-  assert.equal(close.focused, true, 'reopening schedules focus after the details heading becomes visible');
-});
-
-test('delayed details focus does not steal focus after the user moves elsewhere', async () => {
-  const fixture = run('compact-focus-respect', choice);
-  const app = harness({ 'compact-focus-respect':fixture }); await tick();
-  await app.ui.loadRun('compact-focus-respect', { animate:false, autoConsequences:false });
-  app.ui.setAtlasLevel('orbit'); app.get('atlas-scene').dataset.atlasLevel = 'orbit';
-  app.document.activeElement = app.get('atlas-open-details');
-  app.get('atlas-open-details').click();
-  app.document.activeElement = app.get('atlas-compact-tree');
-  await new Promise(resolve => setTimeout(resolve, 160));
-  assert.notEqual(app.get('atlas-close-details').focused, true, 'the reveal callback preserves a deliberate move to another control');
-});
-
-test('leaving compact details restores focus to the visible Atlas scene at Surface and Lift', async () => {
-  const fixture = run('compact-focus', choice);
-  const app = harness({ 'compact-focus':fixture }); await tick();
-  await app.ui.loadRun('compact-focus', { animate:false, autoConsequences:false });
-  app.ui.setAtlasLevel('orbit'); app.get('atlas-scene').dataset.atlasLevel = 'orbit';
-
-  app.get('atlas-open-details').click();
-  app.document.activeElement = app.get('atlas-close-details');
-  app.ui.setAtlasLevel('surface'); app.get('atlas-scene').dataset.atlasLevel = 'surface';
-  assert.equal(app.document.body.classList.contains('atlas-details-open'), false);
-  assert.equal(app.get('atlas-close-details').hidden, true);
-  assert.equal(app.get('atlas-scene').focused, true, 'Surface transition moves focus to the persistent, visible scene');
-
-  app.ui.setAtlasLevel('orbit'); app.get('atlas-scene').dataset.atlasLevel = 'orbit';
-  app.get('atlas-open-details').click();
-  app.document.activeElement = app.get('atlas-close-details');
-  app.ui.setAtlasLevel('lift'); app.get('atlas-scene').dataset.atlasLevel = 'lift';
-  assert.equal(app.document.body.classList.contains('atlas-details-open'), false);
-  assert.equal(app.get('atlas-close-details').hidden, true);
-  assert.equal(app.get('atlas-scene').focused, true, 'Lift transition moves focus to the persistent, visible scene');
-});
-
-test('hiding the phone Other questions control restores focus only when it owned focus', async () => {
-  const root = run('other-question-focus', choice);
-  const app = harness({ 'other-question-focus':root }); await tick();
-  await app.ui.loadRun('other-question-focus', { animate:false, autoConsequences:false });
-  const otherQuestion = { otherTree:true, questionId:'another-question' };
-  const toggle = app.get('atlas-other-questions'), scene = app.get('atlas-scene');
-  app.ui.syncOtherQuestionsForTest('atlas', [otherQuestion]);
-  assert.equal(toggle.hidden, false, 'phone Atlas exposes the control when another saved question exists');
-
-  app.document.activeElement = toggle;
-  app.ui.syncOtherQuestionsForTest('orbit', [otherQuestion]);
-  assert.equal(toggle.hidden, true, 'leaving Atlas hides the phone-only control');
-  assert.equal(scene.focused, true, 'focus moves to the persistent Atlas scene before its control hides');
-
-  scene.focused = false;
-  app.ui.syncOtherQuestionsForTest('atlas', [otherQuestion]);
-  assert.equal(toggle.hidden, false);
-  app.document.activeElement = scene;
-  app.ui.syncOtherQuestionsForTest('orbit', [otherQuestion]);
-  assert.equal(scene.focused, false, 'a control that did not own focus does not steal it during hide');
-});
-
-test('explicit Present-day Earth entry opens a blank attached-question form without dispatching generation', async () => {
-  const root = run('present-entry-root', choice);
-  const app = harness({ 'present-entry-root':root }, async () => { throw new Error('Entry must not generate before prompt submission'); }, true);
-  await tick(); await app.ui.loadRun('present-entry-root', { animate:false, autoConsequences:false });
-  app.get('prompt').value = 'old prompt';
-  const intent = { mode:'present-day', parentId:null, divergenceYear:2026, currentWorldId:app.starMap.selectedId };
-  app.starMap.options.onAttachmentIntent(intent);
-  app.starMap.options.onEnter({ id:'present-day-earth', kind:'present-day', year:2026, title:'Present-day Earth' }, { source:'present-day-question', attachmentIntent:intent });
-  assert.equal(app.get('prompt').value, '');
-  assert.equal(app.get('prompt').focused, true);
-  assert.equal(app.ui.state().invitationOpen, true);
-  assert.equal(app.get('show-invitation').getAttribute('aria-expanded'), 'true');
-  assert.equal(app.ui.state().atlasAttachmentIntent.mode, 'present-day');
-  assert.equal(app.ui.state().currentRunId, 'present-entry-root', 'the saved graph stays open while the new question form is shown');
-  assert.equal(app.posts.length, 0);
-  assert.equal(app.gets.some(url => /\/api\/(?:run|continue|transcribe)(?:\?|$)/.test(url)), false,
-    'opening the form does not start generation or transcription; read-only scene hydration may continue');
-});
-
-test('starmap confirms durable nonhero scenes with bounded read-only checks after restart', async () => {
-  const root = run('restart-root', choice);
-  const alternate = branch('alt', 'Mammoth steppe', -4500);
-  root.branch.branches.push(alternate);
-  root.assets = ['hero.png'];
-  const sceneChecks = [];
-  const savedSceneUrl = `/event-scenes/${'a'.repeat(64)}.png`;
-  const app = harness({'restart-root':root}, async () => { assert.fail('Saved-scene hydration must not generate'); }, false, '', undefined, undefined, false, async url => {
-    const params = new URL(url, 'http://local.test').searchParams;
-    sceneChecks.push([params.get('runId'), params.get('branchId')]);
-    return params.get('branchId') === 'alt'
-      ? Response.json({status:'complete',url:savedSceneUrl})
-      : Response.json({status:'missing'});
-  });
-  await tick(); await app.ui.loadRun('restart-root', {animate:false,autoConsequences:false});
-  for (let i = 0; i < 16 && !app.starMap.nodes.some(node => node.branchId === 'alt' && node.ready); i++) await tick();
-  const restored = app.starMap.nodes.find(node => node.runId === 'restart-root' && node.branchId === 'alt');
-  assert.equal(restored.ready, true);
-  assert.equal(restored.thumbnail, savedSceneUrl, 'the server-confirmed hashed event-scene route is accepted as local');
-  assert.equal(restored.status, 'Scene ready');
-  assert.deepEqual(sceneChecks, [['restart-root','alt']], 'each nonhero event is checked once per page session');
-  app.ui.selectBranch(choice);
-  for (let i = 0; i < 8; i++) await tick();
-  assert.deepEqual(sceneChecks, [['restart-root','alt']], 'rerendering the graph does not repeat saved-scene checks');
-  assert.equal(app.posts.length, 0, 'graph hydration performs read-only scene checks');
-});
-
-test('pending read-only scene checks do not occupy the user event-job workers', async () => {
-  const root = run('root', choice);
-  root.assets = ['hero.png'];
-  for (let index = 0; index < 4; index++) root.branch.branches.push(branch(`unready-${index}`, `Unready path ${index}`, 700 + index));
-  let releaseChecks;
-  const checksPending = new Promise(resolve => { releaseChecks = resolve; });
-  const app = harness({root}, async url => {
-    assert.equal(url, '/api/continue');
-    return Response.json({status:'uncertain',error:'Fixture stops before generation'}, {status:400});
-  }, false, '', undefined, undefined, false, () => checksPending);
-  await tick();
-  app.get('access').value = 'fixture';
-  await app.ui.loadRun('root', {animate:false, autoConsequences:false});
-  for (let index = 0; index < 8; index++) await tick();
-  assert.equal(app.gets.filter(url => url.startsWith('/api/event-scene?')).length, 3, 'saved-scene hydration is independently capped at three read-only checks');
-  app.ui.activateBranch(choice);
-  for (let index = 0; index < 8 && app.posts.length === 0; index++) await tick();
-  assert.equal(app.posts.length, 1, 'the selected event continuation runs while all three scene-check workers are waiting');
-  releaseChecks(Response.json({status:'missing'}));
-  for (let index = 0; index < 8; index++) await tick();
-});
-
-test('continuation scenes keep the atlas available after cutout/complete and retain a manually chosen view', async () => {
-  const alternate=branch('alt','Mammoth steppe',700), root = run('root'), child = run('child', next, { rootRunId: 'root', parentRunId: 'root', parentBranchId: 'a', path: [{ runId: 'root', branchId: 'a', ...choice }] });
-  root.branch.branches.push(alternate);
-  child.assets = ['hero.png', 'cutout.png', 'model.glb'];
-  let controller;
-  const app = harness({ root, child }, async () => new Response(new ReadableStream({ start(stream) { controller = stream; } })));
-  await tick();
-  await app.ui.loadRun('root', { animate: false, autoConsequences:false });
-  app.get('access').value = 'fixture-only';
-  const pending = app.ui.expandBranch(choice); await tick();
-  const send = (type, data) => controller.enqueue(new TextEncoder().encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`));
-  send('cutout', { runId: 'child', status: 'ok' }); await tick();
-  assert.equal(app.ui.state().activeView, 'scene', 'automatic cutout arrival keeps the atlas visible');
-  assert.equal(app.get('workspace').classList.contains('hero-focus'), false);
-  send('complete', { runId: 'child', branch: child.branch, continuation: child.continuation }); controller.close(); await pending;
-  assert.equal(app.ui.state().activeView, 'scene', 'complete with 3D available keeps the continuation in Scene');
-  assert.equal(app.get('branch-list').children.length, 1);
-  assert.equal(app.get('branch-list').children[0].disabled, false, 'descendants can be followed immediately');
-
-  // Open the parent again, then explicitly choose the cutout while its descendant streams.
-  app.get('access').value = '';
-  await app.ui.loadRun('root', { animate: false, autoConsequences:false });
-  app.get('access').value = 'fixture-only';
-  const manual = app.ui.expandBranch(alternate); await tick();
-  send('cutout', { runId: 'child', status: 'ok' }); await tick();
-  app.ui.setView('cutout', true);
-  send('complete', { runId: 'child', branch: child.branch, continuation: child.continuation }); controller.close(); await manual;
-  assert.equal(app.ui.state().activeView, 'cutout', 'a manual view choice survives subsequent stream assets');
-});
-
-test('geography roots keep Scene through streamed assets and respect manual cutout selection', async () => {
-  const geography = {version:1,changes:[{id:'green-sahara',region:'sahara',kind:'vegetation',intensity:0.8,assumption:'A green Sahara persists.',uncertainty:'Extent is approximate.'}]};
-  const root = run('geo-root',{...choice,geography}); root.assets = ['hero.png','cutout.png','model.glb'];
-  let controller;
-  const app = harness({'geo-root':root},async()=>new Response(new ReadableStream({start(stream){controller=stream;}})));
-  await tick(); app.get('access').value='fixture-only';
-  const send=(type,data)=>controller.enqueue(new TextEncoder().encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`));
-  const first=app.ui.runPrompt('What if the Sahara stayed green?'); await tick();
-  send('review',root.branch); await tick();
-  send('image',{runId:root.id}); await tick(); assert.equal(app.ui.state().activeView,'scene');
-  send('cutout',{runId:root.id,status:'ok'}); await tick();
-  assert.equal(app.ui.state().activeView,'scene'); assert.equal(app.get('workspace').classList.contains('hero-focus'),false);
-  send('complete',{runId:root.id,branch:root.branch}); controller.close(); await first;
-  assert.equal(app.ui.state().activeView,'scene');
-  const second=app.ui.runPrompt('What if the Sahara stayed green?'); await tick();
-  send('review',root.branch); await tick(); send('cutout',{runId:root.id,status:'ok'}); await tick();
-  app.ui.setView('cutout',true);
-  send('complete',{runId:root.id,branch:root.branch}); controller.close(); await second;
-  assert.equal(app.ui.state().activeView,'cutout'); assert.equal(app.get('workspace').classList.contains('hero-focus'),true);
-});
-
-test('legacy root asset events retain their existing automatic cutout default', async () => {
-  const root=run('legacy-root'); root.assets=['hero.png','cutout.png'];
-  const app=harness({'legacy-root':root},async()=>new Response(`event: cutout\ndata: ${JSON.stringify({runId:root.id,status:'ok'})}\n\nevent: complete\ndata: ${JSON.stringify({runId:root.id,branch:root.branch})}\n\n`));
-  await tick(); app.get('access').value='fixture-only'; await app.ui.runPrompt('What if observatories flourished?');
-  assert.equal(app.ui.state().activeView,'cutout');
-});
-
-
-test('archive defaults to four named cached worlds, keeps remembered IDs private, and reveals named history on request', async () => {
-  const cached = ['alexandria', 'beringia', 'green-sahara', 'mechanisms'].map(id => ({ id, title: id, divergence: `What if ${id}?` }));
-  const historical = { id: 'uuid-child', title: 'A new settlement', parentRunId: 'green-sahara', divergence: 'What if Sahara stayed green?' };
-  const app = harness({}, undefined, false, '', () => Response.json({runs:cached}), () => Response.json({runs:[historical]})); await tick();
-  app.storage.set('otherwise-run-history', JSON.stringify(['unknown-uuid', 'uuid-child']));
-  await app.ui.refreshHistory();
-  assert.deepEqual(app.get('runs').children.map(option => option.value), cached.map(run => run.id));
-  assert.ok(app.get('runs').children.every(option => !option.text.includes('Saved world')));
-  assert.deepEqual(JSON.parse(app.storage.get('otherwise-run-history')), ['unknown-uuid', 'uuid-child']);
-  app.get('access').value = 'local-fixture';
-  app.ui.toggleArchiveHistory(); await tick();
-  assert.equal(app.get('archive-history-toggle').getAttribute('aria-pressed'), 'true');
-  assert.equal(app.get('runs').children.some(option => option.value === 'unknown-uuid'), false);
-  assert.match(app.get('runs').children.find(option => option.value === 'uuid-child').text, /A new settlement/);
-  app.ui.toggleArchiveHistory();
-  assert.equal(app.get('archive-history-toggle').getAttribute('aria-pressed'), 'false');
-  assert.equal(app.get('runs').children.some(option => option.value === 'uuid-child'), false);
-});
-
-
-test('local preview opens a continuation without exposing or storing an access code', async () => {
-  const root = run('local-root', choice), child = run('local-child', next, {rootRunId:'local-root',parentRunId:'local-root',parentBranchId:'a',path:[{runId:'local-root',branchId:'a',...choice}]});
-  const app = harness({'local-root':root,'local-child':child}, async url => {
-    if (url === '/api/event-scene') return Response.json({status:'complete',url:'/runs/local-root/event-a.png'});
-    return complete(child);
-  }, false, '', () => Response.json({runs:[]}), () => Response.json({runs:[]}), true);
-  await tick(); await app.ui.loadRun('local-root', {animate:false});
-  assert.equal(app.get('access').value,''); assert.equal(app.get('live-access').hidden,true);
-  await app.ui.expandBranch(choice);
-  for (let i = 0; i < 8; i++) await tick();
-  assert.equal(app.posts.filter(post => post.url === '/api/continue').length,1, 'opening the child does not automatically advance its selected event');
-  assert.equal(app.posts.some(post => post.url === '/api/event-scene'), false, 'opening a saved child never generates a preview scene');
-  assert.equal(app.ui.state().currentRunId,'local-child');
-  assert.equal(app.get('access').value,''); assert.equal(JSON.stringify([...app.storage.values()]).includes('secret-code'),false);
-});
-
-
-test('selection retains exact event and offers saved children without generation', async () => {
-  const alternate = branch('alt', 'Mammoth steppe', -4500);
-  const root = run('root'); root.branch.branches.push(alternate); root.assets = ['hero.png', 'cutout.png', 'model.glb'];
-  root.continuation.children = [{branchId:'alt',runId:'child',status:'complete'}];
-  const child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'alt',path:[{runId:'root',branchId:'alt',...alternate}]});
-  const app = harness({root,child}, undefined, true, '', undefined, undefined, false, () => Response.json({status:'complete',url:'/runs/root/event-alt.png',reused:true}));
-  await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false});
-  app.ui.activateBranch(alternate); await tick(); await tick();
-  assert.equal(app.ui.state().currentRunId,'root');
-  assert.match(app.get('hero-title').textContent,/4500 BCE · Mammoth steppe/);
-  assert.equal(app.get('hero-image').src,'/runs/root/event-alt.png');
-  assert.equal(app.get('model-button').disabled,false);
-  app.get('model-button').click();
-  assert.match(app.get('view-status').textContent,/not configured/);
-  assert.equal(app.get('event-children').children.length,1);
-  assert.equal(app.posts.length,0);
-  app.get('event-children').children[0].click(); await tick(); await tick(); await tick();
-  assert.equal(app.ui.state().currentRunId,'child');
-  assert.match(app.get('hero-title').textContent,/Ocean observatories/);
-  assert.equal(app.posts.length,0);
-});
-
-test('reopening a run restores saved hero consequences in the visible tree without a new request', async () => {
-  const root = run('root', choice), child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  root.continuation.children = [{branchId:'a',runId:'child',status:'complete'}];
-  const app = harness({root, child}, undefined, true);
-  await tick(); await app.ui.loadRun('root', {animate:false});
-  assert.equal(app.get('event-consequences').hidden, false);
-  assert.equal(app.get('event-children').children.length, 1);
-  assert.match(app.get('event-children').children[0].textContent, /Ocean observatories/);
-  assert.match(textContentDeep(app.get('exploration-tree-status').children[0]), /Open observatory/);
-  assert.match(textContentDeep(app.get('exploration-tree-status').children[0]), /Saved/);
-  assert.equal(app.posts.length, 0);
-});
-
-test('reopening a saved event reads only saved previews and never generates child scenes', async () => {
-  const root = run('root', choice); root.assets = ['hero.png'];
-  const childHero = branch('b', 'Ocean observatories', 600), childAlt = branch('c', 'Coastal observatories', 650);
-  const child = run('child', childHero, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}],children:[{branchId:'c',runId:'grandchild',status:'complete'}]});
-  child.branch.branches.push(childAlt); child.assets = ['hero.png'];
-  const grandchild = run('grandchild', branch('g', 'Deep sea observatories', 700), {rootRunId:'root',path:[{runId:'root',branchId:'a',...choice},{runId:'child',branchId:'c',...childAlt}]});
-  root.continuation.children = [{branchId:'a',runId:'child',status:'complete'}];
-  const app = harness({root,child,grandchild}, async (url, options) => {
-    assert.equal(url, '/api/event-scene', 'restoring saved consequences only generates scenes');
-    const body = JSON.parse(options.body);
-    return Response.json({status:'complete',url:`/runs/${body.runId}/event-${body.branchId}.png`});
-  }, false, '', undefined, undefined, true, async () => Response.json({status:'missing'}));
-  await tick(); await app.ui.loadRun('root', {animate:false,autoConsequences:false});
-  for (let i = 0; i < 24 && !app.posts.some(post => post.url === '/api/event-scene'); i++) await tick();
-  for (let i = 0; i < 12; i++) await tick();
-  assert.equal(app.posts.some(post => post.url === '/api/event-scene'), false);
-  assert.ok(app.gets.some(url => url.startsWith('/api/event-scene?runId=child&branchId=c')), 'saved previews can be checked without generation');
-  assert.equal(app.posts.some(post => post.url === '/api/continue'), false, 'scene warming does not generate another consequence level');
-  assert.equal(app.ui.state().currentRunId, 'root');
-  assert.match(app.get('hero-title').textContent, /Open observatory/);
-  assert.equal(app.starMap.selectedId, 'root::a', 'the selected parent event stays selected while its saved child scenes warm');
-});
-
-test('saved descendants in the exploration tree open as navigable worlds without replay generation', async () => {
-  const root = run('root', choice), child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  root.continuation.children = [{branchId:'a',runId:'child',status:'complete'}];
-  const app = harness({root, child}, undefined, true);
-  await tick(); await app.ui.loadRun('root', {animate:false});
-  for (let i = 0; i < 6; i++) await tick();
-  const savedWorld = findNode(app.get('exploration-tree-status'), node => node?.className === 'tree-run' && node.dataset.runId === 'child');
-  assert.ok(savedWorld, 'saved descendants are present in the tree');
-  const openWorldEvent = findNode(savedWorld, node => node?.dataset?.branchId === 'b');
-  assert.equal(typeof openWorldEvent.click, 'function');
-  await openWorldEvent.click();
-  for (let i = 0; i < 8; i++) await tick();
-  assert.equal(app.ui.state().currentRunId, 'child');
-  assert.match(app.get('hero-title').textContent, /Ocean observatories/);
-  assert.equal(app.posts.length, 0, 'opening saved tree nodes never replays generation');
-});
-
-test('opening a descendant keeps the complete saved tree rooted at the original divergence', async () => {
-  const root = run('root', choice), child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  root.title = 'Root title'; child.title = 'Child title'; root.continuation.children = [{branchId:'a',runId:'child',status:'complete'}];
-  const app = harness({root, child}, undefined, true);
-  await tick(); await app.ui.loadRun('child', {animate:false});
-  for (let i = 0; i < 8; i++) await tick();
-  const tree = app.get('exploration-tree-status');
-  const rootNode = findNode(tree, node => node?.className === 'tree-run' && node.dataset.runId === 'root');
-  const childNode = findNode(tree, node => node?.className === 'tree-run' && node.dataset.runId === 'child');
-  assert.ok(rootNode, 'the tree remains rooted at the original run');
-  assert.ok(childNode, 'the opened descendant appears under its ancestors');
-  assert.match(rootNode.children[0].textContent, /What if root/);
-  assert.equal((textContentDeep(tree).match(/What if root\?/g) || []).length, 1, 'the root divergence is shown only once');
-  const selectedEvent = findNode(childNode, node => node?.dataset?.branchId === 'b');
-  assert.equal(selectedEvent.getAttribute('aria-current'), 'true', 'the current event remains identified within the full tree');
-  assert.equal(findNode(tree, node => node?.className === 'tree-run' && node.dataset.runId === 'child').dataset.runId, 'child', 'the child is represented once');
-  assert.equal(app.posts.length, 0);
-});
-
-test('opening a live run waits for explicit entry, while replay mode stays read-only', async () => {
-  const root = run('root', choice), child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  root.assets = ['hero.png'];
-  const replay = harness({root}, undefined, true);
-  await tick(); await replay.ui.loadRun('root', {animate:false}); await tick(); await tick();
-  for (let i = 0; i < 8 && !replay.get('event-progress').textContent; i++) await tick();
-  assert.match(replay.get('service-mode').textContent, /run locally with your own Meta API key/i);
-  assert.match(replay.get('footer-service-mode').textContent, /run locally with your own Meta API key/i);
-  assert.match(textContentDeep(replay.get('exploration-tree-status').children[0]), /Not explored/);
-  assert.equal(replay.get('event-loading-indicator').hidden, true, 'replay does not show a generation spinner');
-  assert.match(replay.get('event-progress').textContent, /Not explored yet/i);
-  assert.equal(replay.posts.length, 0);
-  await replay.ui.expandBranch(choice);
-  assert.match(replay.get('selected-branch-context').textContent, /running locally with your own Meta API key/i);
-
-  const live = harness({root, child}, async (url, options) => {
-    if (url === '/api/event-scene') { const body = JSON.parse(options.body); return Response.json({status:'complete',url:`/runs/${body.runId}/event-${body.branchId}.png`}); }
-    assert.equal(url, '/api/continue'); return complete(child);
-  }, false, '', undefined, undefined, true);
-  await tick(); await live.ui.loadRun('root', {animate:false});
-  assert.equal(live.posts.some(post => post.url === '/api/continue'), false, 'opening a live run does not expand automatically');
-  live.ui.activateBranch(choice);
-  for (let i = 0; i < 24 && !live.posts.some(post => post.url === '/api/continue'); i++) await tick();
-  assert.deepEqual(live.posts.filter(post => post.url === '/api/continue').map(post => [post.body.runId,post.body.branchId]), [['root','a']], 'opening a live run explores only its selected hero');
-  live.ui.activateBranch(choice);
-  for (let i = 0; i < 24 && !live.posts.some(post => post.url === '/api/event-scene' && post.body.runId === 'child'); i++) await tick();
-  assert.equal(live.posts.filter(post => post.url === '/api/continue').length, 1);
-  assert.equal(live.posts.some(post => post.url === '/api/event-scene'), false, 'preview scenes remain saved-only');
-  for (let i = 0; i < 8; i++) await tick();
-  assert.match(textContentDeep(live.get('exploration-tree-status').children[0]), /Saved/);
-  assert.equal(live.get('event-children').children.length, 1);
-  assert.doesNotMatch(readFileSync(new URL('../web/index.html', import.meta.url), 'utf8'), /id="follow-selected"/);
-});
-
-test('restored idle hero has one explicit consequence action and only its direct children are entered', async () => {
-  const root = run('restored-root', choice), child = run('restored-child', next, {
-    rootRunId:'restored-root', parentRunId:'restored-root', parentBranchId:'a', path:[{runId:'restored-root',branchId:'a',...choice}],
-  });
-  root.assets = ['hero.png'];
-  let continuationCalls = 0;
-  const app = harness({[root.id]:root,[child.id]:child}, async (url, options) => {
-    assert.equal(url, '/api/continue'); continuationCalls++;
-    assert.deepEqual(JSON.parse(options.body), { runId:'restored-root', branchId:'a' });
-    return complete(child);
-  }, false, `#run=${root.id}`, undefined, undefined, true);
-  await tick(); await app.ui.loadRun(root.id, { animate:false, autoConsequences:false });
-  for (let i=0;i<10;i++) await tick();
-  assert.equal(continuationCalls, 0, 'restoring the selected hero does not start a continuation');
-  assert.equal(app.get('event-retry').hidden, false);
-  assert.equal(app.get('event-retry').textContent, 'Explore what happens next');
-  app.get('event-retry').click();
-  for (let i=0;i<24;i++) await tick();
-  assert.equal(continuationCalls, 1, 'one explicit CTA enters the selected event once');
-  assert.equal(app.get('event-children').children.length, 1, 'the selected event shows its immediate saved child');
-  assert.equal(app.get('event-retry').hidden, true, 'completed consequences are not offered for regeneration');
-  assert.equal(app.posts.some(post => post.url === '/api/continue' && post.body.runId === child.id), false, 'grandchildren are not generated by parent entry');
-});
-
-test('replay-only selected event CTA opens the local Meta setup instead of a generation spinner', async () => {
-  const root = run('replay-cta', choice); root.assets = ['hero.png'];
-  const app = harness({[root.id]:root}, undefined, true, `#run=${root.id}`, undefined, undefined, false,
-    undefined, undefined, undefined, undefined, undefined, undefined, true);
-  await tick(); await app.ui.loadRun(root.id, { animate:false, autoConsequences:false });
-  for (let i=0;i<10;i++) await tick();
-  assert.equal(app.get('event-retry').hidden, false);
-  assert.equal(app.get('event-retry').textContent, 'Set up local Meta key');
-  app.get('event-retry').click();
-  assert.equal(app.get('meta-key-setup').open, true);
-  assert.equal(app.get('meta-key-input').focused, true);
-  assert.equal(app.ui.state().invitationOpen, true, 'the collapsed invitation panel opens before the setup field receives focus');
-  assert.equal(app.get('live-access').open, undefined, 'local Meta setup does not open the access-code disclosure');
-  assert.equal(app.posts.length, 0, 'opening setup makes no continuation request');
-  assert.equal(app.get('event-loading-indicator').hidden, true);
-});
-
-test('unavailable local setup CTA opens the documented local setup instructions', async () => {
-  const root = run('setup-help', choice); root.assets = ['hero.png'];
-  const app = harness({[root.id]:root}, undefined, true, `#run=${root.id}`, undefined, undefined, false,
-    undefined, undefined, undefined, undefined, undefined, async url => url === '/health'
-      ? Response.json({status:'ok',replayOnly:true,setupAvailable:false,metaKeyConfigured:false,metaKeyOverrideActive:false,expansionLimit:20,expansionUsed:0}) : null);
-  await tick(); await app.ui.loadRun(root.id,{animate:false,autoConsequences:false});
-  assert.equal(app.get('event-retry').textContent,'Open local setup instructions');
-  app.get('event-retry').click();
-  assert.deepEqual(app.window.opened,[['https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon#run-it-locally','_blank','noopener,noreferrer']]);
-  assert.equal(app.posts.length,0,'setup guidance does not dispatch generation');
-});
-
-test('unknown service mode offers a health retry instead of mislabeling setup as unavailable', async () => {
-  const root = run('service-check',choice); root.assets=['hero.png'];
-  let healthReads=0;
-  const app=harness({[root.id]:root},undefined,true,`#run=${root.id}`,undefined,undefined,false,
-    undefined,undefined,undefined,undefined,null,async url=>{
-      if(url!=='/health') return null;
-      healthReads++;
-      return healthReads===1 ? new Response('',{status:503}) : Response.json({status:'ok',replayOnly:false,setupAvailable:false,metaKeyConfigured:true,metaKeyOverrideActive:false,localReviewAccess:false,voiceEnabled:false,expansionLimit:20,expansionUsed:0});
-    });
-  await tick(); await app.ui.loadRun(root.id,{animate:false,autoConsequences:false});
-  assert.equal(app.get('event-retry').textContent,'Retry service check');
-  app.get('event-retry').click();
-  for(let i=0;i<12 && app.get('event-retry').textContent==='Retry service check';i++) await tick();
-  assert.equal(healthReads,2);
-  assert.equal(app.get('event-retry').textContent,'Enter live access code','a successful health check reveals the real access action');
-  assert.equal(app.posts.length,0,'checking connection does not start exploration');
-});
-
-test('Open saved paths retries a failed read-only hydration without a continuation POST', async () => {
-  const root = run('saved-path-retry',choice), child = run('saved-child',next);
-  root.assets = ['hero.png']; root.continuation.children = [{branchId:'a',runId:child.id,status:'complete'}];
-  let childReads = 0;
-  let allowChildRead = false;
-  const app = harness({[root.id]:root,[child.id]:child},undefined,true,`#run=${root.id}`,undefined,undefined,false,
-    undefined,undefined,undefined,undefined,null,async url => {
-      if (url === `/runs/${child.id}/branch.json`) {
-        childReads++;
-        if (!allowChildRead) return new Response('',{status:503});
-      }
-      return null;
-    });
-  await tick(); await app.ui.loadRun(root.id,{animate:false,autoConsequences:false});
-  const readsBeforeAction = childReads;
-  assert.ok(readsBeforeAction >= 1,'restore performs a read-only hydration attempt');
-  assert.equal(app.get('event-retry').hidden,false);
-  assert.equal(app.get('event-retry').textContent,'Open saved paths');
-  allowChildRead = true;
-  app.get('event-retry').click();
-  for(let i=0;i<16 && !app.get('event-children').children.length;i++) await tick();
-  assert.ok(childReads > readsBeforeAction,'the action retries saved data hydration');
-  assert.equal(app.get('event-children').children.length,1);
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0,'saved-path recovery is read-only');
-});
-
-test('saved in-progress edge exposes Check progress and refreshes without resubmitting', async () => {
-  const root = run('checking-root', choice); root.assets = ['hero.png'];
-  const child = run('checking-child', next, {rootRunId:root.id,parentRunId:root.id,parentBranchId:'a',path:[{runId:root.id,branchId:'a',...choice}]});
-  root.continuation.children = [{branchId:'a',runId:child.id,status:'in-progress'}];
-  let manifestReads = 0;
-  let publishCompletion = false;
-  const app = harness({[root.id]:root,[child.id]:child}, async () => { assert.fail('a progress check cannot POST a continuation'); }, false, `#run=${root.id}`, undefined, undefined, true,
-    undefined, undefined, undefined, undefined, undefined, async url => {
-      if (url !== `/runs/${root.id}`) return null;
-      manifestReads++;
-      return Response.json(publishCompletion ? { ...root, continuation:{ ...root.continuation, children:[{branchId:'a',runId:child.id,status:'complete'}] } } : root);
-    });
-  await tick(); await app.ui.loadRun(root.id, {animate:false,autoConsequences:false});
-  assert.equal(app.get('event-retry').textContent, 'Check progress');
-  const readsBeforeAction = manifestReads; publishCompletion = true;
-  app.get('event-retry').click();
-  for (let i=0;i<24 && !app.get('event-children').children.length;i++) await tick();
-  assert.equal(manifestReads, readsBeforeAction + 1, 'the action refreshes the authoritative parent manifest');
-  assert.equal(app.get('event-children').children.length, 1, 'a newly completed child opens in the selected event');
-  assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 0);
-  assert.equal(app.get('event-retry').hidden, true);
-});
-
-test('a vanished in-progress reservation becomes a separate idle action, never an automatic resubmission', async () => {
-  const root = run('vanished-root', choice); root.assets = ['hero.png'];
-  root.continuation.children = [{branchId:'a',runId:'stale-child',status:'in-progress'}];
-  let manifestReads = 0;
-  let removeReservation = false;
-  const app = harness({[root.id]:root}, async () => { assert.fail('status refresh must not post a continuation'); }, false, `#run=${root.id}`, undefined, undefined, true,
-    undefined, undefined, undefined, undefined, undefined, async url => {
-      if (url !== `/runs/${root.id}`) return null;
-      manifestReads++;
-      return Response.json(removeReservation ? { ...root, continuation:{...root.continuation,children:[]} } : root);
-    });
-  await tick(); await app.ui.loadRun(root.id,{animate:false,autoConsequences:false});
-  assert.equal(app.get('event-retry').textContent,'Check progress');
-  const readsBeforeAction = manifestReads; removeReservation = true;
-  app.get('event-retry').click();
-  for(let i=0;i<16;i++) await tick();
-  assert.equal(manifestReads,readsBeforeAction + 1);
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0);
-  assert.equal(app.get('event-retry').textContent,'Explore what happens next');
-});
-
-test('session and depth limits offer saved-path navigation without bypassing limits; empty completion is explicit', async () => {
-  const root = run('at-session-limit',choice); root.assets=['hero.png'];
-  const health = url => url === '/health' ? Response.json({status:'ok',replayOnly:false,setupAvailable:false,metaKeyConfigured:true,metaKeyOverrideActive:false,localReviewAccess:true,voiceEnabled:false,expansionLimit:20,expansionUsed:20}) : null;
-  const capped = harness({[root.id]:root}, async () => { assert.fail('session cap must not be bypassed'); }, false, `#run=${root.id}`, undefined, undefined, true,
-    undefined, undefined, undefined, undefined, undefined, health);
-  await tick(); await capped.ui.loadRun(root.id,{animate:false,autoConsequences:false});
-  capped.get('event-retry').click(); for(let i=0;i<12;i++) await tick();
-  assert.equal(capped.get('event-retry').textContent,'Browse saved paths');
-  capped.get('event-retry').click();
-  assert.equal(capped.posts.filter(post=>post.url==='/api/continue').length,0);
-  assert.equal(capped.document.body.classList.contains('atlas-panels-open'),true,'browsing the root reveals its saved tree even in compact Atlas mode');
-  assert.match(capped.get('status').textContent,/Browse the saved paths/);
-
-  const child = run('empty-child',choice); child.branch.branches=[];
-  const completedRoot=run('empty-root',choice); completedRoot.assets=['hero.png'];
-  completedRoot.continuation.children=[{branchId:'a',runId:child.id,status:'complete'}];
-  const empty=harness({[completedRoot.id]:completedRoot,[child.id]:child});
-  await tick(); await empty.ui.loadRun(completedRoot.id,{animate:false,autoConsequences:false});
-  for(let i=0;i<16 && empty.get('event-retry').hidden;i++) await tick();
-  assert.match(empty.get('event-progress').textContent,/No further paths were saved for this event/);
-  assert.equal(empty.get('event-retry').textContent,'Browse saved paths');
-  empty.get('event-retry').click();
-  assert.equal(empty.posts.filter(post=>post.url==='/api/continue').length,0,'completed empty paths are not regenerated');
-});
-
-test('event fragment restores exact selection across reload without automatic expansion', async () => {
-  const alternate = next;
-  const root = run('root', choice);
-  root.branch.branches.push(alternate);
-  root.assets = ['hero.png'];
-  const heroFuture = run('hero-future', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  const alternateFuture = run('alternate-future', choice, {rootRunId:'root',parentRunId:'root',parentBranchId:'b',path:[{runId:'root',branchId:'b',...alternate}]});
-  const app = harness({root,'hero-future':heroFuture,'alternate-future':alternateFuture}, async (url, options) => {
-    if (url === '/api/event-scene') return Response.json({status:'complete',url:'/scene.png'});
-    assert.equal(url, '/api/continue');
-    const body = JSON.parse(options.body);
-    return complete(body.branchId === 'b' ? alternateFuture : heroFuture);
-  }, false, '#run=root&event=b', undefined, undefined, true);
-  const continuationCalls = () => app.posts.filter(post => post.url === '/api/continue').map(post => [post.body.runId, post.body.branchId]);
-  for (let i = 0; i < 12; i++) await tick();
-  assert.match(app.get('hero-title').textContent, /Ocean observatories/);
-  assert.deepEqual(continuationCalls(), [], 'restoring an event selection does not generate until explicit entry');
-  assert.equal(app.location.hash, '#run=root&event=b');
-
-  app.navigate('#run=root', 'popstate', 'hashchange');
-  for (let i = 0; i < 12; i++) await tick();
-  assert.match(app.get('hero-title').textContent, /Open observatory/);
-  assert.deepEqual(continuationCalls(), [], 'plain run navigation also stays read-only');
-
-  app.navigate('#run=root&event=b', 'popstate', 'hashchange');
-  for (let i = 0; i < 30; i++) await tick();
-  assert.match(app.get('hero-title').textContent, /Ocean observatories/);
-  assert.deepEqual(continuationCalls(), [], 'back/forward restoration never expands a node');
-});
-
-test('saved scene check paints the hash-selected event without automatic consequence generation', async () => {
-  const alternate = next, root = run('root', choice);
-  root.branch.branches.push(alternate); root.assets = ['hero.png'];
-  const child = run('child', choice, {rootRunId:'root',parentRunId:'root',parentBranchId:'b',path:[{runId:'root',branchId:'b',...alternate}]});
-  const sceneChecks = [];
-  const sceneUrl = `/event-scenes/${'a'.repeat(64)}.png`;
-  const app = harness({root,child}, async (url, options) => {
-    if (url === '/api/continue') return complete(child);
-    assert.equal(url, '/api/event-scene');
-    return Response.json({status:'complete',url:sceneUrl});
-  }, false, '#run=root&event=b', undefined, undefined, true, async url => {
-    const query = new URLSearchParams(url.split('?')[1]);
-    const identity = [query.get('runId'),query.get('branchId')]; sceneChecks.push(identity);
-    return Response.json(identity[0] === 'root' && identity[1] === 'b' ? {status:'complete',url:sceneUrl} : {status:'missing'});
-  });
-  for (let i = 0; i < 50 && (app.get('hero-image').hidden || !app.get('scene-loading').hidden); i++) await tick();
-  assert.match(app.get('hero-title').textContent, /Ocean observatories/);
-  assert.ok(sceneChecks.some(([runId,branchId]) => runId === 'root' && branchId === 'b'));
-  assert.equal(app.get('hero-image').src, sceneUrl, 'the saved scene is shown for the selected event');
-  assert.equal(app.get('hero-image').hidden, false);
-  assert.equal(app.get('scene-loading').hidden, true, 'the selected scene spinner clears when the saved image arrives');
-  assert.equal(app.ui.eventWorkFor('root','b').sceneMissing,false,'a found scene clears the missing state');
-  assert.equal(app.ui.eventWorkFor('root','b').sceneRetryable,false,'a found scene clears any retry state');
-  assert.deepEqual(app.posts.filter(post => post.url === '/api/continue'), [], 'restoration is read-only');
-});
-
-test('GET-only saved-scene hydration exposes Generate scene when the restored event is selected', async () => {
-  const alternate=branch('alt','Mammoth steppe',-4500), root=run('restored-missing-root',choice);
-  root.branch.branches.push(alternate); root.assets=['hero.png'];
-  const sceneChecks=[];
-  const app=harness({'restored-missing-root':root},async url=>{assert.fail(`Restore must not generate: ${url}`);},false,'',undefined,undefined,true,async url=>{
-    const params=new URL(url,'http://local.test').searchParams;
-    sceneChecks.push([params.get('runId'),params.get('branchId')]);
-    return Response.json({status:'missing'});
-  });
-  app.get('access').value='fixture'; await tick();
-  await app.ui.loadRun('restored-missing-root',{animate:false,autoConsequences:false});
-  for(let i=0;i<24 && !app.ui.eventWorkFor('restored-missing-root','alt')?.sceneCheckDone;i++) await tick();
-  assert.ok(sceneChecks.some(([runId,branchId])=>runId==='restored-missing-root' && branchId==='alt'), 'restore checks the missing scene with GET');
-  app.ui.selectBranch(alternate);
-  assert.equal(app.ui.state().selectedWork.sceneMissing,true);
-  assert.equal(app.get('event-scene-action').textContent,'Generate scene');
-  assert.equal(app.posts.length,0,'restoring and selecting the event never dispatches generation');
-});
-
-test('a 3D tab choice during saved-asset checks survives their completion without generation calls', async () => {
-  const root = run('root', choice); root.assets = ['hero.png','cutout.png','model.glb'];
-  let releaseHeads;
-  const headGate = new Promise(resolve => { releaseHeads = resolve; });
-  const app = harness({root}, undefined, true, '', undefined, undefined, false, undefined, undefined, undefined, undefined, async url => {
-    await headGate;
-    const [,runId,asset] = url.match(/^\/runs\/([^/]+)\/(.+)$/) || [];
-    return new Response('', {status:runId === root.id && root.assets.includes(asset) ? 200 : 404});
-  });
-  const modelLoads = [];
-  app.ui.setModelApi({clear(){},setAutoRotate(){},load(url){modelLoads.push(url); return new Promise(()=>{});}});
-  await tick();
-  const loading = app.ui.loadRun('root', {animate:false,autoConsequences:false});
-  for (let i = 0; i < 30 && app.heads.length < 4; i++) await tick();
-  assert.equal(app.heads.length, 4, 'all saved-asset checks are waiting');
-  app.ui.selectBranch(choice);
-  app.get('model-button').click();
-  releaseHeads();
-  await loading;
-  assert.equal(app.ui.state().activeView, 'model', 'the user’s 3D choice wins when saved assets become available');
-  assert.deepEqual(modelLoads, ['/runs/root/model.glb'], 'the selected saved model loads locally once');
-  assert.equal(app.posts.length, 0, 'asset inspection and model selection do not call a generation route');
-});
-
-test('saved-run navigation keeps the panel shell stable, clears stale imagery, and retains a readable load error', async () => {
-  const root = run('root', choice), child = run('child', next);
-  root.assets = ['hero.png']; child.assets = ['hero.png'];
-  let releaseChild;
-  const childGate = new Promise(resolve => { releaseChild = resolve; });
-  const app = harness({root,child}, undefined, true, '', undefined, undefined, false, undefined, undefined, undefined, undefined, null, async url => {
-    if (url === '/runs/child/branch.json') { await childGate; return Response.json(child.branch); }
-    if (url === '/runs/missing/branch.json') return new Response('', {status:404});
-    return null;
-  });
-  await tick(); await app.ui.loadRun('root', {animate:false,autoConsequences:false});
-  assert.equal(app.get('hero-image').hidden, false);
-  const openingChild = app.ui.loadRun('child', {animate:false,autoConsequences:false});
-  assert.equal(app.ui.state().hasStory, true, 'the selected-world panel remains mounted during the pending run fetch');
-  assert.equal(app.get('hero-title').textContent, 'Opening saved story…');
-  assert.equal(app.get('hero-image').hidden, true, 'the previous world image is hidden immediately');
-  releaseChild(); await openingChild;
-  assert.equal(app.ui.state().hasStory, true);
-  assert.match(app.get('hero-title').textContent, /Ocean observatories/);
-  assert.equal(app.get('hero-image').src, '/runs/child/hero.png');
-  assert.equal(app.get('hero-image').hidden, false);
-  assert.equal(app.posts.length, 0, 'run navigation does not fan out to continuation generation');
-
-  await app.ui.loadRun('missing', {animate:false,autoConsequences:false});
-  assert.equal(app.ui.state().hasStory, true, 'the panel stays visible to explain a terminal load error');
-  assert.equal(app.get('hero-title').textContent, 'Saved story unavailable');
-  assert.match(app.get('stage-empty').querySelector('p').textContent, /Could not load this cached story/);
-  assert.equal(app.get('hero-image').hidden, true);
-});
-
-test('continuation stream replaces the waiting label with visible stage progress', async () => {
-  const root = run('root', choice), future = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  let streamController;
-  const app = harness({root, child:future}, async url => {
-    assert.equal(url, '/api/continue');
-    return new Response(new ReadableStream({start(controller) { streamController = controller; }}), {headers:{'content-type':'text/event-stream'}});
-  }, false, '', undefined, undefined, true, () => Response.json({status:'complete',url:'/scene.png'}));
-  await tick(); await app.ui.loadRun('root', {animate:false});
-  app.ui.activateBranch(choice);
-  for (let i = 0; i < 8 && !streamController; i++) await tick();
-  assert.ok(streamController);
-  streamController.enqueue(new TextEncoder().encode('event: propose\ndata: {}\n\n'));
-  await tick(); await tick();
-  assert.match(app.get('event-progress').textContent, /Developing possible futures/);
-  assert.equal(app.get('event-loading-indicator').hidden, false);
-  streamController.enqueue(new TextEncoder().encode(`event: complete\ndata: ${JSON.stringify({runId:'child',branch:future.branch})}\n\n`));
-  streamController.close();
-  for (let i = 0; i < 8; i++) await tick();
-  assert.equal(app.get('event-children').children.length, 1);
-  assert.equal(app.get('event-loading-indicator').hidden, true);
-});
-
-test('an in-flight event updates its own tree state after selection changes', async () => {
-  const alternate = branch('alt', 'Mammoth steppe', -4500), root = run('root'); root.branch.branches.push(alternate);
-  let releaseScene; const pendingScene = new Promise(resolve => { releaseScene = resolve; });
-  const app = harness({root}, undefined, false, '', undefined, undefined, false, () => pendingScene);
-  await tick(); await app.ui.loadRun('root', {animate:false});
-  for (let i = 0; i < 6 && !app.get('event-progress').textContent; i++) await tick();
-  app.ui.activateBranch(alternate);
-  app.ui.selectBranch(choice);
-  releaseScene(Response.json({status:'missing'}));
-  for (let i = 0; i < 12; i++) await tick();
-  const rootNode = app.get('exploration-tree-status').children[0];
-  const altItem = rootNode.children[1].children.find(item => item.children[0]?.dataset?.branchId === 'alt');
-  assert.ok(altItem);
-  assert.notEqual(altItem.dataset.state, 'queued');
-  assert.match(altItem.children[1].textContent, /Not explored/);
-  assert.equal(app.posts.length, 0, 'stale queued work never dispatches generation');
-});
-
-test('continuation completion checks saved child previews without generating scenes or grandchildren', async () => {
-  const root = run('root'); root.assets = ['hero.png'];
-  const branches = ['c1', 'c2', 'c3', 'c4'].map((id, index) => branch(id, `Event ${id}`, -4500 - index));
-  const child = run('child', branches[0], {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  child.branch.branches.push(...branches.slice(1));
-  const grandchildren = [branch('g1','Grandchild one',-3000), branch('g2','Grandchild two',-3001)];
-  const grandchild = run('grandchild', grandchildren[0], {rootRunId:'root',parentRunId:'child',parentBranchId:'c1',path:child.continuation.path});
-  grandchild.branch.branches.push(grandchildren[1]);
-  const pending = new Map();
-  const sceneChecks = [];
-  const scenePosts = [];
-  const continuationChecks = [];
-  const app = harness({root,child,grandchild}, async (url, options) => {
-    const body = JSON.parse(options.body);
-    if (url === '/api/event-scene') {
-      scenePosts.push(body.branchId);
-      return new Promise(resolve => pending.set(body.branchId, resolve));
-    }
-    assert.equal(url, '/api/continue');
-    continuationChecks.push([body.runId,body.branchId]);
-    return complete(body.runId === 'root' ? child : grandchild);
-  }, false, '', undefined, undefined, false, url => {
-    const id = new URL(url, 'http://local').searchParams.get('branchId');
-    sceneChecks.push(id);
-    return Response.json({status:'missing'});
-  });
-  await tick(); app.get('access').value = 'fixture';
-  await app.ui.loadRun('root', {animate:false,autoConsequences:false});
-  for (let i = 0; i < 8; i++) await tick();
-  assert.equal(app.posts.length, 0, 'opening a run does not start a continuation');
-  app.ui.activateBranch(choice);
-  for (let i = 0; i < 40; i++) await tick();
-  for (let i = 0; i < 16; i++) await tick();
-  assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 1, 'only the explicitly expanded event generates consequences');
-  assert.deepEqual(continuationChecks, [['root','a']]);
-  assert.deepEqual(scenePosts, [], 'preview checks never generate scenes');
-  assert.equal(app.ui.state().currentRunId, 'root', 'map selection keeps the parent world open while consequences are prepared');
-  assert.ok(['c1','c2','c3','c4'].every(id => sceneChecks.includes(id)), 'the immediate child set can be checked for saved previews');
-});
-
-test('opening a run leaves its branches untouched until clicked', async () => {
-  const alternate = branch('alt','Mammoth steppe',-4500), root = run('root'); root.branch.branches.push(alternate); root.assets = ['hero.png'];
-  const child = run('child',next,{rootRunId:'root',parentRunId:'root',parentBranchId:'alt',path:[{runId:'root',branchId:'alt',...alternate}]});
-  const grandchild = run('grandchild',branch('g','Grandchild',700));
-  const app = harness({root,child,grandchild}, async (url,options) => {
-    assert.equal(url,'/api/continue');
-    const body = JSON.parse(options.body);
-    assert.ok([["root","alt"],["child","b"]].some(([runId,branchId])=>body.runId===runId&&body.branchId===branchId));
-    return complete(body.runId === 'root' ? child : grandchild);
-  });
-  await tick(); app.get('access').value='fixture';
-  await app.ui.loadRun('root',{animate:false,autoConsequences:false});
-  for(let i=0;i<8;i++) await tick();
-  assert.equal(app.posts.length,0,'suppressed run navigation starts no hero prefetch');
-  app.ui.activateBranch(alternate);
-  for(let i=0;i<12 && !app.posts.some(post=>post.url==='/api/continue');i++) await tick();
-  const continuations = app.posts.filter(post=>post.url==='/api/continue');
-  assert.equal(continuations.length,1);
-  assert.deepEqual(continuations.map(post=>[post.body.runId,post.body.branchId]),[['root','alt']],'the clicked event advances');
-});
-
-test('clicking a child starts continuation before its read-only scene check resolves', async () => {
-  const root = run('root'); root.assets=['hero.png'];
-  const child = run('child',next,{rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  let releaseScene; const scenePending = new Promise(resolve=>{releaseScene=resolve;});
-  const app = harness({root,child}, async (url,options) => {
-    assert.equal(url,'/api/continue');
-    const body=JSON.parse(options.body);
-    return complete(body.runId==='root'?child:run('grandchild',branch('g','Grandchild',-2000)));
-  }, false, '', undefined, undefined, false, url => {
-    const id=new URL(url,'http://local').searchParams.get('runId');
-    return id==='child'?scenePending:Response.json({status:'missing'});
-  });
-  await tick(); app.get('access').value='fixture';
-  await app.ui.loadRun('root',{animate:false,autoConsequences:false});
-  app.ui.activateBranch(choice);
-  for(let i=0;i<16 && !app.gets.some(url=>url.startsWith('/api/event-scene?runId=child'));i++) await tick();
-  assert.ok(app.gets.some(url=>url.startsWith('/api/event-scene?runId=child')),'the child scene prefetch is pending');
-  await app.ui.loadRun('child',{animate:false,autoConsequences:false});
-  app.ui.activateBranch(next);
-  for(let i=0;i<12 && !app.posts.some(post=>post.url==='/api/continue' && post.body.runId==='child');i++) await tick();
-  assert.ok(app.posts.some(post=>post.url==='/api/continue' && post.body.runId==='child'),'click promotion dispatches consequences without waiting for the scene');
-  releaseScene(Response.json({status:'complete',url:'/runs/child/event-b.png'}));
-  for(let i=0;i<12;i++) await tick();
 });
 
 test('SAM cutout request is tied to the selected event and reused on a second click', async () => {
@@ -1567,374 +418,6 @@ test('SAM cutout waits for the event scene before requesting segmentation', asyn
   assert.equal(app.get('cutout-image').src, '/event-cutouts/example.png');
 });
 
-test('continuation SSE keeps a proven retryable refusal distinct from an uncertain failure', async () => {
-  const root = run('root'); root.assets = ['hero.png'];
-  const app = harness({root}, async url => {
-    if (url === '/api/event-scene') return Response.json({status:'complete',url:'/runs/root/event-a.png'});
-    return new Response('event: error\ndata: {"status":"retryable","message":"Spend cap reached before dispatch"}\n\n', {headers:{'content-type':'text/event-stream'}});
-  });
-  await tick(); await app.ui.loadRun('root', {animate:false});
-  for (let i = 0; i < 8; i++) await tick();
-  app.get('access').value = 'fixture';
-  app.ui.activateBranch(choice);
-  for (let i = 0; i < 12; i++) await tick();
-  const selected = findNode(app.get('exploration-tree-status'), node => node?.className === 'tree-branch' && node.children[0]?.dataset?.branchId === 'a');
-  assert.equal(selected.dataset.state, 'retryable');
-  assert.match(selected.children[1].textContent, /Can retry/);
-  assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 1, 'an SSE error is never automatically replayed');
-});
-
-test('a stopped SSE continuation can be explicitly restarted without waiting for a reload', async () => {
-  const root=run('root'); root.assets=['hero.png'];
-  const child=run('child',next,{rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  let attempts=0;
-  const app=harness({root,child},async(url,options)=>{
-    attempts++;
-    if(attempts===1) return new Response('event: error\ndata: {"status":"uncertain","message":"Exploration stopped. Enter this event to try again."}\n\n',{headers:{'content-type':'text/event-stream'}});
-    assert.deepEqual(JSON.parse(options.body),{runId:'root',branchId:'a'},'the fresh manifest has no terminal edge, so this is a new reservation');
-    return complete(child);
-  });
-  await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false}); app.get('access').value='fixture'; app.ui.activateBranch(choice);
-  for(let i=0;i<16;i++) await tick();
-  assert.equal(app.get('event-retry').hidden,false);
-  assert.match(app.get('event-progress').textContent,/enter this event to try again/i);
-  app.get('event-retry').click();
-  for(let i=0;i<20;i++) await tick();
-  assert.equal(attempts,2,'the user action starts one fresh attempt');
-  assert.equal(app.get('event-retry').hidden,true,'a nonempty completed continuation is shown as child events, without another action');
-});
-
-test('explicit re-entry retries a persisted budget-exhausted edge with the server revalidation flag', async () => {
-  const root = run('root'); root.assets = ['hero.png'];
-  root.continuation.children = [{branchId:'a',status:'failed',code:'budget_exhausted'}];
-  const child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  child.branch.branches = [];
-  const app = harness({root,child}, async (url, options) => {
-    assert.equal(url, '/api/continue');
-    assert.deepEqual(JSON.parse(options.body), {runId:'root',branchId:'a',retryBudgetFailure:true});
-    return complete(child);
-  });
-  await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false});
-  app.get('access').value = 'fixture'; app.ui.activateBranch(choice);
-  for (let i=0;i<20;i++) await tick();
-  assert.equal(app.posts.filter(post => post.url === '/api/continue').length,1,'explicit entry dispatches one retry');
-  assert.equal(app.get('event-retry').hidden,false,'a completed empty continuation offers navigation, not another generation');
-  assert.equal(app.get('event-retry').textContent,'Browse saved paths');
-});
-
-test('a terminal budget-exhausted SSE failure becomes retryable only after its explicit action', async () => {
-  const root = run('root'); root.assets = ['hero.png'];
-  const child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  child.branch.branches = [];
-  let attempts = 0;
-  const app = harness({root,child}, async (url, options) => {
-    attempts++;
-    assert.equal(url, '/api/continue');
-    assert.deepEqual(JSON.parse(options.body), attempts === 1
-      ? {runId:'root',branchId:'a'}
-      : {runId:'root',branchId:'a'},'a refreshed manifest without a terminal edge uses a new reservation');
-    return attempts === 1
-      ? new Response('event: error\ndata: {"step":"error","status":"failed","code":"budget_exhausted","error":"The spend cap stopped this continuation"}\n\n', {headers:{'content-type':'text/event-stream'}})
-      : complete(child);
-  });
-  await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false});
-  app.get('access').value = 'fixture'; app.ui.activateBranch(choice);
-  for (let i=0;i<16;i++) await tick();
-  assert.equal(attempts,1,'the terminal stream failure is not replayed automatically');
-  assert.equal(app.get('event-retry').hidden,false);
-  assert.match(app.get('event-progress').textContent,/new attempt; this attempt and its saved artifacts are preserved/i);
-  app.get('event-retry').click();
-  for (let i=0;i<40 && app.ui.state().selectedWork.consequenceStatus !== 'complete';i++) await tick();
-  assert.equal(attempts,2);
-  assert.equal(app.get('event-retry').hidden,false);
-  assert.equal(app.get('event-retry').textContent,'Browse saved paths');
-});
-
-test('re-entering the same selected event retries terminal work once and keeps success deduped', async () => {
-  for(const failedStatus of ['failed','uncertain','retryable']) {
-    const root=run('root'); root.assets=['hero.png'];
-    const child=run('child',next,{rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-    let attempts=0;
-    const app=harness({root,child},async(url,options)=>{
-      attempts++; assert.equal(url,'/api/continue');
-      if(attempts===1) return new Response(`event: error\ndata: ${JSON.stringify({status:failedStatus,message:'Exploration stopped'})}\n\n`,{headers:{'content-type':'text/event-stream'}});
-      assert.deepEqual(JSON.parse(options.body),{runId:'root',branchId:'a'},'the fresh manifest has no edge, so re-entry starts a new reservation without a stale retry flag');
-      return complete(child);
-    });
-    await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false}); app.get('access').value='fixture';
-    app.ui.activateBranch(choice);
-    for(let i=0;i<16;i++) await tick();
-    assert.equal(attempts,1,`${failedStatus} first attempt settles before retry`);
-    assert.equal(app.ui.eventWorkFor('root','a').consequenceStatus,failedStatus);
-    assert.equal(app.ui.eventWorkFor('root','a').interrupted,true,'terminal error state remains retryable on the work record');
-    app.ui.activateBranch(choice);
-    for(let i=0;i<20;i++) await tick();
-    assert.equal(attempts,2,`${failedStatus} selected-row re-entry dispatches one fresh attempt`);
-    assert.deepEqual(app.ui.eventWorkFor('root','a').consequenceStatus,'complete',JSON.stringify(app.ui.eventWorkFor('root','a')));
-    app.ui.activateBranch(choice);
-    for(let i=0;i<8;i++) await tick();
-    assert.equal(attempts,2,`${failedStatus} completed work remains deduplicated`);
-  }
-});
-
-test('terminal failed and uncertain edges retry only after explicit action; in-progress stays locked', async () => {
-  for (const status of ['failed','uncertain']) {
-    const root=run('root'); root.continuation.children=[{branchId:'a',runId:`old-${status}`,status}];
-    const child=run(`new-${status}`,next,{rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-    const app=harness({root,[child.id]:child},async(url,options)=>{
-      assert.equal(url,'/api/continue');
-      assert.deepEqual(JSON.parse(options.body),{runId:'root',branchId:'a',retryInterruptedAttempt:true});
-      return complete(child);
-    });
-    await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false}); app.get('access').value='fixture';
-    assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0,`${status} does not retry on restoration`);
-    app.ui.activateBranch(choice);
-    for(let i=0;i<14;i++) await tick();
-    assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,`${status} retries on explicit event entry`);
-    assert.equal(app.posts[0].body.retryInterruptedAttempt,true);
-  }
-  const root=run('active'); root.continuation.children=[{branchId:'a',runId:'active-child',status:'in-progress'}];
-  root.assets=['hero.png'];
-  const active=harness({active:root},async()=>{assert.fail('in-progress must never retry');});
-  await tick(); await active.ui.loadRun('active',{animate:false,autoConsequences:false});
-  for(let i=0;i<20 && active.get('event-retry').textContent!=='Check progress';i++) await tick();
-  assert.equal(active.get('event-retry').textContent,'Check progress','a persisted in-progress edge offers status refresh');
-  active.get('event-retry').click();
-  for(let i=0;i<12;i++) await tick();
-  assert.equal(active.get('event-retry').hidden,false);
-  assert.equal(active.get('event-retry').textContent,'Check progress');
-  assert.equal(active.posts.filter(post=>post.url==='/api/continue').length,0);
-});
-
-test('explicit entry refreshes stale terminal metadata before selecting the server retry path', async () => {
-  for(const freshChildren of [[],[{branchId:'a',runId:'budget-stopped',status:'failed',code:'budget_exhausted'}]]) {
-    const root=run('stale-root');
-    root.continuation.children=[{branchId:'a',runId:'old-uncertain',status:'uncertain'}];
-    const refreshed={...root,continuation:{...root.continuation,children:freshChildren}};
-    const child=run('replacement-child',next,{rootRunId:'stale-root',parentRunId:'stale-root',parentBranchId:'a',path:[{runId:'stale-root',branchId:'a',...choice}]});
-    let manifestReads=0;
-    const app=harness({'stale-root':root,'replacement-child':child},async(url,options)=>{
-      assert.equal(url,'/api/continue');
-      assert.deepEqual(JSON.parse(options.body),freshChildren.length
-        ? {runId:'stale-root',branchId:'a',retryBudgetFailure:true}
-        : {runId:'stale-root',branchId:'a'});
-      return complete(child);
-    },false,'',undefined,undefined,false,undefined,undefined,undefined,undefined,null,async url=>{
-      if(url==='/runs/stale-root' && ++manifestReads>1) return Response.json(refreshed);
-      return null;
-    });
-    await tick(); await app.ui.loadRun('stale-root',{animate:false,autoConsequences:false});
-    app.get('access').value='fixture'; app.ui.activateBranch(choice);
-    for(let i=0;i<20;i++) await tick();
-    assert.ok(manifestReads>1,'explicit entry refreshes the cached parent manifest');
-    assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'the same entry picks one retry path');
-  }
-});
-
-test('continuation retries only machine-marked pre-dispatch HTTP 429 responses with a bounded backoff', async () => {
-  const root = run('root'); root.assets = ['hero.png'];
-  const child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  child.branch.branches = [];
-  let attempts = 0; const waits = [];
-  const app = harness({root,child}, async url => {
-    if (url === '/api/event-scene') return Response.json({status:'complete',url:'/runs/root/event-a.png'});
-    attempts++;
-    if (attempts < 3) return Response.json({status:'retryable',error:'Shared capacity is full'}, {status:429});
-    return complete(child);
-  }, false, '', undefined, undefined, false, undefined, undefined, (callback, delay) => { waits.push(delay); queueMicrotask(callback); return waits.length; });
-  await tick(); await app.ui.loadRun('root', {animate:false});
-  for (let i = 0; i < 8; i++) await tick();
-  app.get('access').value = 'fixture'; app.ui.activateBranch(choice);
-  for (let i = 0; i < 80 && attempts < 3; i++) await tick();
-  assert.equal(attempts, 3, 'two proven undispatched refusals are retried, then the request completes');
-  assert.deepEqual(waits, [500,1000], 'capacity refusals use bounded exponential backoff');
-  assert.equal(app.ui.state().currentRunId, 'root', 'background continuation completion keeps the current world open');
-});
-
-test('node entry does not trigger scene or cutout generation', async () => {
-  const alternate = branch('alt','Mammoth steppe',-4500), root = run('root');
-  root.branch.branches.push(alternate); root.assets = ['hero.png'];
-  let scenePosts = 0, cutoutPosts = 0; const waits = [];
-  const app = harness({root}, async url => {
-    if (url === '/api/event-scene') {
-      scenePosts++;
-      return scenePosts === 1 ? Response.json({status:'retryable',error:'At capacity'}, {status:429}) : Response.json({status:'complete',url:'/runs/root/event-alt.png'});
-    }
-    if (url === '/api/continue') return new Response('event: error\ndata: {"status":"uncertain","message":"No consequence result"}\n\n', {headers:{'content-type':'text/event-stream'}});
-    if (url === '/api/event-cutout') {
-      cutoutPosts++;
-      return cutoutPosts === 1 ? Response.json({status:'retryable',error:'At capacity'}, {status:429}) : Response.json({status:'complete',url:'/runs/root/event-alt-cutout.png'});
-    }
-    assert.fail(`Unexpected POST ${url}`);
-  }, false, '', undefined, undefined, false, () => Response.json({status:'missing'}), () => Response.json({status:'missing'}), (callback, delay) => { waits.push(delay); queueMicrotask(callback); return waits.length; });
-  await tick(); await app.ui.loadRun('root',{animate:false}); app.get('access').value = 'fixture';
-  app.ui.activateBranch(alternate);
-  for (let i=0;i<12;i++) await tick();
-  assert.equal(scenePosts,0, 'entering a node does not generate its scene');
-  assert.equal(cutoutPosts,0, 'changing views does not create a cutout');
-  assert.deepEqual(waits,[]);
-});
-
-test('capacity retry exhausts at a bounded two-minute budget and leaves the event retryable', async () => {
-  const root = run('root'); root.assets = ['hero.png'];
-  const child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'a',path:[{runId:'root',branchId:'a',...choice}]});
-  child.branch.branches = [];
-  let attempts = 0; const waits = [];
-  const scheduleImmediately = (callback, delay) => { waits.push(delay); queueMicrotask(callback); return waits.length; };
-  const app = harness({root,child}, async url => {
-    if (url === '/api/continue') { attempts++; return attempts <= 10 ? Response.json({status:'retryable',error:'At capacity'}, {status:429}) : complete(child); }
-    return Response.json({status:'complete',url:'/runs/root/event-a.png'});
-  }, false, '', undefined, undefined, false, undefined, undefined, scheduleImmediately);
-  await tick(); await app.ui.loadRun('root',{animate:false});
-  for(let i=0;i<8;i++) await tick();
-  app.get('access').value='fixture'; app.ui.activateBranch(choice);
-  for(let i=0;i<80 && attempts<10;i++) await tick();
-  assert.equal(attempts,10);
-  assert.deepEqual(waits,[500,1000,2000,4000,8000,16000,30000,30000,28000]);
-  assert.equal(waits.reduce((sum,delay)=>sum+delay,0),119500);
-  const node = findNode(app.get('exploration-tree-status'), item => item?.className === 'tree-branch' && item.children[0]?.dataset?.branchId === 'a');
-  assert.equal(node.dataset.state,'retryable');
-  assert.equal(app.get('event-retry').hidden,false,'exhausted consequences stay manually retryable');
-  app.get('event-retry').click();
-  for(let i=0;i<20 && attempts<11;i++) await tick();
-  for(let i=0;i<10;i++) await tick();
-  assert.equal(attempts,11,'manual retry succeeds after the bounded automatic retry budget');
-  assert.equal(app.get('event-retry').hidden,false,'a completed empty continuation offers saved-path navigation');
-  assert.equal(app.get('event-retry').textContent,'Browse saved paths');
-  const completedNode = findNode(app.get('exploration-tree-status'), item => item?.className === 'tree-branch' && item.children[0]?.dataset?.branchId === 'a');
-  assert.equal(completedNode.dataset.state,'complete');
-});
-
-test('exhausted cutout capacity retry remains visible and manually retryable', async () => {
-  const alternate=branch('alt','Mammoth steppe',-4500), root=run('root'); root.branch.branches.push(alternate); root.assets=['hero.png'];
-  let attempts=0; const waits=[];
-  const app=harness({root}, async url => {
-    assert.equal(url,'/api/event-cutout'); attempts++;
-    return Response.json({status:'retryable',error:'At capacity'}, {status:429});
-  }, false, '', undefined, undefined, false, () => Response.json({status:'complete',url:'/runs/root/event-alt.png'}), () => Response.json({status:'missing'}),
-  (callback,delay)=>{waits.push(delay);queueMicrotask(callback);return waits.length;});
-  await tick(); await app.ui.loadRun('root',{animate:false,autoConsequences:false});
-  app.get('access').value='fixture'; app.ui.selectBranch(alternate); app.get('cutout-view').click();
-  for(let i=0;i<100 && attempts<10;i++) await tick();
-  for(let i=0;i<8;i++) await tick();
-  assert.equal(attempts,10);
-  assert.equal(waits.reduce((sum,delay)=>sum+delay,0),119500);
-  assert.match(app.get('view-status').textContent,/still waiting for capacity/);
-  assert.match(app.get('event-progress').textContent,/select SAM cutout again to retry/i, JSON.stringify({view:app.get('view-status').textContent,progress:app.get('event-progress').textContent,title:app.get('hero-title').textContent}));
-});
-
-test('explicit selection checks only a saved scene, expands consequences once, and retains the parent', async () => {
-  const alternate=branch('alt','Mammoth steppe',-4500), root=run('root'), other=run('other'); root.branch.branches.push(alternate); root.assets=['hero.png'];
-  const future=run('child',next,{rootRunId:'root',parentRunId:'root',parentBranchId:'alt',path:[{runId:'root',branchId:'alt',...alternate}]}); future.assets=['hero.png'];
-  const grandchild=run('grandchild',branch('g','Grandchild',700)); grandchild.branch.branches=[];
-  let release; const wait = new Promise(resolve => { release=resolve; });
-  const app=harness({root,child:future,grandchild,other},async (url,options)=>{
-    if (url==='/api/event-scene') { const body=JSON.parse(options.body); await wait; return Response.json({status:'complete',url:`/runs/${body.runId}/event-${body.branchId}.png`}); }
-    assert.equal(url,'/api/continue'); const body=JSON.parse(options.body); return complete(body.runId==='root'?future:grandchild);
-  },false,'',undefined,undefined,false,async url=>{
-    const params=new URL(url,'http://local').searchParams;
-    return params.get('runId')==='child' ? Response.json({status:'complete',url:'/runs/child/event-b.png'}) : Response.json({status:'missing'});
-  });
-  await tick(); await app.ui.loadRun('root',{animate:false}); app.get('access').value='fixture';
-  app.ui.activateBranch(alternate);
-  assert.equal(app.get('scene-loading').hidden, false, 'the queued scene task is visible immediately');
-  assert.match(app.get('event-progress').textContent, /Queued to find consequences/);
-  assert.match(app.get('scene-loading-text').textContent, /Checking for a saved scene|Queued to check the scene/);
-  app.ui.activateBranch(alternate); await tick();
-  for (let i=0;i<24 && !app.posts.some(post=>post.url==='/api/continue');i++) await tick();
-  assert.ok(app.gets.some(url=>url.startsWith('/api/event-scene?runId=root&branchId=alt')) && app.posts.some(post=>post.url==='/api/continue'), 'entry checks for a saved scene and expands only consequences');
-  assert.equal(app.posts.some(post=>post.url==='/api/event-scene'), false, 'missing scenes are not generated by node entry');
-  assert.equal(app.get('scene-loading').hidden, true);
-  release(); await tick(); await tick(); await tick();
-  for(let i=0;i<20&&app.posts.filter(post=>post.url==='/api/continue').length<1;i++) await tick();
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1, 'the selected event gets one explicit continuation');
-  assert.equal(app.posts.filter(post=>post.url==='/api/event-scene').length,0, 'the child preview is not generated in the background');
-  assert.equal(app.ui.state().currentRunId,'root'); assert.match(app.get('hero-title').textContent,/Mammoth steppe/);
-  assert.equal(app.get('hero-image').src,'/runs/root/hero.png'); assert.equal(app.get('event-children').children.length,1);
-  assert.equal(app.get('scene-loading').hidden, true);
-  app.ui.activateBranch(alternate); await tick(); assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1, 'reselect reuses the saved continuation without a child continuation');
-  await app.ui.loadRun('other',{animate:false}); assert.equal(app.ui.state().currentRunId,'other');
-});
-
-
-test('navigation while entering a node keeps scene state scoped and reuses its consequence', async () => {
-  const alternate=branch('alt','Mammoth steppe',-4500), root=run('root'); root.branch.branches.push(alternate); root.assets=['hero.png'];
-  const future=run('child',next,{rootRunId:'root',parentRunId:'root',parentBranchId:'alt',path:[{runId:'root',branchId:'alt',...alternate}]});
-  const grandchild=run('grandchild',branch('g','Grandchild',700)); grandchild.branch.branches=[];
-  let release; const wait=new Promise(resolve=>{release=resolve;});
-  const app=harness({root,child:future,grandchild},async (url,options)=>{ if(url==='/api/event-scene'){await wait;const body=JSON.parse(options.body);return Response.json({status:'complete',url:`/runs/${body.runId}/event-${body.branchId}.png`});} const body=JSON.parse(options.body);return complete(body.runId==='root'?future:grandchild); },false,'',undefined,undefined,false,async url=>{
-    const params=new URL(url,'http://local').searchParams;
-    return params.get('runId')==='child' ? Response.json({status:'complete',url:'/runs/child/event-b.png'}) : Response.json({status:'missing'});
-  });
-  await tick(); await app.ui.loadRun('root',{animate:false}); app.get('access').value='fixture';
-  app.ui.activateBranch(alternate); await tick(); app.ui.selectBranch(choice); release(); await tick(); await tick();
-  assert.match(app.get('hero-title').textContent,/Open observatory/); assert.equal(app.get('hero-image').src,'/runs/root/hero.png');
-  assert.equal(app.posts.filter(post => post.url === '/api/continue').length,1, 'only the explicitly requested continuation survives navigation away');
-  app.ui.activateBranch(alternate); await tick(); await tick(); await tick();
-  assert.equal(app.posts.filter(post => post.url === '/api/continue').length,1, 'reselect does not duplicate the saved continuation');
-  assert.equal(app.get('hero-image').src,'/runs/root/hero.png'); assert.equal(app.get('event-children').children.length,1);
-});
-
-test('a completed explicit continuation remains in the saved tree after navigation away', async () => {
-  const alternate = branch('alt', 'Mammoth steppe', -4500), root = run('root');
-  root.branch.branches.push(alternate); root.branch.hero = {branchId:'alt'}; root.assets = ['hero.png'];
-  const other = run('other', next), child = run('child', next, {rootRunId:'root',parentRunId:'root',parentBranchId:'alt',path:[{runId:'root',branchId:'alt',...alternate}]});
-  let finish; const pending = new Promise(resolve => { finish = resolve; });
-  const app = harness({root, other, child}, async url => {
-    if (url === '/api/event-scene') return Response.json({status:'complete',url:'/runs/root/event-alt.png'});
-    assert.equal(url, '/api/continue'); return pending;
-  });
-  await tick(); await app.ui.loadRun('root', {animate:false}); app.get('access').value = 'fixture';
-  app.ui.activateBranch(alternate);
-  for (let i = 0; i < 8 && app.posts.length < 2; i++) await tick();
-  assert.deepEqual(app.posts.map(post => post.url), ['/api/continue']);
-  app.get('access').value = '';
-  await app.ui.loadRun('other', {animate:false});
-  finish(complete(child));
-  for (let i = 0; i < 8; i++) await tick();
-  await app.ui.loadRun('root', {animate:false});
-  for (let i = 0; i < 6; i++) await tick();
-  assert.ok(findNode(app.get('exploration-tree-status'), node => node?.className === 'tree-run' && node.dataset.runId === 'child'));
-  assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 1, 'returning to the tree does not replay the saved continuation');
-});
-
-test('event consequence buttons preview saved child data without selection or generation until click', async () => {
-  const root=run('preview-parent'); root.continuation.children=[{branchId:'a',runId:'preview-child',status:'complete'}];
-  const child=run('preview-child',next); child.assets=['hero.png'];
-  const grandchild=run('preview-grandchild',branch('g','Mountain observatories',700),{rootRunId:'preview-parent',parentRunId:'preview-child',parentBranchId:'b',path:[{runId:'preview-parent',branchId:'a',...choice},{runId:'preview-child',branchId:'b',...next}]});
-  const app=harness({'preview-parent':root,'preview-child':child,'preview-grandchild':grandchild},async(url,options)=>{
-    assert.equal(url,'/api/continue');
-    assert.deepEqual(JSON.parse(options.body),{runId:'preview-child',branchId:'b'});
-    return complete(grandchild);
-  });
-  await tick(); await app.ui.loadRun('preview-parent',{animate:false,autoConsequences:false}); app.get('access').value='fixture'; app.ui.activateBranch(choice);
-  for(let i=0;i<16 && !app.get('event-children').children.length;i++) await tick();
-  const button=app.get('event-children').children[0];
-  assert.ok(button,`saved child event is present: ${JSON.stringify({state:app.ui.state(),work:app.ui.eventWorkFor('preview-parent','a'),gets:app.gets})}`);
-  button.dispatch('pointerenter');
-  assert.equal(app.ui.state().activePreview.title,next.title);
-  assert.equal(app.ui.state().currentRunId,'preview-parent');
-  assert.equal(app.ui.state().selectedBranchId,'a');
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0,'hover is saved-data only');
-  button.dispatch('pointerleave'); button.focus();
-  assert.equal(app.ui.state().activePreview.title,next.title,'keyboard focus previews the same saved child');
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0,'focus does not submit generation');
-  button.click();
-  for(let i=0;i<24;i++) await tick();
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'click explores only the entered child');
-  assert.equal(app.posts[0].body.runId,'preview-child');
-});
-
-
-test('scene accessible name follows the selected event after navigating between saved worlds', async () => {
-  const root=run('root',choice), other=run('other',next); root.assets=['hero.png']; other.assets=['hero.png'];
-  const app=harness({root,other}); await tick();
-  await app.ui.loadRun('root',{animate:false}); assert.equal(app.get('hero-image').alt,'Scene for Open observatory');
-  await app.ui.loadRun('other',{animate:false});
-  assert.equal(app.get('hero-image').src,'/runs/other/hero.png');
-  assert.equal(app.get('hero-image').alt,'Scene for Ocean observatories');
-});
-
 test('saved model loading indicator clears on success, error, retry and run switch', async () => {
   const root = run('model-root', choice), other = run('other', next);
   root.assets = ['hero.png', 'model.glb']; other.assets = ['hero.png'];
@@ -1966,267 +449,6 @@ test('saved model loading indicator clears on success, error, retry and run swit
   assert.equal(app.get('model-loading-indicator').hidden, true);
 });
 
-test('saved v2 geography shows bounded labels and enables the local terrain preview controls', async () => {
-  const root = run('geography-v2');
-  root.branch.branches[0].geography = { version:2, seaLevelMeters:-115, continentalTransforms:[], changes:[
-    { id:'sundaland-forest-plain', kind:'vegetation', intensity:.9, bounds:[95,-8,120,7], assumption:'A forest spreads across the exposed shelf.', uncertainty:'Vegetation varies locally.' },
-    { id:'coastal-mangrove-fringe', kind:'vegetation', intensity:.6, bounds:[100,-5,118,3], assumption:'Mangroves extend inland.', uncertainty:'Coastal extent is hypothetical.' },
-  ] };
-  const app = harness({[root.id]:root}, undefined, true);
-  await tick(); await app.ui.loadRun(root.id, {animate:false,autoConsequences:false});
-  const legend = textContentDeep(app.get('geography-legend'));
-  assert.match(legend, /Sundaland Forest Plain · Vegetation/);
-  assert.match(legend, /A forest spreads across the exposed shelf/);
-  assert.match(legend, /Vegetation varies locally/);
-  assert.match(legend, /sundaland-forest-plain/);
-  assert.match(legend, /95,-8,120,7/);
-  assert.match(app.get('geography-status').textContent, /illustrative surface changes/);
-  assert.equal(app.get('geography-scenario').disabled, false, 'supported v2 geography remains selectable');
-  assert.equal(app.get('geography-water-number').value, -115, 'the selected v2 sea level initializes its local control');
-  assert.deepEqual(app.ui.state().surfaceGeography, root.branch.branches[0].geography, 'the saved v2 state is retained for the selected event');
-});
-
-test('only explicit entry expands one node once; reentry reuses it and child nodes stay unopened', async () => {
-  const alternate = branch('alt', 'Mammoth steppe', -4500);
-  const root = run('entry-root'); root.branch.branches.push(alternate);
-  const child = run('entry-child', branch('grandchild-choice', 'River observatory', 700), {
-    rootRunId:'entry-root', parentRunId:'entry-root', parentBranchId:'a', path:[{runId:'entry-root',branchId:'a',...choice}],
-  });
-  const app = harness({[root.id]:root,[child.id]:child}, async url => {
-    assert.equal(url, '/api/continue');
-    return complete(child);
-  }, false, '', undefined, undefined, true);
-  await tick(); await app.ui.loadRun(root.id, {animate:false,autoConsequences:false});
-  app.ui.activateBranch(choice);
-  for (let i = 0; i < 16 && !app.posts.some(post => post.url === '/api/continue'); i++) await tick();
-  app.ui.activateBranch(choice);
-  for (let i = 0; i < 12; i++) await tick();
-  assert.deepEqual(app.posts.filter(post => post.url === '/api/continue').map(post => [post.body.runId,post.body.branchId]), [['entry-root','a']]);
-  assert.equal(app.ui.state().currentRunId, 'entry-root');
-  assert.equal(app.posts.some(post => post.body?.runId === 'entry-child'), false, 'the generated child is not expanded in the background');
-});
-
-test('an entered node gets three undated direct-child placeholders that disappear when saved children arrive', async () => {
-  const root = run('placeholder-root');
-  const sibling = branch('sibling', 'Another observatory', 700);
-  root.branch.branches.push(sibling);
-  const child = run('placeholder-child', branch('child-choice', 'River observatory', 730), {
-    rootRunId: root.id, parentRunId: root.id, parentBranchId: choice.id,
-    path: [{ runId: root.id, branchId: choice.id, ...choice }],
-  });
-  let release;
-  const pending = new Promise(resolve => { release = resolve; });
-  const app = harness({ [root.id]: root, [child.id]: child }, async (url, options) => {
-    assert.equal(url, '/api/continue');
-    return pending;
-  }, false, '', undefined, undefined, true);
-  await tick();
-  await app.ui.loadRun(root.id, { animate:false, autoConsequences:false });
-  app.get('access').value = 'fixture';
-  app.ui.activateBranch(choice);
-  for (let index = 0; index < 16 && !app.posts.some(post => post.url === '/api/continue'); index++) await tick();
-
-  const parentId = `${encodeURIComponent(root.id)}::${encodeURIComponent(choice.id)}`;
-  const state = app.ui.state();
-  const placeholders = state.starMapNodes.filter(node => node.isExpansionPlaceholder);
-  assert.equal(placeholders.length, 3);
-  assert.equal(JSON.stringify(placeholders.map(node => node.id)), JSON.stringify([1, 2, 3].map(index => `placeholder:${parentId}:${index}`)));
-  assert.ok(placeholders.every(node => node.parentId === parentId && node.role === 'generation-placeholder'));
-  assert.ok(placeholders.every(node => node.selectable === false && node.mapState === 'generating'));
-  assert.ok(placeholders.every(node => node.year === null && node.yearCoordinate === null && node.yearLabel === 'Time unknown'));
-  assert.ok(placeholders.every(node => node.lineageIds.at(-1) === parentId));
-  assert.ok(state.starMapNodes.every(node => !node.otherTree), 'descendants under the same root question are not greyed as another tree');
-  const selectedId = parentId;
-  await app.ui.selectStarMapNode(placeholders[0].id);
-  assert.equal(app.ui.state().currentRunId, root.id, 'pending possibility cannot be entered');
-  assert.equal(app.ui.state().selectedBranchId, choice.id);
-  assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 1, 'placeholder selection cannot enqueue generation');
-  assert.equal(app.ui.state().starMapNodes.find(node => node.id === selectedId).mapState, 'generating');
-
-  release(complete(child));
-  for (let index = 0; index < 30 && app.ui.state().starMapNodes.some(node => node.isExpansionPlaceholder); index++) await tick();
-  assert.equal(app.ui.state().starMapNodes.some(node => node.isExpansionPlaceholder), false);
-  assert.ok(app.ui.state().starMapNodes.some(node => node.runId === child.id && node.branchId === 'child-choice'));
-  assert.equal(app.posts.filter(post => post.url === '/api/continue').length, 1, 'saved direct children do not expand in the background');
-});
-
-test('health usage is authoritative when local per-node storage is empty', async () => {
-  const root=run('cap-health'); root.branch.branches.push(choice);
-  const app=harness({ 'cap-health':root },undefined,false,'',undefined,undefined,true,undefined,undefined,setTimeout,clearTimeout,null, url => url==='/health' ? Response.json({status:'ok',replayOnly:false,localReviewAccess:true,expansionLimit:20,expansionUsed:20}) : null);
-  await tick(); await app.ui.loadRun('cap-health',{animate:false,autoConsequences:false});
-  app.get('access').value='fixture'; app.ui.activateBranch(choice); for(let i=0;i<5;i++) await tick();
-  assert.equal(app.ui.state().serverExpansionUsed,20);
-  assert.equal(app.ui.state().enteredNodesCount,0,'server cap usage is separate from browser-tab node dedupe');
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0);
-  assert.match(app.get('status').textContent,/reached its exploration limit \(20\)/i);
-});
-
-test('server cap response reconciles usage and blocks a second node without a spinner', async () => {
-  const root=run('cap-response'); root.branch.branches.push(choice,next);
-  const app=harness({ 'cap-response':root },async url=>Response.json({error:'This browser session reached its exploration limit.',code:'session_expansion_limit',used:20,limit:20},{status:429}),false,'',undefined,undefined,true,undefined,undefined,setTimeout,clearTimeout,null,url=>url==='/health'?Response.json({status:'ok',replayOnly:false,localReviewAccess:true,expansionLimit:20,expansionUsed:19}):null);
-  await tick(); await app.ui.loadRun('cap-response',{animate:false,autoConsequences:false}); app.get('access').value='fixture';
-  app.ui.activateBranch(choice); for(let i=0;i<8;i++) await tick();
-  assert.equal(app.ui.state().serverExpansionUsed,20);
-  assert.equal(app.ui.state().expansionLimit,20);
-  assert.match(app.get('event-progress').textContent,/reached its exploration limit \(20\)/i);
-  assert.equal(app.get('view-loading-indicator').hidden,true);
-  app.ui.activateBranch(next); for(let i=0;i<5;i++) await tick();
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'the authoritative cap blocks another dispatch');
-  assert.equal(app.ui.state().enteredNodesCount,0,'a server refusal does not poison per-node retry dedupe');
-});
-
-test('a queued entry cancelled before dispatch does not consume local expansion capacity', async () => {
-  const branches=[choice,next,branch('queued-3','Queued third',-300),branch('queued-4','Queued fourth',-200),branch('queued-5','Queued fifth',-100)];
-  const root=run('queued-abort'), other=run('queued-abort-target'); root.branch.branches.push(...branches);
-  const app=harness({'queued-abort':root,'queued-abort-target':other},async()=>{throw new Error('No request should dispatch');},false);
-  await tick(); await app.ui.loadRun('queued-abort',{animate:false,autoConsequences:false}); app.get('access').value='fixture';
-  for(const item of branches) app.ui.activateBranch(item);
-  app.ui.loadRun('queued-abort-target',{animate:false,autoConsequences:false});
-  for(let i=0;i<12;i++) await tick();
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,0);
-  assert.equal(app.ui.state().enteredNodesCount,0);
-  assert.equal(app.ui.state().pendingExpansionCount,0);
-});
-
-test('scene retry remains available after saved children complete and cannot re-expand the event', async () => {
-  const alternate=branch('alt','Mammoth steppe',-4500), root=run('scene-retry-root'); root.branch.branches.push(alternate); root.assets=['hero.png'];
-  const child=run('scene-retry-child',branch('c','River observatory',-4400));
-  let sceneAttempts=0, sceneChecks=0;
-  const app=harness({ 'scene-retry-root':root,'scene-retry-child':child },async url=>{
-    if(url==='/api/event-scene') { sceneAttempts++; return sceneAttempts===1
-      ? Response.json({error:'Scene service unavailable'},{status:503})
-      : Response.json({status:'complete',url:'/runs/scene-retry-root/event-alt.png'}); }
-    assert.equal(url,'/api/continue'); return complete(child);
-  },false,'',undefined,undefined,true,()=>++sceneChecks<3?Response.json({error:'Scene service unavailable'},{status:503}):Response.json({status:'missing'}));
-  await tick(); await app.ui.loadRun('scene-retry-root',{animate:false,autoConsequences:false}); app.get('access').value='fixture';
-  app.ui.activateBranch(alternate);
-  for(let i=0;i<24 && app.get('event-scene-action').hidden;i++) await tick();
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1);
-  assert.equal(app.get('event-children').children.length,1,'the selected event has saved consequences');
-  assert.equal(app.get('event-scene-action').textContent,'Retry scene',JSON.stringify(app.ui.state().selectedWork));
-  assert.match(app.get('event-progress').textContent,/Could not check this event’s scene/);
-  await app.get('event-scene-action').click();
-  for(let i=0;i<24 && sceneAttempts<2;i++) await tick();
-  for(let i=0;i<12;i++) await tick();
-  assert.equal(sceneAttempts,1,'the explicit retry remains scoped to saved scene availability');
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'scene retry and reentry never expand saved children again');
-  assert.equal(app.get('event-children').children.length,1);
-  app.ui.activateBranch(alternate); for(let i=0;i<8;i++) await tick();
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'re-entering the completed node does not submit a duplicate continuation');
-});
-
-test('a confirmed missing scene offers explicit generation while preserving saved children', async () => {
-  const alternate=branch('alt','Mammoth steppe',-4500), root=run('missing-scene-root');
-  root.branch.branches.push(alternate); root.assets=['hero.png'];
-  root.continuation.children=[{branchId:'alt',runId:'saved-child',status:'complete'}];
-  const child=run('saved-child',branch('c','River observatory',-4400));
-  let sceneChecks=0;
-  const app=harness({'missing-scene-root':root,'saved-child':child},async url=>{
-    assert.equal(url,'/api/event-scene');
-    return Response.json({status:'complete',url:'/runs/missing-scene-root/event-alt.png'});
-  },false,'',undefined,undefined,true,()=>{sceneChecks++;return Response.json({status:'missing'});});
-  await tick(); await app.ui.loadRun('missing-scene-root',{animate:false,autoConsequences:false});
-  app.get('access').value='fixture'; app.ui.activateBranch(alternate);
-  for(let i=0;i<24 && app.get('event-scene-action').hidden;i++) await tick();
-  assert.ok(sceneChecks>0,'entry checks for the saved scene');
-  assert.equal(app.posts.some(post=>post.url==='/api/event-scene'),false,'entry does not generate the missing scene automatically');
-  assert.equal(app.posts.some(post=>post.url==='/api/continue'),false,'the saved child is restored without another continuation');
-  assert.equal(app.get('event-children').children.length,1);
-  assert.equal(app.get('event-scene-action').textContent,'Generate scene');
-  app.get('event-scene-action').click(); app.get('event-scene-action').click();
-  for(let i=0;i<24 && !app.posts.some(post=>post.url==='/api/event-scene');i++) await tick();
-  for(let i=0;i<12;i++) await tick();
-  assert.equal(app.posts.filter(post=>post.url==='/api/event-scene').length,1,'rapid clicks share one in-flight scene request');
-  assert.equal(app.posts.some(post=>post.url==='/api/continue'),false,'scene generation cannot re-expand saved children');
-  assert.equal(app.get('event-children').children.length,1,'the saved consequence remains visible');
-  assert.equal(app.get('event-scene-action').hidden,true,'a completed scene clears the action');
-});
-
-test('scene generation stays available during consequence work and both retries remain independent', async () => {
-  const alternate=branch('alt','Mammoth steppe',-4500), root=run('parallel-scene-root');
-  root.branch.branches.push(alternate); root.assets=['hero.png'];
-  let continuePosts=0, scenePosts=0, releaseContinue, releaseScene;
-  const pendingContinue=new Promise(resolve=>{releaseContinue=resolve;});
-  const pendingScene=new Promise(resolve=>{releaseScene=resolve;});
-  const failedContinuation=()=>new Response('event: error\ndata: {"status":"retryable","message":"Fixture continuation failure"}\n\n',{headers:{'content-type':'text/event-stream'}});
-  const app=harness({'parallel-scene-root':root},async url=>{
-    if(url==='/api/continue') { continuePosts++; return continuePosts===1 ? pendingContinue : failedContinuation(); }
-    assert.equal(url,'/api/event-scene'); scenePosts++;
-    return pendingScene;
-  },false,'',undefined,undefined,true,()=>Response.json({status:'missing'}));
-  await tick(); await app.ui.loadRun('parallel-scene-root',{animate:false,autoConsequences:false});
-  app.get('access').value='fixture'; app.ui.activateBranch(alternate);
-  for(let i=0;i<24 && app.get('event-scene-action').hidden;i++) await tick();
-  assert.equal(continuePosts,1,`the consequence request is still in flight: ${JSON.stringify({state:app.ui.state(),work:app.ui.eventWorkFor(root.id,'alt'),posts:app.posts})}`);
-  assert.equal(app.get('event-retry').hidden,true,'consequence retry waits for its active request');
-  assert.equal(app.get('event-scene-action').textContent,'Generate scene','missing scene action stays available during consequence work');
-  app.get('event-scene-action').click(); app.get('event-scene-action').click();
-  for(let i=0;i<24 && scenePosts===0;i++) await tick();
-  assert.equal(scenePosts,1,'two rapid clicks create only one scene POST');
-  assert.equal(continuePosts,1,'scene generation does not retry consequences');
-  releaseContinue(failedContinuation());
-  for(let i=0;i<24 && app.get('event-retry').hidden;i++) await tick();
-  assert.equal(app.get('event-retry').hidden,false,'failed consequences expose their own retry even while scene work is active');
-  assert.equal(app.get('event-scene-action').hidden,true,'the in-flight scene action cannot be submitted again');
-  releaseScene(Response.json({error:'Fixture scene failure'},{status:503}));
-  for(let i=0;i<24 && app.get('event-scene-action').hidden;i++) await tick();
-  assert.equal(app.get('event-retry').hidden,false,'failed consequences keep their own retry action');
-  assert.equal(app.get('event-scene-action').hidden,false,'scene retry remains available alongside consequence retry');
-  assert.equal(app.get('event-scene-action').textContent,'Retry scene','a failed scene remains independently retryable');
-  assert.equal(app.get('event-retry').textContent,'Try again','the consequence action remains separate from scene retry');
-  assert.equal(scenePosts,1,'showing both actions does not duplicate the scene request');
-});
-
-test('leaving an entered node aborts its in-flight continuation request', async () => {
-  const root = run('abort-root'), nextRun = run('abort-target');
-  let requestSignal;
-  const app = harness({[root.id]:root,[nextRun.id]:nextRun}, async (url, options) => {
-    assert.equal(url, '/api/continue'); requestSignal = options.signal;
-    return new Promise(() => {});
-  }, false, '', undefined, undefined, true);
-  await tick(); await app.ui.loadRun(root.id, {animate:false,autoConsequences:false});
-  app.ui.activateBranch(choice);
-  for (let i = 0; i < 12 && !requestSignal; i++) await tick();
-  assert.ok(requestSignal, 'explicit entry starts a continuation');
-  assert.equal(app.ui.state().starMapNodes.filter(node => node.isExpansionPlaceholder).length, 3);
-  const navigation = app.ui.loadRun(nextRun.id, {animate:false,autoConsequences:false});
-  assert.equal(app.ui.state().starMapNodes.some(node => node.isExpansionPlaceholder), false, 'aborting navigation removes pending clouds immediately while the saved graph is loading');
-  await navigation;
-  assert.equal(requestSignal.aborted, true, 'navigation aborts generation for the node being left');
-});
-
-test('clicking a selected saved 1824 event after its scene check dispatches one continuation', async () => {
-  const selected = branch('b1', 'Doggerland Reed Paper Transforms Publishing', 1824);
-  const root = run('selected-1824', branch('hero', 'Saved opening event', 1735));
-  root.branch.branches.push(selected);
-  root.assets = ['hero.png'];
-  const child = run('selected-1824-child', branch('later-paper', 'Later paper workshops', 1900), {
-    rootRunId:root.id, parentRunId:root.id, parentBranchId:selected.id,
-    path:[{runId:root.id,branchId:selected.id,...selected}],
-  });
-  const app = harness({[root.id]:root,[child.id]:child}, async url => {
-    assert.equal(url, '/api/continue');
-    return complete(child);
-  }, false, '', undefined, undefined, true, () => Response.json({status:'complete',url:'/event-scenes/saved-1824.png'}));
-  await tick();
-  await app.ui.loadRun(root.id, {animate:false,autoConsequences:false});
-  for (let index=0; index<20 && !app.ui.eventWorkFor?.(root.id,selected.id)?.sceneCheckDone; index++) await tick();
-  const nodeId = `${encodeURIComponent(root.id)}::${encodeURIComponent(selected.id)}`;
-  const eventNode = app.starMap.nodes.find(node => node.id === nodeId);
-  assert.ok(eventNode, 'the exact saved event is present in the rendered map');
-  assert.equal(eventNode.mapState, 'saved-unexplored');
-  assert.equal(app.ui.eventWorkFor(root.id, selected.id).sceneCheckDone, true, 'the read-only scene check finished before entry');
-  assert.equal(app.ui.eventWorkFor(root.id, selected.id).interrupted, true, 'the completed scene lookup leaves no active work');
-
-  app.starMap.select(nodeId);
-  for (let index=0; index<20 && !app.posts.some(post=>post.url==='/api/continue'); index++) await tick();
-  assert.deepEqual(app.posts.filter(post=>post.url==='/api/continue').map(post=>[post.body.runId,post.body.branchId]), [[root.id,'b1']]);
-  for (let index=0; index<16; index++) await tick();
-  app.starMap.select(nodeId);
-  for (let index=0; index<10; index++) await tick();
-  assert.equal(app.posts.filter(post=>post.url==='/api/continue').length,1,'re-entry reuses the saved children without a duplicate continuation');
-});
-
 test('desktop story mode collapses New exploration and keeps voice disclosure tied to it', async () => {
   const root=run('desktop-invitation',choice);
   const app=harness({[root.id]:root},undefined,false,'',undefined,undefined,false,undefined,undefined,setTimeout,clearTimeout,null,url=>url==='/health'
@@ -2248,32 +470,4 @@ test('desktop story mode collapses New exploration and keeps voice disclosure ti
   assert.equal(app.document.body.classList.contains('invitation-open'),false);
   assert.equal(button.getAttribute('aria-expanded'),'false');
   assert.equal(voiceDisclosure.open,false);
-});
-
-test('authored question submission sends a validated parent reference for current-world attachment', async () => {
-  const root = run('attach-root', choice);
-  const generated = run('new-question', next);
-  const app = harness({ 'attach-root':root, 'new-question':generated }, async url => {
-    assert.equal(url, '/api/run');
-    return complete(generated);
-  }, false, '', undefined, undefined, true);
-  await tick();
-  await app.ui.loadRun('attach-root', { animate:false, autoConsequences:false });
-  app.ui.setAtlasAttachmentIntent({ mode:'current-world' });
-  await app.ui.runPrompt('What if the observatory network changed?');
-  const request = app.posts.find(item => item.url === '/api/run');
-  assert.deepEqual(request.body.attachment, { mode:'current-world', parentRunId:'attach-root', parentBranchId:'a' });
-  assert.equal(request.body.divergence, 'What if the observatory network changed?');
-});
-
-test('authored present-day question attaches to the 2026 trunk without a parent event reference', async () => {
-  const root = run('present-root', choice);
-  const generated = run('new-present-question', next);
-  const app = harness({ 'present-root':root, 'new-present-question':generated }, async () => complete(generated), false, '', undefined, undefined, true);
-  await tick();
-  await app.ui.loadRun('present-root', { animate:false, autoConsequences:false });
-  app.ui.setAtlasAttachmentIntent({ mode:'present-day', divergenceYear:2026, divergencePlace:{ name:'Alexandria', lat:31.2, lon:29.9 } });
-  await app.ui.runPrompt('What if river sensors arrived earlier?');
-  const request = app.posts.find(item => item.url === '/api/run');
-  assert.deepEqual(request.body.attachment, { mode:'present-day', divergenceYear:2026, divergencePlace:{ name:'Alexandria', lat:31.2, lon:29.9 } });
 });

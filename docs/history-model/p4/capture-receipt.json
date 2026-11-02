@@ -1,0 +1,159 @@
+{
+  "date": "2026-11-02",
+  "timezone": "America/Toronto",
+  "mode": "configured loopback replay-only; no paid model calls",
+  "screenshots": [
+    {
+      "asOfYear": 1978,
+      "file": "deep-sea-levels-1440.jpg",
+      "viewport": [
+        1440,
+        900
+      ],
+      "orbitEnabled": false,
+      "level": "atlas",
+      "histories": 7,
+      "selectedEvent": "1978 CE Canopy Walkway Exploration Network"
+    },
+    {
+      "asOfYear": 1978,
+      "file": "deep-sea-levels-375.jpg",
+      "viewport": [
+        375,
+        812
+      ],
+      "orbitEnabled": true,
+      "spheres": 7,
+      "level": "orbit",
+      "selectedEvent": "1978 CE Canopy Walkway Exploration Network"
+    },
+    {
+      "boundedFrame": [
+        -4.25,
+        4.25,
+        -2.35,
+        2
+      ],
+      "viewport": [
+        1440,
+        900
+      ],
+      "gold": 1,
+      "level": "atlas",
+      "file": "green-sahara-1440.jpg",
+      "cyan": 1,
+      "histories": 1,
+      "asOfYear": 550,
+      "orbitEnabled": false
+    },
+    {
+      "gold": 1,
+      "cyan": 1,
+      "asOfYear": 550,
+      "file": "green-sahara-375.jpg",
+      "viewport": [
+        375,
+        812
+      ],
+      "level": "surface",
+      "selectedEvent": "2800 BCE Sailboats Cross Megalake Chad"
+    }
+  ],
+  "recording": {
+    "frames": 76,
+    "file": "zoom-out-phone.webm",
+    "encodedFps": 12,
+    "timing": "CDP frame timestamps preserved; not a render-FPS measurement",
+    "samples": [
+      {
+        "date": "1978",
+        "level": "surface",
+        "orbit": "true",
+        "spheres": "1"
+      },
+      {
+        "date": "1978",
+        "level": "surface",
+        "orbit": "true",
+        "spheres": "1"
+      },
+      {
+        "date": "1978",
+        "level": "lift",
+        "orbit": "true",
+        "spheres": "1"
+      },
+      {
+        "date": "1978",
+        "level": "lift",
+        "orbit": "true",
+        "spheres": "1"
+      },
+      {
+        "date": "1978",
+        "level": "orbit",
+        "orbit": "true",
+        "spheres": "7"
+      },
+      {
+        "date": "1978",
+        "level": "orbit",
+        "orbit": "true",
+        "spheres": "7"
+      },
+      {
+        "date": "1978",
+        "level": "atlas",
+        "orbit": "true",
+        "spheres": "18"
+      },
+      {
+        "date": "1978",
+        "level": "atlas",
+        "orbit": "true",
+        "spheres": "18"
+      },
+      {
+        "date": "1978",
+        "level": "atlas",
+        "orbit": "true",
+        "spheres": "18"
+      }
+    ],
+    "input": "native CDP wheel at unobstructed canvas margin",
+    "viewport": [
+      375,
+      812
+    ],
+    "durationSeconds": 24.083
+  },
+  "additionalChecks": {
+    "defaultConfiguredKeylessHistoryAccess": true,
+    "railAndGeographyWheelLeaveCameraUnchanged": true,
+    "singleHistoryDirectSurfaceToAtlas": true,
+    "freshKeylessQuestionOpensMetaSetup": true,
+    "visibleSliderCount": 1,
+    "phoneHorizontalOverflow": false,
+    "singleHistoryOrbitOptionHidden": true,
+    "multiHistoryOrbitOffDirectToAtlas": true
+  },
+  "tests": {
+    "command": "npm test",
+    "failed": 0,
+    "skipped": 0,
+    "node": "22.23.3",
+    "passed": 718,
+    "gitleaks": "staged scan passed; no leaks found"
+  },
+  "modelCalls": 0,
+  "validationCostUsd": 0,
+  "remainingImplementation": "none in the requested four phases",
+  "limits": "Saved-story fixtures and injected model tests; no live-output quality or physical-device claim",
+  "sha256": {
+    "deep-sea-levels-1440.jpg": "741f25d08a04dedc5805da253aa23d0eb13642f290f01764ccfdd84ceb189836",
+    "deep-sea-levels-375.jpg": "15f03fd475b1f89130de04e3a238917aaf3e027f6286a2e0b08ef9c35bdd2924",
+    "green-sahara-1440.jpg": "baac1f33a14ef2b04835abf5d7c9879d16b6e607cad1d6131474e20b7b921ee0",
+    "green-sahara-375.jpg": "c898477dd4d5b46d225dda993265d609585d983cc47ad070cc573d7e542f25eb",
+    "zoom-out-phone.webm": "77b59b4837efe8cf2cee4e23ee41ace6718330f67918fb752a31dcfb58383ebe"
+  }
+}

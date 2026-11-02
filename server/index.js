@@ -11,6 +11,8 @@ import { createContinuationStore } from '../src/demo/continuationStore.js';
 import { createHistoryStore } from '../src/demo/historyStore.js';
 import { createHistoryAgent } from '../src/agents/historyAgent.js';
 import { createHistoryService } from '../src/demo/historyService.js';
+import { createHistoryQuestionAgent, HistoryQuestionError, dateWindowFor } from '../src/demo/historyQuestion.js';
+import { createHistoryMediaStore, historyEventRevision } from '../src/demo/historyMediaStore.js';
 import { createMetaClient } from '../src/lib/metaClient.js';
 import { fileLedger } from '../src/lib/spendLedger.js';
 import { composeGeography } from '../web/historyModel.js';
@@ -64,7 +66,7 @@ function canonicalJson(value) {
   return value;
 }
 
-export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), evidencePath = resolve('demo/evidence/v1.json'), runPipeline, renderEventScene, segmentEventCutout, transcribeAudio, runnerFactories = {}, historyService: injectedHistoryService, voiceTimeoutMs = 45_000, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now, importRunIds = [], maxContinuationDepth = MAX_CONTINUATION_DEPTH, maxConcurrentJobs = Number(env.DEMO_MAX_CONCURRENT_JOBS ?? 3), localReviewAccess = false, packagedReplayRoot = resolve(fileURLToPath(new URL('../demo/replay-history/', import.meta.url))) } = {}) {
+export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), evidencePath = resolve('demo/evidence/v1.json'), runPipeline, renderEventScene, segmentEventCutout, renderHistoryScene, segmentHistoryCutout, historyQuestionGenerator, transcribeAudio, runnerFactories = {}, historyService: injectedHistoryService, voiceTimeoutMs = 45_000, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now, importRunIds = [], maxContinuationDepth = MAX_CONTINUATION_DEPTH, maxConcurrentJobs = Number(env.DEMO_MAX_CONCURRENT_JOBS ?? 3), localReviewAccess = false, localReplayHistoryAccess = false, packagedReplayRoot = resolve(fileURLToPath(new URL('../demo/replay-history/', import.meta.url))) } = {}) {
   if (!Number.isInteger(maxConcurrentJobs) || maxConcurrentJobs < 1 || maxConcurrentJobs > 8) throw new RangeError('maxConcurrentJobs must be an integer from 1 to 8');
   // Keep browser-entered Meta credentials in this server instance only. Never
   // mutate process.env or the caller's configuration object.
@@ -74,8 +76,10 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
   const bootReplayOnly = runtimeEnv.DEMO_REPLAY_ONLY;
   const bootVoiceEnabled = runtimeEnv.DEMO_VOICE_ENABLED;
   const bootLocalReviewAccess = localReviewAccess;
+  const bootLocalReplayHistoryAccess = localReplayHistoryAccess;
   let localMetaKeyOverrideActive = false;
   let localReviewAccessEnabled = localReviewAccess;
+  let localReplayHistoryAccessEnabled = localReplayHistoryAccess;
   let activeJobs = 0;
   const acquireJob = () => { if (activeJobs >= maxConcurrentJobs) return false; activeJobs++; return true; };
   const releaseJob = () => { activeJobs = Math.max(0, activeJobs - 1); };
@@ -118,6 +122,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
   const expansionBudget = createExpansionBudget(expansionLimit, { filePath: writableRootIsPackage ? undefined : join(liveRoot, '.expansion-sessions.json') });
   const store = createContinuationStore(liveRoot, now);
   const historyStore = createHistoryStore(liveRoot, now);
+  const historyMedia = createHistoryMediaStore(liveRoot, { now });
   let activeHistoryService = injectedHistoryService ?? null;
   let historyServicePromise = null;
   let historyServiceLiveMode = injectedHistoryService ? null : null;
@@ -253,16 +258,21 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     return saved?.branch?.status !== 'ok';
   }
   for (const record of store.list()) liveRoots.set(record.id, liveRoot);
-  function localBrowserAccess(req) {
+  function localBrowserRequest(req) {
     const address = server.address();
     const bindHost = address?.address === '::1' ? '[::1]' : address?.address === '127.0.0.1' ? '127.0.0.1' : '';
     const host = address && typeof address === 'object' && bindHost ? `${bindHost}:${address.port}` : '';
     const localPeer = ['127.0.0.1', '::ffff:127.0.0.1', '::1'].includes(req.socket.remoteAddress);
     const browserOrigin = req.headers.origin;
-    return localReviewAccessEnabled === true && !!bindHost && localPeer && req.headers.host === host
+    return !!bindHost && localPeer && req.headers.host === host
       && req.headers['sec-fetch-site'] === 'same-origin'
       && (req.method === 'GET' || req.method === 'HEAD' ? (!browserOrigin || browserOrigin === `http://${host}`) : browserOrigin === `http://${host}`);
   }
+  function localBrowserAccess(req) { return localReviewAccessEnabled === true && localBrowserRequest(req); }
+  function hasLocalReplayHistoryBrowserAccess(req) {
+    return localReplayHistoryAccessEnabled === true && replayOnly() && localBrowserRequest(req);
+  }
+  function historyAuthorized(req) { return authorized(req) || hasLocalReplayHistoryBrowserAccess(req); }
   function localMetaSetupAccess(req, { allowMissingOrigin = false } = {}) {
     const address = server.address();
     const bindHost = address?.address === '::1' ? '[::1]' : address?.address === '127.0.0.1' ? '127.0.0.1' : '';
@@ -291,7 +301,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     secrets = [runtimeEnv.DEMO_ACCESS_CODE, runtimeEnv.META_API_KEY, runtimeEnv.MODEL_API_KEY, runtimeEnv.CHRONOS_API_TOKEN, runtimeEnv.CHRONOS_API_BASE, runtimeEnv.CHRONOS_3D_ENDPOINT].filter(x => typeof x === 'string' && x.length > 0);
   }
   function localMetaSetupState(req) {
-    return { setupAvailable: localMetaSetupAccess(req, { allowMissingOrigin: req.method === 'GET' || req.method === 'HEAD' }), metaKeyConfigured: hasMetaKey(), metaKeyOverrideActive: localMetaKeyOverrideActive, replayOnly: replayOnly(), localReviewAccess: localBrowserAccess(req) };
+    return { setupAvailable: localMetaSetupAccess(req, { allowMissingOrigin: req.method === 'GET' || req.method === 'HEAD' }), metaKeyConfigured: hasMetaKey(), metaKeyOverrideActive: localMetaKeyOverrideActive, replayOnly: replayOnly(), localReviewAccess: localBrowserAccess(req), localReplayHistoryAccess: hasLocalReplayHistoryBrowserAccess(req) };
   }
   function restoreEnvValue(name, value) {
     if (value === undefined) delete runtimeEnv[name]; else runtimeEnv[name] = value;
@@ -301,6 +311,34 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     if (factoryName === 'createDemoTranscriber') return createDemoTranscriber({ ...options, env: runtimeEnv });
     const pipeline = await import('../src/demo/pipeline.js');
     return pipeline[factoryName]({ ...options, env: runtimeEnv });
+  }
+  let modelContext = null;
+  function invalidateHistoryModels() {
+    modelContext = null;
+    if (!injectedHistoryService) {
+      activeHistoryService = null;
+      historyServiceLiveMode = null;
+      historyServicePromise = null;
+    }
+  }
+  function getHistoryModelContext() {
+    const signature = createHash('sha256').update(JSON.stringify([
+      runtimeEnv.META_API_KEY ?? '', runtimeEnv.MODEL_API_KEY ?? '', runtimeEnv.META_API_BASE_URL ?? '',
+      runtimeEnv.META_SPEND_CAP_USD ?? '', runtimeEnv.META_DAILY_SPEND_CAP_USD ?? '', runtimeEnv.TOPIC_POLICY_BLOCK ?? '',
+      runtimeEnv.META_TEXT_MODEL_POLICY_PROMPT ?? '', runtimeEnv.META_TEXT_MODEL_POLICY_BRANCHES ?? '',
+    ])).digest('hex');
+    if (modelContext?.signature === signature) return modelContext;
+    const spendCapUsd = configuredSpendCap({ env: runtimeEnv, outputRoot: liveRoot });
+    const dailyCapUsd = configuredDailyCap({ env: runtimeEnv, spendCapUsd });
+    const ledger = fileLedger(resolveLedgerPath({ env: runtimeEnv, outputRoot: liveRoot }), { requireExisting: true });
+    const client = createMetaClient({ env: runtimeEnv, ledger, spendCapUsd, dailyCapUsd });
+    const categories = categoriesFromEnv(runtimeEnv);
+    const policy = createTopicPolicy({ categories,
+      classifyPrompt: createModelClassifier(client, { model: runtimeEnv.META_TEXT_MODEL_POLICY_PROMPT || 'muse-spark-1.3', categories }),
+      classifyBranches: createModelClassifier(client, { model: runtimeEnv.META_TEXT_MODEL_POLICY_BRANCHES || 'muse-spark-1.3', categories }),
+    });
+    modelContext = { signature, client, policy, dailyCapUsd };
+    return modelContext;
   }
   async function getHistoryService() {
     if (injectedHistoryService) return injectedHistoryService;
@@ -313,13 +351,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           async checkRipple() { throw new Error('Live history checks are disabled. Use replay mode.'); },
           async checkSuggestion() { const error = new Error('Live history compatibility checks are disabled in replay mode.'); error.code = 'suggestion_recheck_unavailable'; throw error; } };
       } else {
-        const spendCapUsd = configuredSpendCap({ env: runtimeEnv, outputRoot: liveRoot });
-        const dailyCapUsd = configuredDailyCap({ env: runtimeEnv, spendCapUsd });
-        const ledger = fileLedger(resolveLedgerPath({ env: runtimeEnv, outputRoot: liveRoot }), { requireExisting: true });
-        const client = createMetaClient({ env: runtimeEnv, ledger, spendCapUsd, dailyCapUsd });
-        const categories = categoriesFromEnv(runtimeEnv);
-        const classifyBranches = createModelClassifier(client, { categories });
-        const policy = createTopicPolicy({ categories, classifyBranches });
+        const { client, policy } = getHistoryModelContext();
         agent = createHistoryAgent({ client, policy, model: runtimeEnv.META_TEXT_MODEL_PLANNER || 'muse-wonder-1.0',
           rippleModel: runtimeEnv.META_TEXT_MODEL_POLICY_BRANCHES || 'muse-spark-1.3' });
       }
@@ -368,6 +400,41 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         ...(error?.conflictsWith ? { conflictsWith: error.conflictsWith } : {}), ...(error?.reason ? { reason: error.reason } : {}),
         ...(error?.suggestion ? { suggestion: clean(error.suggestion) } : {}) });
     }
+  }
+  async function readHistoryMediaSource(event, identity) {
+    const reference = event?.sceneRef?.status === 'complete' ? event.sceneRef : event?.heroRef;
+    const url = typeof reference === 'string' ? reference : reference?.url;
+    const match = typeof url === 'string' && /^\/(history-media|event-scenes)\/([a-f0-9]{64})\.png$/i.exec(url);
+    const runAsset = typeof url === 'string' && /^\/runs\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/hero\.png$/.exec(url);
+    if (!match && !runAsset) return null;
+    try {
+      let path;
+      if (match) {
+        const [, kind, key] = match;
+        const isHistoryMedia = kind.toLowerCase() === 'history-media';
+        const record = isHistoryMedia ? historyMedia.byKey(key) : scenes.byKey(key);
+        if (record?.status !== 'complete' || record.key !== key) return null;
+        if (isHistoryMedia && (!identity || record.kind !== 'scene' || record.questionId !== identity.questionId
+            || record.historyId !== identity.historyId || record.eventId !== identity.eventId || record.revision !== identity.revision)) return null;
+        path = isHistoryMedia ? historyMedia.imagePath(key) : scenes.imagePath(key);
+      } else {
+        const run = await manifest(runAsset[1]);
+        if (!run?.assets?.includes('hero.png')) return null;
+        let found;
+        for (const root of [runsRoot, liveRoot]) {
+          try {
+            const actualRoot = await realpath(root), actual = await realpath(join(root, runAsset[1], 'hero.png'));
+            if (actual.startsWith(actualRoot + (actualRoot.includes('\\') ? '\\' : '/'))) { found = actual; break; }
+          } catch { /* try the other registered run root */ }
+        }
+        if (!found) return null;
+        path = found;
+      }
+      const actualRoot = await realpath(liveRoot), actualPath = await realpath(path);
+      if (!runAsset && !actualPath.startsWith(actualRoot + (actualRoot.includes('\\') ? '\\' : '/'))) return null;
+      const image = await readFile(actualPath);
+      return image.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) ? image : null;
+    } catch { return null; }
   }
   function clean(value) {
     if (typeof value === 'string') return secrets.reduce((s, secret) => s.split(secret).join('[redacted]'), value);
@@ -642,6 +709,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           if (candidateEnv.DEMO_VOICE_ENABLED !== runtimeEnv.DEMO_VOICE_ENABLED) runtimeEnv.DEMO_VOICE_ENABLED = candidateEnv.DEMO_VOICE_ENABLED;
           localMetaKeyOverrideActive = true;
           localReviewAccessEnabled = true;
+          invalidateHistoryModels();
           refreshSecrets();
         } else {
           restoreEnvValue('META_API_KEY', bootMetaApiKey);
@@ -650,12 +718,14 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           restoreEnvValue('DEMO_VOICE_ENABLED', bootVoiceEnabled);
           localMetaKeyOverrideActive = false;
           localReviewAccessEnabled = bootLocalReviewAccess;
+          localReplayHistoryAccessEnabled = bootLocalReplayHistoryAccess;
+          invalidateHistoryModels();
           refreshSecrets();
         }
         return json(res, 200, localMetaSetupState(req));
       }
       if (path === '/api/history/preferences' && (req.method === 'GET' || req.method === 'PUT')) {
-        if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.', code: 'unauthorized' });
+        if (!historyAuthorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.', code: 'unauthorized' });
         const sessionId = expansionCookieId(req);
         if (!expansionBudget.known(sessionId)) return json(res, 403, { error: 'A valid browser session is required.', code: 'invalid_history_session' });
         const service = await getHistoryService(), actor = { userId: 'demo', sessionId };
@@ -674,7 +744,10 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       ]);
       const historyActionRoute = historyActionNames.get(path);
       if (historyActionRoute && req.method === historyActionRoute[0]) {
-        if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.', code: 'unauthorized' });
+        if (!historyAuthorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.', code: 'unauthorized' });
+        const generationJob = true;
+        if (!acquireJob()) return json(res, 429, { error: 'Another generation is in progress.', code: 'busy' });
+        try {
         if (req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') return json(res, 415, { error: 'Use a JSON request body.', code: 'unsupported_media_type' });
         const sessionId = expansionCookieId(req);
         if (!expansionBudget.known(sessionId)) return json(res, 403, { error: 'A valid browser session is required.', code: 'invalid_history_session' });
@@ -691,10 +764,115 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           return json(res, 503, { error: 'Live history checks are disabled. Use replay mode.', code: 'replay_only' });
         }
         const service = await getHistoryService();
-        return historyAction(res, service, method, input, actor);
+        return await historyAction(res, service, method, input, actor);
+        } finally { if (generationJob) releaseJob(); }
+      }
+      if (req.method === 'POST' && path === '/api/history/questions') {
+        if (!historyAuthorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.', code: 'unauthorized' });
+        if (req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') return json(res, 415, { error: 'Use a JSON request body.', code: 'unsupported_media_type' });
+        const sessionId = expansionCookieId(req);
+        if (!expansionBudget.known(sessionId)) return json(res, 403, { error: 'A valid browser session is required.', code: 'invalid_history_session' });
+        if (replayOnly()) return json(res, 503, { error: 'Live question creation is disabled. Use saved replay histories.', code: 'replay_only' });
+        const input = await historyRequestBody(req, res);
+        if (!input) return;
+        if (Object.keys(input).some(key => !['question', 'divergenceYear', 'place', 'attachment'].includes(key))) return json(res, 400, { error: 'Unsupported question fields.', code: 'invalid_question' });
+        const attachment = input.attachment;
+        let parentAttachment;
+        if (attachment !== undefined) {
+          if (!attachment || typeof attachment !== 'object' || Array.isArray(attachment) || attachment.mode !== 'history-event'
+              || Object.keys(attachment).some(key => !['mode', 'questionId', 'historyId', 'eventId'].includes(key))
+              || !safeId(attachment.questionId) || !safeId(attachment.historyId) || !safeId(attachment.eventId)) {
+            return json(res, 400, { error: 'Choose a valid history event to attach this question to.', code: 'invalid_attachment' });
+          }
+          let parent = historyStore.get(attachment.questionId);
+          if (!parent) { await migratedHistories(); parent = historyStore.get(attachment.questionId); }
+          const parentHistory = parent?.histories?.find(item => item.id === attachment.historyId);
+          const parentEvent = parentHistory?.events?.find(item => item.id === attachment.eventId);
+          if (!parentEvent) return json(res, 404, { error: 'The selected history event is not available.', code: 'attachment_not_found' });
+          const fullAsOfEvents = parentHistory.events.filter(item => item.year <= parentEvent.year).sort((a, b) => a.year - b.year);
+          const parentQuestion = parent.question ?? parent.title ?? parent.id;
+          const contextText = (value, maximum) => typeof value === 'string' && !!value.trim() && value.trim().length <= maximum
+            && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
+          if (fullAsOfEvents.length > 256 || !contextText(parentQuestion, 1000)
+              || !contextText(parentEvent.title, 240) || !contextText(parentEvent.summary, 1000)
+              || !contextText(parentEvent.place?.name, 240) || !Number.isFinite(parentEvent.place?.lat)
+              || !Number.isFinite(parentEvent.place?.lon)) {
+            return json(res, 413, { error: 'The selected parent history context cannot be represented within the safe input limit.', code: 'parent_context_too_large' });
+          }
+          const asOfGeography = geographyText(composeGeography(fullAsOfEvents, parentEvent.year));
+          if (asOfGeography && !contextText(asOfGeography, 2000)) {
+            return json(res, 413, { error: 'The selected parent history geography is too large to include safely.', code: 'parent_context_too_large' });
+          }
+          const projectedEvents = [];
+          for (const item of fullAsOfEvents) {
+            const geography = geographyText(item.geography);
+            if (!contextText(item.title, 240) || !contextText(item.summary, 1000) || !contextText(item.place?.name, 240)
+                || !Number.isFinite(item.place?.lat) || !Number.isFinite(item.place?.lon)
+                || (geography && !contextText(geography, 500))) {
+              return json(res, 413, { error: 'The selected parent history context cannot be represented within the safe input limit.', code: 'parent_context_too_large' });
+            }
+            projectedEvents.push({ year: item.year, title: item.title.trim(), summary: item.summary.trim(),
+              place: { name: item.place.name.trim(), lat: item.place.lat, lon: item.place.lon }, ...(geography ? { geography } : {}) });
+          }
+          const parentContext = { question: parentQuestion.trim(),
+            asOfEvent: { year: parentEvent.year, title: parentEvent.title.trim(), summary: parentEvent.summary.trim(),
+              place: { name: parentEvent.place.name.trim(), lat: parentEvent.place.lat, lon: parentEvent.place.lon } },
+            events: projectedEvents, eventCount: fullAsOfEvents.length, ...(asOfGeography ? { composedGeography: asOfGeography } : {}) };
+          if (Buffer.byteLength(JSON.stringify(parentContext), 'utf8') > 24_000) {
+            return json(res, 413, { error: 'The selected parent history context is too large to include safely.', code: 'parent_context_too_large' });
+          }
+          parentAttachment = { mode: 'history-event', questionId: parent.id, historyId: parentHistory.id, eventId: parentEvent.id,
+            divergenceYear: parentEvent.year, divergencePlace: parentEvent.place,
+            parentContext };
+        }
+        if (typeof runnerFactories.historyQuestionGenerator !== 'function' && typeof historyQuestionGenerator !== 'function' && !hasMetaKey()) {
+          return json(res, 503, { error: 'Live question creation requires a Meta key.', code: 'meta_key_required' });
+        }
+        if (!acquireJob()) return json(res, 429, { error: 'Another generation is in progress.', code: 'busy' });
+        try {
+          let generator = historyQuestionGenerator;
+          if (!generator && typeof runnerFactories.historyQuestionGenerator === 'function') {
+            generator = await runnerFactories.historyQuestionGenerator({ env: runtimeEnv, outputRoot: liveRoot });
+          }
+          if (!generator) {
+            const { client, policy } = getHistoryModelContext();
+            generator = createHistoryQuestionAgent({ client, policy, model: runtimeEnv.META_TEXT_MODEL_PLANNER || 'muse-wonder-1.0' });
+          }
+          if (typeof generator !== 'function') throw new Error('Question framing is unavailable');
+          const framed = await generator({ question: input.question,
+            divergenceYear: input.divergenceYear ?? parentAttachment?.divergenceYear,
+            place: input.place ?? parentAttachment?.divergencePlace,
+            parentContext: parentAttachment?.parentContext });
+          const { dateWindow: _dateWindow, ...question } = framed ?? {};
+          const [initialHistory] = question.histories ?? [];
+          if (!safeId(question.id) || typeof question.question !== 'string' || !question.question.trim()
+              || typeof question.title !== 'string' || !question.title.trim() || !Number.isSafeInteger(question.divergenceYear)
+              || question.divergenceYear === 0 || question.divergenceYear < -100_000 || question.divergenceYear > 3000
+              || !question.divergencePlace || typeof question.divergencePlace.name !== 'string' || !question.divergencePlace.name.trim()
+              || !Number.isFinite(question.divergencePlace.lat) || question.divergencePlace.lat < -90 || question.divergencePlace.lat > 90
+              || !Number.isFinite(question.divergencePlace.lon) || question.divergencePlace.lon < -180 || question.divergencePlace.lon > 180
+              || question.origin?.kind !== 'user-written' || question.histories?.length !== 1
+              || !safeId(initialHistory?.id) || !Array.isArray(initialHistory.events) || initialHistory.events.length !== 0) {
+            return json(res, 503, { error: 'Question framing returned an invalid history.', code: 'invalid_frame' });
+          }
+          const activeWindow = dateWindowFor(question.divergenceYear);
+          const savedQuestion = historyStore.save({ ...question, ...(parentAttachment ? { questionAttachment: parentAttachment } : {}) });
+          historyStore.recordUsage({ userId: 'demo', sessionId, kind: 'histories' });
+          const history = savedQuestion.histories[0];
+          const autoSuggest = historyStore.getPreference('demo', sessionId).autoSuggest;
+          if (!res.destroyed) return json(res, 201, { question: savedQuestion, history, divergenceYear: savedQuestion.divergenceYear,
+            dateWindow: activeWindow, autoSuggest });
+        } catch (error) {
+          const budgetExhausted = error instanceof SpendCapError;
+          const status = Number.isInteger(error?.status) ? error.status : budgetExhausted ? 429 : 503;
+          const code = budgetExhausted ? 'budget_exhausted' : typeof error?.code === 'string' ? error.code : 'question_creation_failed';
+          if (!res.destroyed) json(res, status, { error: budgetExhausted ? budgetAllowanceMessage(error) : status >= 500 ? 'Question could not be created. No history was saved.' : error.message, code,
+            ...(error?.category ? { category: error.category } : {}) });
+        } finally { releaseJob(); }
+        return;
       }
       if (req.method === 'GET' && path === '/api/history') {
-        if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.' });
+        if (!historyAuthorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.' });
         const records = new Map(store.list().map(record => [record.id, record]));
         for (const record of packagedStore?.list() ?? []) if (packagedIds.has(record.id) && !records.has(record.id)) records.set(record.id, record);
         const runs = [];
@@ -706,11 +884,130 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         return json(res, 200, { runs: runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) });
       }
       if (req.method === 'GET' && path === '/api/histories') {
-        if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'Histories need an access code.' });
+        if (!historyAuthorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'Histories need an access code.' });
         const rawYear = url.searchParams.get('asOfYear');
         const asOfYear = rawYear === null ? undefined : /^-?\d+$/.test(rawYear) ? Number(rawYear) : NaN;
         if (asOfYear !== undefined && (!Number.isSafeInteger(asOfYear) || asOfYear === 0)) return json(res, 400, { error: 'asOfYear must be a nonzero integer.' });
         return json(res, 200, await migratedHistories(asOfYear));
+      }
+      if ((req.method === 'GET' || req.method === 'HEAD') && path.startsWith('/history-media/')) {
+        const match = /^\/history-media\/([a-f0-9]{64})\.png$/i.exec(path);
+        const record = match && historyMedia.byKey(match[1]);
+        if (!record || record.status !== 'complete' || record.key !== match[1]) return json(res, 404, { error: 'Not found' });
+        return file(res, historyMedia.imagePath(match[1]), req.method, liveRoot);
+      }
+      if (req.method === 'POST' && (path === '/api/history/scene' || path === '/api/history/cutout')) {
+        if (!historyAuthorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History media needs an access code.', code: 'unauthorized' });
+        if (req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') return json(res, 415, { error: 'Use a JSON request body.', code: 'unsupported_media_type' });
+        const sessionId = expansionCookieId(req);
+        if (!expansionBudget.known(sessionId)) return json(res, 403, { error: 'A valid browser session is required.', code: 'invalid_history_session' });
+        if (replayOnly()) return json(res, 503, { error: 'Live history media generation is disabled. Saved replay media remains available.', code: 'replay_only' });
+        const input = await historyRequestBody(req, res);
+        if (!input) return;
+        if (Object.keys(input).some(key => !['questionId', 'historyId', 'eventId'].includes(key))
+            || !safeId(input.questionId) || !safeId(input.historyId) || !safeId(input.eventId)) {
+          return json(res, 400, { error: 'Choose a valid history event.', code: 'invalid_history_event' });
+        }
+        const question = historyStore.get(input.questionId);
+        const history = question?.histories?.find(item => item.id === input.historyId);
+        const event = history?.events?.find(item => item.id === input.eventId);
+        if (!event) return json(res, 404, { error: 'History event not found.', code: 'not_found' });
+        const kind = path.endsWith('/scene') ? 'scene' : 'cutout';
+        const field = kind === 'scene' ? 'sceneRef' : 'cutoutRef';
+        const revision = historyEventRevision(event);
+        const identity = { questionId: question.id, historyId: history.id, eventId: event.id, revision, kind };
+        const existing = historyMedia.get(identity);
+        if (existing?.status === 'complete') return json(res, 200, { status: 'complete', url: `/history-media/${existing.key}.png`, reused: true });
+        if (existing?.status === 'empty') return json(res, 200, { status: 'empty', reused: true });
+        if (existing?.status === 'pending') return json(res, 202, { status: 'pending' });
+        if (existing?.status === 'unknown') return json(res, 200, { status: 'unknown' });
+        const priorReference = event[field];
+        if (priorReference?.status === 'complete' && typeof priorReference.url === 'string') {
+          const historyRef = /^\/history-media\/([a-f0-9]{64})\.png$/i.exec(priorReference.url);
+          const legacyRef = /^\/(?:event-scenes|event-cutouts)\/[a-f0-9]{64}\.png$/i.test(priorReference.url);
+          const record = historyRef && historyMedia.byKey(historyRef[1]);
+          if ((record?.status === 'complete' && record.revision === revision && record.kind === kind
+              && record.questionId === question.id && record.historyId === history.id && record.eventId === event.id) || legacyRef) {
+            return json(res, 200, { status: 'complete', url: priorReference.url, reused: true });
+          }
+        }
+        let image;
+        if (kind === 'cutout') {
+          image = await readHistoryMediaSource(event, identity);
+          if (!image) return json(res, 200, { status: 'missing-image' });
+        }
+        const historyText = [question.question, question.title, ...history.events.map(item => `${item.year}: ${item.title}. ${item.summary}. ${geographyText(item.geography)}`)].filter(Boolean).join('\n');
+        const prompt = kind === 'scene'
+          ? `Create a realistic visual illustration of this alternate-history event, without text or labels. Event: ${event.title} (${event.year}), ${event.place?.name ?? ''}. ${event.summary}. Full history context:\n${historyText}`
+          : `${event.title} ${event.summary} ${event.place?.name ?? ''}`;
+        const promptLimit = kind === 'scene' ? 12_000 : 1_000;
+        if (Buffer.byteLength(prompt, 'utf8') > promptLimit) {
+          return json(res, 413, { error: 'The full history context is too large to send safely for media generation.', code: 'media_context_too_large' });
+        }
+        if (!keywordCheck(prompt).allowed) return json(res, 400, { error: 'This event cannot pass the topic policy.', code: 'topic_blocked' });
+        let dailyCapUsd;
+        try { dailyCapUsd = configuredDailyCap({ env: runtimeEnv, outputRoot: liveRoot }); } catch { dailyCapUsd = NaN; }
+        if (!Number.isFinite(dailyCapUsd) || dailyCapUsd <= 0) return json(res, 503, { error: 'History media generation is unavailable.', code: 'media_unavailable' });
+        let runner;
+        try {
+          if (kind === 'scene') runner = renderHistoryScene ?? await createRunner('createDemoEventSceneRunner', { dailyCapUsd, outputRoot: liveRoot });
+          else runner = segmentHistoryCutout ?? await createRunner('createDemoEventCutoutRunner', { dailyCapUsd, outputRoot: liveRoot });
+        } catch { return json(res, 503, { error: 'History media generation is unavailable.', code: 'media_unavailable' }); }
+        if (typeof runner !== 'function' || runner.enforcesDailyCap !== true) return json(res, 503, { error: 'History media generation is unavailable.', code: 'media_unavailable' });
+        const worldId = createHash('sha256').update(JSON.stringify([question.id, history.id, event.id])).digest('hex');
+        const allowance = expansionBudget.reserve(sessionId, worldId);
+        if (!allowance.allowed) return json(res, 429, { error: 'This browser session has reached its saved-world limit.', code: 'world_limit', used: allowance.used, limit: allowance.limit });
+        if (!acquireJob()) return json(res, 429, { error: 'Another generation is in progress.', code: 'busy' });
+        let reservation, dispatched = false;
+        try {
+          const reserved = historyMedia.reserve(identity);
+          if (reserved.status !== 'reserved') {
+            if (reserved.status === 'complete') return json(res, 200, { status: 'complete', url: `/history-media/${reserved.record.key}.png`, reused: true });
+            if (reserved.status === 'empty') return json(res, 200, { status: 'empty', reused: true });
+            if (reserved.status === 'pending') return json(res, 202, { status: 'pending' });
+            return json(res, 200, { status: 'unknown' });
+          }
+          reservation = reserved.record;
+          const ip = req.socket.remoteAddress ?? 'unknown';
+          const startedAt = now();
+          const previous = (requests.get(ip) ?? []).filter(value => startedAt - value < rateWindowMs);
+          if (previous.length >= rateLimit) {
+            historyMedia.releaseUndispatched(reservation);
+            reservation = null;
+            return json(res, 429, { status: 'retryable', error: 'Please try again shortly.', code: 'rate_limited' });
+          }
+          previous.push(startedAt);
+          requests.set(ip, previous);
+          dispatched = true;
+          const result = kind === 'scene' ? await runner({ prompt }) : await runner({ image, prompt });
+          if (kind === 'cutout' && result?.status === 'empty') {
+            historyMedia.finish(reservation, 'empty');
+            return json(res, 200, { status: 'empty', reused: false });
+          }
+          if (!Buffer.isBuffer(result?.buffer) || result.mime !== 'image/png' || result.buffer.length < 8
+              || !result.buffer.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) throw new Error('Invalid history media image');
+          historyMedia.complete(reservation, result.buffer);
+          const latestQuestion = historyStore.get(question.id);
+          const latestHistory = latestQuestion?.histories?.find(item => item.id === history.id);
+          const latestEvent = latestHistory?.events?.find(item => item.id === event.id);
+          let attached = false;
+          if (latestEvent && historyEventRevision(latestEvent) === revision) {
+            const url = `/history-media/${reservation.key}.png`;
+            const ref = { status: 'complete', url };
+            historyStore.save({ ...latestQuestion, histories: latestQuestion.histories.map(item => item.id === history.id
+              ? { ...item, events: item.events.map(saved => saved.id === event.id ? { ...saved, [field]: ref } : saved) } : item) });
+            attached = true;
+          }
+          historyStore.recordWorldEntered({ userId: 'demo', sessionId, worldId });
+          return json(res, 200, { status: 'complete', url: `/history-media/${reservation.key}.png`, reused: false, attached });
+        } catch (error) {
+          const budgetExhausted = error instanceof SpendCapError && error.continuationRetryable === true;
+          const retryable = !!reservation && !dispatched || budgetExhausted;
+          if (reservation && retryable) { try { historyMedia.releaseUndispatched(reservation); } catch { historyMedia.finish(reservation, 'unknown'); } }
+          else if (reservation) historyMedia.finish(reservation, 'unknown');
+          return json(res, 503, { status: retryable ? 'retryable' : 'unknown', code: budgetExhausted ? 'budget_exhausted' : 'media_generation_failed',
+            error: budgetExhausted ? budgetAllowanceMessage(error) : 'History media generation could not be confirmed.' });
+        } finally { releaseJob(); }
       }
       if ((req.method === 'GET' || req.method === 'HEAD') && path === '/health') {
         const cookieId = expansionCookieId(req);
@@ -1170,8 +1467,13 @@ export function createConfiguredDemoServer({ env = process.env, outputRoot, host
   const isLoopback = normalizedHost === '127.0.0.1';
   const effectiveEnv = { ...env };
   let localReviewAccess = options.localReviewAccess ?? false;
+  let localReplayHistoryAccess = options.localReplayHistoryAccess ?? false;
   if (status.replayOnly) {
     effectiveEnv.DEMO_REPLAY_ONLY = 'true';
+    if (options.localReplayHistoryAccess === undefined && options.localReviewAccess !== false
+        && isLoopback && !effectiveEnv.DEMO_ACCESS_CODE?.trim()) {
+      localReplayHistoryAccess = true;
+    }
   } else if (isLoopback) {
     if (!effectiveEnv.DEMO_ACCESS_CODE?.trim()) {
       effectiveEnv.DEMO_ACCESS_CODE = randomUUID();
@@ -1192,10 +1494,11 @@ export function createConfiguredDemoServer({ env = process.env, outputRoot, host
     rateLimit,
     env: effectiveEnv,
     localReviewAccess,
+    localReplayHistoryAccess,
   });
   const port = Number(env.PORT ?? 3000);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid PORT: must be an integer from 0 to 65535');
-  return { server, host: normalizedHost, port, ...status, localReviewAccess };
+  return { server, host: normalizedHost, port, ...status, localReviewAccess, localReplayHistoryAccess };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

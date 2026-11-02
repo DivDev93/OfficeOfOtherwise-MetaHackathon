@@ -49,6 +49,21 @@ test('legacy migration makes the deepest visited path H1 and shares only its pre
   assert.deepEqual(result.metadata.counts, { questions: 1, histories: 2, events: 4, suggestions: 2 });
 });
 
+test('legacy migration retains only explicit question title, divergence year, place, and origin metadata', () => {
+  const record = saved('metadata-root',[branches.a]);
+  record.run.questionAttachment = { mode:'present-day', divergenceYear:-4200, divergencePlace:{name:'Sahara',lat:24,lon:10}, origin:'user-written' };
+  record.run.questionTitle = 'Water observatories';
+  const question = migrateSavedTree([record]).questions[0];
+  assert.equal(question.title,'Water observatories');
+  assert.equal(question.divergenceYear,-4200);
+  assert.deepEqual(question.place,{name:'Sahara',lat:24,lon:10});
+  assert.equal(question.origin,'user-written');
+  const without = migrateSavedTree([saved('plain-root',[branches.a])]).questions[0];
+  assert.equal(Object.hasOwn(without,'divergenceYear'),false,'no year is invented from event or browser date');
+  assert.equal(Object.hasOwn(without,'place'),false);
+  assert.equal(Object.hasOwn(without,'origin'),false);
+});
+
 test('unvisited root candidates become cached suggestions with media refs and no synthetic event history', () => {
   const run = saved('solo', [{ ...branches.a, scene: 'A painted wetland', geography: { version: 1, changes: [] } }]);
   run.assetRefsByBranch = { 'solo:a': { sceneRef: { path: 'scenes/a.png', status: 'complete' }, modelRef: '../private.glb' } };

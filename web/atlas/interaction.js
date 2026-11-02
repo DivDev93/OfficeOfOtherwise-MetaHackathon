@@ -2,6 +2,17 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const ZOOM_MAX = 100;
 const WHEEL_ZOOM_PER_PIXEL = 0.08;
 const WHEEL_STEP_LIMIT = 16;
+const ZOOM_INTERFACE_SELECTOR = '[data-atlas-zoom-ignore], #atlas-toolbar, #atlas-other-questions, #exploration-rail, #chronicle, .geography-panel, .hero-panel, .atlas-view-options, .atlas-screen-label, input, select, textarea, button, [role="slider"], [role="menu"], [role="dialog"]';
+
+/** Prevent canvas zoom gestures from consuming pointer/wheel input over page controls. */
+export function atlasZoomGestureBlocked(event, canvas, documentObject) {
+  const matchesControl = target => target && target !== canvas
+    && typeof target.matches === 'function' && target.matches(ZOOM_INTERFACE_SELECTOR);
+  const path = event?.composedPath?.() || [event?.target];
+  if (path.some(matchesControl)) return true;
+  return (documentObject?.elementsFromPoint?.(event?.clientX, event?.clientY) || []).some(matchesControl);
+}
+
 /** Apply a Surface drag while keeping the poles within reach. */
 export function surfaceDragAngles(yawOffset, pitchOffset, facingPitch, dx, dy) {
   const facing = Number(facingPitch) || 0;

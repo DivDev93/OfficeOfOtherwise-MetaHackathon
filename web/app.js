@@ -14,20 +14,31 @@ import { createHistorySession } from './historySession.js';
 import { mountHistoryTimeline } from './historyTimeline.js';
 import { mountHistoryTimebar } from './historyTimebar.js';
 import { composeGeography } from './historyModel.js';
+import { historyAtlasStatus } from './historyAtlas.js';
 const $ = id => document.getElementById(id);
 const savedPreview = createSavedPreviewPopover(document.body, { document, viewport: () => ({ width:window.innerWidth || 1024, height:window.innerHeight || 768 }) });
 const historySession = createHistorySession({ fetchImpl: fetch });
 const voice = createVoiceInput({ prompt: $('prompt'), access: $('access'), controls: $('voice-controls'), record: $('voice-record'), stop: $('voice-stop'), cancel: $('voice-cancel'), message: $('voice-status') });
-let voiceEnabled = false, localReviewAccess = false;
+let voiceEnabled = false, localReviewAccess = false, localReplayHistoryAccess = false;
 const localMetaKeySetup = createLocalMetaKeySetup({ details: $('meta-key-setup'), input: $('meta-key-input'), useButton: $('meta-key-use'), clearButton: $('meta-key-clear'), status: $('meta-key-status'), configStatus: $('meta-key-config-status'), fetchImpl: fetch, refreshServiceMode: loadServiceMode });
 const hasLiveAccess = () => localReviewAccess || !!$('access').value;
+const canCreateFreshHistory = () => serviceMode === 'live-enabled' && hasLiveAccess();
+function updateFreshHistoryCta() {
+  const button = $('live-submit');
+  if (!button) return;
+  const keyRequired = localReplayHistoryAccess && !canCreateFreshHistory();
+  const label = keyRequired ? 'Configure Meta API key' : 'Create history';
+  if (button.firstChild?.nodeType === 3) button.firstChild.textContent = `${label} `;
+  button.setAttribute('aria-label', keyRequired ? 'Configure a Meta API key to create a fresh history' : 'Create a fresh history');
+  button.title = keyRequired ? 'Configure a Meta API key to create a fresh history; saved histories remain available for local replay.' : '';
+}
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', atlasController = null, atlasInitPromise = null, atlasPreviewWorld = null, atlasAttachmentIntent = { mode:'current-world', parentId:null, divergenceYear:null }, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0;
 let atlasActiveQuestionId = '', atlasOtherQuestionsOpen = false, atlasVisibleGraphSignature = '', atlasSourceGraphSignature = '';
 let expansionLimit = 20, serverExpansionUsed = 0, activeExpansion = null, preserveGraphUntilReady = false;
 let atlasGeographyOverride = null;
 let atlasDetailsFocusTimer = null;
-let historyMode = false, selectedHistoryRecord = null, selectedHistoryId = '', historyMedia = { sceneUrl:'',cutoutUrl:'',modelUrl:'' }, historyViewSignature = '', historyRenderSignature = '', historyRenderFailed = false;
+let historyMode = false, historyShowOrbit = false, historyCreationRequested = false, historyQuestionBusy = false, selectedHistoryRecord = null, selectedHistoryId = '', selectedHistoryQuestionId = '', historyMedia = { sceneUrl:'',cutoutUrl:'',modelUrl:'' }, historyMediaJob = null, historyViewSignature = '', historyRenderSignature = '', historyRenderFailed = false;
 const historyTimeline = mountHistoryTimeline($('history-timeline-host'), { getState:() => historySession.getState(), subscribe:fn => historySession.subscribe(fn), session:historySession,
   onHistoryChange:id => historySession.selectHistory(id), onEventSelect:id => selectHistoryEvent(id), onWindowSelect:year => historySession.setDate(year), document });
 const historyTimebar = mountHistoryTimebar($('history-timebar-host'), { getState:() => historySession.getState(), subscribe:fn => historySession.subscribe(fn),
@@ -87,6 +98,7 @@ const knownRunManifests = new Map(), manifestRequests = new Map();
 let currentRunId = '', currentManifest = null, continuation = { path: [], children: [] }, streamBusy = false, selectedContext = null, continuationViewSelection = null, atlasCurrentWorldRunId = '';
 let treeRenderRequest = 0, serviceModeReady = Promise.resolve(), rootGenerationActive = false, evidenceRequest = 0;
 let lastHandledLocationHash = location.hash;
+let historyQuestionPickerSignature = '', activeHistoryLocationKey = '', forcePushHistoryLocation = false;
 let assetLoadRequest = 0, assetsLoading = false;
 let savedNavigationState = '';
 let atlasNodes = [];
@@ -111,7 +123,7 @@ function historyRefUrl(ref) {
   const url = typeof ref === 'string' ? ref : ref?.status === 'complete' ? ref.url : '';
   if (typeof url !== 'string' || !url.startsWith('/') || url.includes('\\') || /[?#\u0000-\u001f]/.test(url) || /%(?:2e|2f|5c)/i.test(url)) return '';
   return /^\/runs\/[A-Za-z0-9._%-]+\/(?:hero\.png|cutout\.png|model\.glb|model\.meshopt\.glb)$/.test(url)
-    || /^\/(?:event-scenes|event-cutouts)\/[a-f\d]{64}\.png$/i.test(url) ? url : '';
+    || /^\/(?:event-scenes|event-cutouts|history-media)\/[a-f\d]{64}\.png$/i.test(url) ? url : '';
 }
 function legacyHistorySource(event) {
   const match = /^([A-Za-z0-9_-]{1,128}):([A-Za-z0-9_-]{1,128})$/.exec(event?.id || '');
@@ -125,6 +137,7 @@ function renderHistoryEvent(event) {
   if (!event) return;
   selectedHistoryRecord = event;
   selectedHistoryId = historySession.getState().historyId;
+  selectedHistoryQuestionId = historySession.getState().questionId;
   historyMedia = { sceneUrl:historyRefUrl(event.sceneRef) || historyRefUrl(event.heroRef),
     cutoutUrl:historyRefUrl(event.cutoutRef), modelUrl:historyRefUrl(event.modelRef) };
   modelRequestId++; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = '';
@@ -157,12 +170,22 @@ function showHistoryGeography(state) {
   geographyPreviewControls.get(surfacePreviewKey, surfaceGeography);
   renderGeography();
 }
+function historyAtlasLevelStatus(level) {
+  const state = historySession.getState();
+  const count = (state.history?.events || []).filter(event => event.year <= state.date).length;
+  return historyAtlasStatus(level, count);
+}
 function syncHistoryUi(state = historySession.getState()) {
   const active = !!state.question && !!state.history && Array.isArray(state.histories);
+  const requested = !!state.questionId || historyCreationRequested;
   const enteringHistory = active && !historyMode;
   const leavingHistory = historyMode && !active;
   historyMode = active;
   document.body.classList.toggle('history-mode', historyMode);
+  document.body.classList.toggle('history-requested', requested);
+  if (historyMode) document.body.classList.add('has-story');
+  syncHistoryQuestionPicker(state);
+  if (state.histories.length < 2) historyShowOrbit = false;
   const historyCanvasLabel = 'Atlas scene for the selected history. Hover to preview; click or press Enter to select an event. Use plus and minus to zoom; Escape moves out one level.';
   if (historyMode) {
     $('atlas-scene')?.setAttribute('aria-label', historyCanvasLabel);
@@ -173,32 +196,57 @@ function syncHistoryUi(state = historySession.getState()) {
     $('atlas-scene')?.querySelector('canvas')?.setAttribute('aria-label', legacyCanvasLabel);
   }
   $('history-asof-header').hidden = !historyMode;
+  $('history-orbit-toggle').hidden = !historyMode || state.histories.length < 2;
+  $('history-orbit-toggle').setAttribute('aria-pressed', String(historyShowOrbit));
+  $('history-orbit-toggle').textContent = 'Show Orbit level';
+  $('history-orbit-toggle').setAttribute('aria-label', 'Show Orbit level');
   if (!historyMode) {
+    if (requested) {
+      $('event-consequences').hidden = true; $('event-retry').hidden = true; $('event-scene-action').hidden = true;
+    }
     if (leavingHistory) atlasController?.setHistoryView?.(null);
-    selectedHistoryRecord = null; selectedHistoryId = ''; historyMedia = { sceneUrl:'',cutoutUrl:'',modelUrl:'' }; historyViewSignature = '';
+    selectedHistoryRecord = null; selectedHistoryId = ''; selectedHistoryQuestionId = ''; historyMedia = { sceneUrl:'',cutoutUrl:'',modelUrl:'' }; historyViewSignature = '';
     historyRenderSignature = ''; historyRenderFailed = false;
-    $('atlas-show-tree').textContent = 'Story tree'; $('atlas-show-tree').setAttribute('aria-label','Open story tree');
+    $('atlas-show-tree').textContent = requested ? 'History' : 'Story tree'; $('atlas-show-tree').setAttribute('aria-label', requested ? 'Open history timeline' : 'Open story tree');
     if ($('history-asof-header')) $('history-asof-header').textContent = '';
     if ($('history-render-status')) $('history-render-status').hidden = true;
     return;
   }
   if (enteringHistory && isAtlasPhone()) setAtlasFocused(true);
-  $('atlas-show-tree').textContent = isAtlasPhone() ? 'History' : 'Story tree';
-  $('atlas-show-tree').setAttribute('aria-label', isAtlasPhone() ? 'Open history timeline' : 'Open story tree');
+  $('atlas-show-tree').textContent = 'History';
+  $('atlas-show-tree').setAttribute('aria-label', 'Open history timeline');
+  $('atlas-show-selected').textContent = 'Selected event';
+  updateHistoryLocation(state);
   const count = state.history.events.filter(event => event.year <= state.date).length;
   $('history-asof-header').textContent = `History as of ${formatYear(state.date)} · ${count} ${count === 1 ? 'event' : 'events'}`;
   const selected = state.history.events.find(event => event.id === state.selectedEventId);
-  if (!selectedHistoryRecord || selectedHistoryRecord !== selected || selectedHistoryRecord.id !== state.selectedEventId || selectedHistoryId !== state.historyId) {
+  const changedSelectionContext = selectedHistoryQuestionId !== state.questionId || selectedHistoryId !== state.historyId;
+  if (changedSelectionContext) {
+    atlasPreviewWorld = null;
+    savedPreview.clear();
+  }
+  if (!selectedHistoryRecord || selectedHistoryRecord !== selected || selectedHistoryRecord.id !== state.selectedEventId || changedSelectionContext) {
     if (selected) renderHistoryEvent(selected);
-    else if (enteringHistory) {
+    else if (enteringHistory || changedSelectionContext) {
       const latest = [...state.history.events].filter(event => event.year <= state.date).sort((a,b) => a.year-b.year).at(-1);
       if (latest) { historySession.selectEvent(latest.id); renderHistoryEvent(latest); }
+      else {
+        selectedHistoryRecord = null; selectedHistoryId = state.historyId; selectedHistoryQuestionId = state.questionId;
+        historyMedia = { sceneUrl:'',cutoutUrl:'',modelUrl:'' };
+        $('hero-title').textContent = `No saved event at ${formatYear(state.date)}`;
+        $('hero-description').textContent = state.question?.question || state.question?.title || 'Choose a date with a saved event or review suggestions around this date.';
+        $('hero-tag').textContent = 'HISTORY DATE'; $('selected-branch-context').hidden = true;
+        $('event-consequences').hidden = true; $('event-retry').hidden = true; $('event-scene-action').hidden = true;
+        $('evidence-toggle').hidden = true; $('evidence-panel').hidden = true;
+        setStageMessage('No saved event is attached to this date.'); setView('scene');
+      }
     }
   }
   $('history-timebar-host').hidden = false;
   const nextSignature = JSON.stringify([state.questionId,state.historyId,state.date,state.window?.fromYear,state.window?.toYear]);
   if (historyViewSignature !== nextSignature) { historyViewSignature = nextSignature; showHistoryGeography(state); }
   updateHistoryAtlasView(state);
+  $('map-status').textContent = historyAtlasLevelStatus($('atlas-scene')?.dataset.atlasLevel || 'surface');
 }
 function updateHistoryAtlasView(state = historySession.getState()) {
   if (!historyMode || !state.history || !atlasController?.setHistoryView) return;
@@ -208,9 +256,10 @@ function updateHistoryAtlasView(state = historySession.getState()) {
   const composedGeography = composeGeography(state.history.events,state.date);
   const view = { question:state.question, historyId:state.historyId, asOfYear:state.date, date:state.date,
     window:state.window, suggestions:state.suggestions, selectedEventId:state.selectedEventId,
+    questions:state.questions, activeQuestionId:state.questionId, showOrbit:historyShowOrbit,
     surfaceMode, composedGeography, surfaceGeography:surfaceMode === 'present' ? presentDayGeography() : surfaceGeography };
   const signature = JSON.stringify([state.questionId,state.historyId,state.date,state.window?.fromYear,state.window?.toYear,
-    surfaceMode,view.surfaceGeography]);
+    surfaceMode,view.surfaceGeography,historyShowOrbit,state.questions?.map(item=>[item.id,(item.histories||[]).map(history=>[history.id,history.events?.length])])]);
   if (signature === historyRenderSignature && !historyRenderFailed) return;
   historyRenderSignature = signature;
   try {
@@ -222,6 +271,52 @@ function updateHistoryAtlasView(state = historySession.getState()) {
     $('history-render-status').textContent = 'Atlas rendering is unavailable; the history timeline and date controls remain active.';
     $('history-render-status').hidden = false;
   }
+}
+function parseHistoryLocation(hash = '') {
+  if (typeof hash !== 'string' || !hash.startsWith('#question=')) return null;
+  const params = new URLSearchParams(hash.slice(1));
+  const questionId = params.get('question') || '', historyId = params.get('history') || '';
+  const date = Number(params.get('date'));
+  if (!questionId || !historyId || !Number.isSafeInteger(date) || date === 0) return null;
+  return { questionId, historyId, date, eventId:params.get('event') || '' };
+}
+function updateHistoryLocation(state = historySession.getState()) {
+  if (!state.questionId || !state.historyId || !Number.isSafeInteger(state.date) || state.date === 0) return;
+  const params = new URLSearchParams({ question:state.questionId, history:state.historyId, date:String(state.date), event:state.selectedEventId || '' });
+  const hash = `#${params.toString()}`;
+  if (location.hash === hash) { lastHandledLocationHash = hash; activeHistoryLocationKey = `${state.questionId}:${state.historyId}`; return; }
+  const key = `${state.questionId}:${state.historyId}`;
+  const method = forcePushHistoryLocation || activeHistoryLocationKey && activeHistoryLocationKey !== key ? 'pushState' : 'replaceState';
+  if (typeof history[method] === 'function') history[method](null,'',hash);
+  else history.pushState(null,'',hash);
+  forcePushHistoryLocation = false;
+  activeHistoryLocationKey = key; lastHandledLocationHash = hash;
+}
+function syncHistoryQuestionPicker(state = historySession.getState()) {
+  const select = $('history-question-picker'), label = $('history-question-picker-label');
+  if (!select || !label) return;
+  const questions = Array.isArray(state.questions) ? state.questions : [];
+  const signature = JSON.stringify(questions.map(item=>[item.id,item.title,item.question,item.histories?.length]));
+  if (signature !== historyQuestionPickerSignature) {
+    historyQuestionPickerSignature = signature; select.replaceChildren(new Option('Choose a saved question',''));
+    for (const question of questions) {
+      const title = question.title || question.question || question.id;
+      const count = question.histories?.length || 0;
+      select.add(new Option(`${title} · ${count} ${count === 1 ? 'history' : 'histories'}`, question.id));
+    }
+  }
+  label.hidden = !questions.length;
+  select.value = state.questionId || '';
+}
+async function refreshHistoryQuestions() {
+  if (!hasLiveAccess() && !localReplayHistoryAccess) return [];
+  try {
+    const response = await fetch('/api/histories', { headers:$('access').value ? { 'x-demo-access-code':$('access').value } : {} });
+    if (!response.ok) return [];
+    const data = await response.json();
+    if (Array.isArray(data.questions)) { historySession.setQuestions(data.questions); return data.questions; }
+  } catch { /* Saved history selection remains available when this read fails. */ }
+  return [];
 }
 let surfaceGeography, surfaceGeographyRaw, surfaceMode = 'scenario', surfaceUnavailable = false;
 const geographyPreviewControls = createGeographyPreviewStore();
@@ -492,7 +587,7 @@ function buildStarMapNodes(rootManifest) {
   return output;
 }
 function renderStarMap(rootManifest) {
-  if (historyMode) return;
+  if (historyMode || document.body.classList.contains('history-requested')) return;
   const roots = new Map();
   if (rootManifest?.branch) roots.set(rootManifest.id, rootManifest);
   for (const id of atlasQuestionRootIds) {
@@ -599,6 +694,11 @@ function isAtlasPhone() { return window.matchMedia?.('(max-width: 430px)').match
 function syncAtlasOtherQuestionToggle(mapNodes = atlasNodes) {
   const toggle = $('atlas-other-questions');
   if (!toggle) return;
+  if (historyMode || document.body.classList.contains('history-requested')) {
+    if (!toggle.hidden && document.activeElement === toggle) $('atlas-scene')?.focus({ preventScroll:true });
+    toggle.hidden = true;
+    return;
+  }
   const hasOtherQuestions = mapNodes.some(node => node.otherTree && node.questionId && node.questionId !== atlasActiveQuestionId);
   const atlasOnlyView = isAtlasPhone() && atlasController?.scene?.getLevel?.() === 'atlas';
   const shouldShow = atlasOnlyView && hasOtherQuestions;
@@ -724,6 +824,8 @@ function initializeAtlas() {
     getZoomOutTarget:zoom => isAtlasPhone() && zoom < 0.22 ? 0.68 : null,
     onPreview:(world, anchor) => showAtlasPreview(world, anchor),
     onHistoryEventSelect:(event, detail) => selectHistoryEvent(event?.id || detail?.eventId),
+    onHistorySelect:(historyId) => historySession.selectHistory(historyId),
+    onQuestionSelect:(question) => historySession.selectQuestion(typeof question === 'string' ? question : question?.id),
     onQuestionPreview:(question, anchor) => showAtlasPreview(question ? {
       role:'root-question', title:question.question || question.title || 'Saved question',
       prompt:question.question || question.prompt || question.summary || '',
@@ -731,10 +833,13 @@ function initializeAtlas() {
     onQuestionEnter:() => {},
     onEnter:(world, detail) => handleAtlasWorldEnter(world, detail),
     onLevelChange:level => {
-      const labels = { surface:'SURFACE · CURRENT WORLD', lift:'LIFT · FOLLOW A THREAD', orbit:'ORBIT · ALTERNATE WORLDS', atlas:'ATLAS · HISTORY AND POSSIBILITIES' };
+      const labels = historyMode
+        ? { surface:'SURFACE · SELECTED HISTORY', lift:'LIFT · HISTORY EVENTS', orbit:'ORBIT · SIBLING HISTORIES', atlas:'ATLAS · HISTORIES AND EVENTS' }
+        : { surface:'SURFACE · CURRENT WORLD', lift:'LIFT · FOLLOW A THREAD', orbit:'ORBIT · ALTERNATE WORLDS', atlas:'ATLAS · HISTORY AND POSSIBILITIES' };
       container.dataset.atlasLevel = level?.level || 'unknown';
       $('history-timebar-host').hidden = !historyMode;
-      $('map-status').textContent = labels[level?.level] || 'ATLAS · POSSIBLE WORLDS';
+      $('map-status').textContent = historyMode ? historyAtlasLevelStatus(level?.level)
+        : labels[level?.level] || 'ATLAS · POSSIBLE WORLDS';
       applyAtlasGeographyLevel(level?.level);
       syncAtlasOtherQuestionToggle();
     },
@@ -769,6 +874,7 @@ function initializeAtlas() {
   return atlasInitPromise;
 }
 function handleAtlasWorldEnter(world, detail = {}) {
+  if (!historyMode && document.body.classList.contains('history-requested')) { status('Loading saved history…'); return; }
   if (detail.source === 'present-day-question') {
     atlasAttachmentIntent = detail.attachmentIntent || { mode:'present-day', parentId:null, divergenceYear:world?.year || 2026 };
     setAtlasFocused(false);
@@ -782,6 +888,13 @@ function handleAtlasWorldEnter(world, detail = {}) {
 }
 function compactAtlasToolbar(toolbar) {
   if (!toolbar || toolbar.dataset.atlasCompacted === 'true') return;
+  const historyOrbitToggle = $('history-orbit-toggle');
+  const existingOptionsBody = toolbar.querySelector?.('.atlas-view-options-body');
+  if (historyOrbitToggle && existingOptionsBody) {
+    historyOrbitToggle.textContent = 'Show Orbit level';
+    historyOrbitToggle.setAttribute('aria-label', 'Show Orbit level');
+    if (!existingOptionsBody.contains?.(historyOrbitToggle)) existingOptionsBody.append(historyOrbitToggle);
+  }
   const controls = [...toolbar.children];
   if (controls.length < 4) return;
   const quick = document.createElement('div'); quick.className = 'atlas-quick-controls'; quick.setAttribute('aria-label', 'Quick Atlas controls');
@@ -792,6 +905,11 @@ function compactAtlasToolbar(toolbar) {
   const placeContext = controls.find(control => control.getAttribute?.('aria-label') === 'Branching location context');
   if (placeContext) quick.append(placeContext);
   for (const control of controls.slice(3)) if (control !== placeContext) panel.append(control);
+  if (historyOrbitToggle) {
+    historyOrbitToggle.textContent = 'Show Orbit level';
+    historyOrbitToggle.setAttribute('aria-label', 'Show Orbit level');
+    panel.append(historyOrbitToggle);
+  }
   const geographyToggle = document.createElement('button');
   geographyToggle.type = 'button'; geographyToggle.id = 'atlas-geography-toggle'; geographyToggle.className = 'atlas-geography-toggle';
   geographyToggle.addEventListener('click', toggleAtlasGeographyPanel);
@@ -865,9 +983,10 @@ function syncAtlasCompactButtons(level = '') {
   }
   if (tree) {
     tree.setAttribute('aria-expanded', String(panelsOpen));
-    tree.setAttribute('aria-label', panelsOpen ? 'Close story tree' : 'Open story tree');
+    const historyLabels = document.body.classList.contains('history-requested');
+    tree.setAttribute('aria-label', panelsOpen ? (historyLabels ? 'Close history timeline' : 'Close story tree') : (historyLabels ? 'Open history timeline' : 'Open story tree'));
     const label = tree.querySelector('span:last-child');
-    if (label) label.textContent = panelsOpen ? 'Close tree' : 'Story tree';
+    if (label) label.textContent = panelsOpen ? (historyLabels ? 'Close history' : 'Close tree') : (historyLabels ? 'History' : 'Story tree');
   }
   if (details) {
     details.setAttribute('aria-expanded', String(detailsOpen));
@@ -918,6 +1037,7 @@ function setAtlasFocused(focused) {
 }
 function renderExplorationTree(hydrate = false) {
   const host = $('exploration-tree-status');
+  if (document.body.classList.contains('history-requested')) { host?.replaceChildren(); $('branch-list')?.replaceChildren(); return; }
   if (preserveGraphUntilReady && !currentManifest?.branch) return;
   if (currentManifest?.branch) preserveGraphUntilReady = false;
   if (!host) { renderStarMap(null); return; }
@@ -1153,7 +1273,7 @@ function renderGeography() {
     item.append(swatch, details); legend.append(item);
   }
   $('geography-detail').hidden = !changes.some(change => change.region === 'ram-setu') || hasWorldAdjustment;
-  if (!historyMode) renderStarMap(continuation.rootRunId ? knownRunManifests.get(continuation.rootRunId) || currentManifest : currentManifest);
+  if (!historyMode && !document.body.classList.contains('history-requested')) renderStarMap(continuation.rootRunId ? knownRunManifests.get(continuation.rootRunId) || currentManifest : currentManifest);
   const renderState = mode === 'present' ? presentDayGeography() : preview;
   $('geography-render-warning').hidden = true;
   if (!historyMode) atlasController?.setGeography(surfaceGeography, mode, renderState);
@@ -1203,12 +1323,14 @@ function applyServiceMode(mode) {
     voiceDisclosure.open = voiceEnabled && invitationOpen;
   }
   $('live-access').hidden = localReviewAccess || (mode !== 'live-enabled' && !voiceEnabled);
-  $('live-submit').disabled = mode !== 'live-enabled' || streamBusy;
+  $('live-submit').disabled = (mode !== 'live-enabled' && !localReplayHistoryAccess) || streamBusy;
   const replayMessage = 'Saved stories · run locally with your own Meta API key for fresh exploration';
   const liveMessage = localReviewAccess ? 'Local exploration · saved worlds' : 'Saved runs · live access by invite';
-  $('service-mode').textContent = mode === 'replay-only' ? replayMessage : mode === 'live-enabled' ? liveMessage : 'Saved runs · service mode unknown';
-  $('footer-service-mode').textContent = mode === 'replay-only' ? replayMessage : mode === 'live-enabled' ? (localReviewAccess ? 'Fresh local exploration is enabled' : 'Fresh exploration is available with live access') : 'Saved stories · service mode unknown';
-  if (mode === 'replay-only') status(replayMessage);
+  $('service-mode').textContent = localReplayHistoryAccess ? 'Saved histories · local replay' : mode === 'replay-only' ? replayMessage : mode === 'live-enabled' ? liveMessage : 'Saved runs · service mode unknown';
+  $('footer-service-mode').textContent = localReplayHistoryAccess ? 'Saved histories · local replay · configure a Meta API key for fresh questions' : mode === 'replay-only' ? replayMessage : mode === 'live-enabled' ? (localReviewAccess ? 'Fresh local exploration is enabled' : 'Fresh exploration is available with live access') : 'Saved stories · service mode unknown';
+  updateFreshHistoryCta();
+  if (localReplayHistoryAccess && !canCreateFreshHistory()) status('Saved histories are available for local replay · configure a Meta API key to create a fresh history');
+  else if (mode === 'replay-only') status(replayMessage);
   else if (mode === 'unknown') status('Service mode unavailable · cached stories remain available');
   renderBranches();
 }
@@ -1222,13 +1344,14 @@ async function loadServiceMode() {
     if (Number.isSafeInteger(health.expansionUsed) && health.expansionUsed >= 0) serverExpansionUsed = health.expansionUsed;
     voiceEnabled = health.status === 'ok' && health.voiceEnabled === true;
     localReviewAccess = health.status === 'ok' && health.localReviewAccess === true;
+    localReplayHistoryAccess = health.status === 'ok' && health.localReplayHistoryAccess === true;
     voice.setLocalAccess?.(localReviewAccess);
     voice.setEnabled(voiceEnabled);
     applyServiceMode(liveAccessMode(health));
     if (serverExpansionUsed >= expansionLimit) status(`This browser session reached its exploration limit (${expansionLimit}).`);
-    if (localReviewAccess) refreshHistory().catch(() => {});
+    if (localReviewAccess || localReplayHistoryAccess) { refreshHistory().catch(() => {}); refreshHistoryQuestions().catch(() => {}); }
     return health;
-  } catch { localMetaKeySetup.setHealth(null); voiceEnabled = false; localReviewAccess = false; voice.setLocalAccess?.(false); voice.setEnabled(false); applyServiceMode('unknown'); return null; }
+  } catch { localMetaKeySetup.setHealth(null); voiceEnabled = false; localReviewAccess = false; localReplayHistoryAccess = false; voice.setLocalAccess?.(false); voice.setEnabled(false); applyServiceMode('unknown'); return null; }
 }
 function setInvitationOpen(open) {
   if (open) {
@@ -1271,7 +1394,7 @@ function setView(view, userSelected = false) {
   updateSceneAction(historySelection ? null : selectedEvent);
   $('event-progress').textContent = historySelection ? (imageAvailable ? 'Saved history media' : 'No saved media is attached to this event.') : [selectedEvent?.sceneLoading && view === 'scene' ? '' : selectedEvent?.sceneMessage, selectedEvent?.childrenMessage, selectedEvent?.cutoutMessage].filter(Boolean).join(' · ');
   $('event-loading-indicator').hidden = !selectedEvent?.childrenLoading || !selectedEvent?.running;
-  $('scene-view').disabled = !imageAvailable; $('cutout-view').disabled = historySelection ? !cutoutAvailable : !selectedBranchId; $('model-button').disabled = historySelection ? !modelAvailable || !modelApi : !selectedBranchId;
+  $('scene-view').disabled = !imageAvailable; $('cutout-view').disabled = historySelection ? !cutoutAvailable && !(serviceMode === 'live-enabled' && hasLiveAccess() || localReplayHistoryAccess) : !selectedBranchId; $('model-button').disabled = historySelection ? !modelAvailable || !modelApi : !selectedBranchId;
   $('hero-image').hidden = !imageAvailable || view !== 'scene';
   $('cutout-image').hidden = !cutoutAvailable || view !== 'cutout';
   $('model-view').hidden = !modelAvailable || view !== 'model';
@@ -1315,10 +1438,11 @@ function showGuard(data) {
   $('retry').hidden = !$('retry').dataset.prompt;
 }
 function renderBranches() {
-  document.body.classList.toggle('has-story', branchState.branches.length > 0 || !!selectedContext || !!savedNavigationState);
+  document.body.classList.toggle('has-story', historyMode || branchState.branches.length > 0 || !!selectedContext || !!savedNavigationState);
   syncAtlasWorldCard();
   $('show-invitation').setAttribute('aria-expanded', String(!document.body.classList.contains('has-story') || document.body.classList.contains('invitation-open')));
   $('branch-list').replaceChildren(); $('map-empty').hidden = branchState.branches.length > 0 || branchState.phase === 'policy-checking' || rootGenerationActive;
+  if (document.body.classList.contains('history-requested')) return;
   const selected = branchState.branches.find(item => item.id === selectedBranchId);
   if (branchState.phase === 'policy-checking') {
     const count = Math.min(branchState.candidateCount || 1, 8);
@@ -1388,6 +1512,15 @@ function setEvidenceOpen(open) {
 function updateSceneAction(work = eventWork.get(eventKey(currentRunId, selectedBranchId))) {
   const button = $('event-scene-action');
   if (!button) return;
+  if (!historyMode && document.body.classList.contains('history-requested')) { button.hidden = true; $('chronicle-stage')?.classList.remove('has-scene-action'); return; }
+  if (historyMode) {
+    const allowed = serviceMode === 'live-enabled' && hasLiveAccess() || localReplayHistoryAccess;
+    button.hidden = !selectedHistoryRecord || !!historyMedia.sceneUrl || !allowed || activeView !== 'scene' || !!historyMediaJob;
+    button.textContent = 'Generate scene';
+    button.setAttribute('aria-label', `Generate scene for ${selectedHistoryRecord?.title || 'this history event'}`);
+    $('chronicle-stage')?.classList.toggle('has-scene-action', !button.hidden);
+    return;
+  }
   const canGenerate = serviceMode === 'live-enabled' && hasLiveAccess();
   const available = work && !work.sceneUrl && (work.sceneRetryable || work.sceneMissing && canGenerate);
   button.hidden = !available || activeView !== 'scene' || work.sceneQueued || work.sceneRunning;
@@ -1419,8 +1552,35 @@ async function loadEvidenceForBranch(runId, branch) {
   $('evidence-status').textContent = rendered ? 'Evidence and hypothetical scenario brief' : sourceUnavailable ? 'No source passage was retrieved; this path is an unsourced hypothetical.' : 'No validated evidence brief is available for this path.';
   setEvidenceOpen(button.getAttribute('aria-expanded') === 'true');
 }
+async function requestHistoryMedia(kind) {
+  if (!historyMode || !selectedHistoryRecord || historyMediaJob) return;
+  const state = historySession.getState();
+  const identity = { questionId:state.questionId, historyId:state.historyId, eventId:selectedHistoryRecord.id };
+  if (!identity.questionId || !identity.historyId || !identity.eventId) return;
+  const current = () => {
+    const active = historySession.getState();
+    return active.questionId === identity.questionId && active.historyId === identity.historyId && active.selectedEventId === identity.eventId;
+  };
+  historyMediaJob = `${kind}:${identity.questionId}:${identity.historyId}:${identity.eventId}`;
+  updateSceneAction();
+  viewStatus(kind === 'scene' ? 'Creating a saved scene for this history event…' : 'Creating a SAM cutout for this history event…', true);
+  try {
+    const response = await fetch(`/api/history/${kind}`, { method:'POST', headers:{ 'content-type':'application/json','x-demo-access-code':$('access').value }, body:JSON.stringify(identity) });
+    const result = await response.json().catch(() => ({}));
+    if (!current()) return;
+    if (!response.ok) throw new Error(result.error || `Could not create the ${kind}`);
+    const url = historyRefUrl(result.url || result.ref);
+    if (result.status === 'complete' && url) {
+      if (kind === 'scene') historyMedia.sceneUrl = url; else historyMedia.cutoutUrl = url;
+      viewStatus(kind === 'scene' ? 'Saved scene ready' : 'SAM cutout ready');
+      setView(kind === 'scene' ? 'scene' : 'cutout', true);
+    } else if (result.status === 'pending' || result.status === 'in-progress') viewStatus(`The ${kind} is still being prepared. Select ${kind === 'scene' ? 'Generate scene' : 'SAM cutout'} again to check.`);
+    else viewStatus(result.error || (result.status === 'missing-image' ? 'Create a scene before requesting a cutout.' : `No ${kind} is available for this history event yet.`));
+  } catch (error) { if (current()) viewStatus(error.message || `Could not create the ${kind}`); }
+  finally { historyMediaJob = null; updateSceneAction(); if (historyMode) setView(activeView); }
+}
 function renderEventWork() {
-  if (historyMode) { $('event-consequences').hidden = true; $('event-retry').hidden = true; return; }
+  if (historyMode || document.body.classList.contains('history-requested')) { $('event-consequences').hidden = true; $('event-retry').hidden = true; $('event-scene-action').hidden = true; return; }
   const work = eventWork.get(eventKey(currentRunId, selectedBranchId));
   const section = $('event-consequences'); section.hidden = !selectedBranchId || !work;
   const selected = branchState.branches.find(branch => branch.id === selectedBranchId);
@@ -1868,7 +2028,7 @@ $('event-retry').addEventListener('click', () => {
   if (action === 'retry') activateBranch(branch, true);
 });
 $('event-scene-action').addEventListener('click', () => {
-  if (historyMode) return;
+  if (historyMode) { requestHistoryMedia('scene'); return; }
   const branch = branchState.branches.find(item => item.id === selectedBranchId), work = eventWork.get(eventKey(currentRunId, selectedBranchId));
   if (!branch || !work || work.sceneQueued || work.sceneRunning) return;
   const runId = currentRunId;
@@ -1914,7 +2074,7 @@ function updateRunLocation(id, branchId = '') {
   rememberRun(id); $('runs').value = id;
 }
 function renderAncestry() {
-  if (historyMode) { $('world-navigation').hidden = true; return; }
+  if (historyMode || document.body.classList.contains('history-requested')) { $('world-navigation').hidden = true; $('world-path').replaceChildren(); return; }
   const nav = $('world-path'); nav.replaceChildren();
   $('world-navigation').hidden = !currentRunId && !continuation.path?.length;
   $('world-back').hidden = !continuation.parentRunId;
@@ -1930,6 +2090,7 @@ function renderAncestry() {
 }
 async function expandBranch(branch) {
   if (historyMode) { const event = historySession.getState().history?.events?.find(item => item.id === `${currentRunId}:${branch?.id}`); if (event) selectHistoryEvent(event.id); return; }
+  if (document.body.classList.contains('history-requested')) return;
   if (branch?.ancestorRunId) { await openAncestor(branch.ancestorRunId, branch.branchId); return; }
   if (!branch?.id || streamBusy || replayActive) return;
   selectBranch(branch);
@@ -1999,7 +2160,7 @@ function renderArchive() {
   if (currentRunId && visible.some(run => run.id === currentRunId)) $('runs').value = currentRunId;
   $('archive-history-toggle').textContent = archiveShowHistory ? 'Hide previous explorations' : 'Show previous explorations';
   $('archive-history-toggle').setAttribute('aria-pressed', String(archiveShowHistory));
-  $('archive-history-hint').textContent = archiveShowHistory && !hasLiveAccess() && serviceMode === 'live-enabled' ? 'Enter your access code to see saved explorations.' : '';
+  $('archive-history-hint').textContent = archiveShowHistory && !hasLiveAccess() && !localReplayHistoryAccess && serviceMode === 'live-enabled' ? 'Enter your access code to see saved explorations.' : '';
 }
 function learnRunMetadata(id, branch, manifest) {
   const hero = branch.branches?.find(item => item.id === (branch.hero?.branchId || branch.hero?.id));
@@ -2014,7 +2175,7 @@ function learnRunMetadata(id, branch, manifest) {
 async function refreshHistory() {
   const request = ++historyRequest;
   const headers = $('access').value ? { 'x-demo-access-code': $('access').value } : {};
-  const responses = await Promise.allSettled([fetch('/runs'), hasLiveAccess() ? fetch('/api/history', { headers }) : Promise.resolve(null)]);
+  const responses = await Promise.allSettled([fetch('/runs'), hasLiveAccess() || localReplayHistoryAccess ? fetch('/api/history', { headers }) : Promise.resolve(null)]);
   const all = [];
   for (const result of responses) {
     if (result.status !== 'fulfilled' || !result.value?.ok) continue;
@@ -2056,7 +2217,7 @@ function renderHeroModels() {
     card.append(model, role, metrics); host.append(card);
   }
 }
-function reset({ preservePanel = false, preserveExpansion = false } = {}) { historySession.clear(); evidenceRequest++; $('evidence-toggle').hidden = true; $('evidence-content').replaceChildren(); $('evidence-panel').hidden = true; $('evidence-toggle').setAttribute('aria-expanded', 'false'); updateSceneAction(null); $('event-retry').hidden = true; savedPreview.clear(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; geographyPreviewControls.clear(); showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasSourceGraphSignature = ''; atlasVisibleGraphSignature = ''; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
+function reset({ preservePanel = false, preserveExpansion = false } = {}) { historyCreationRequested = false; $('history-creation-status').hidden = true; $('history-creation-status').textContent = ''; historySession.clear(); evidenceRequest++; $('evidence-toggle').hidden = true; $('evidence-content').replaceChildren(); $('evidence-panel').hidden = true; $('evidence-toggle').setAttribute('aria-expanded', 'false'); updateSceneAction(null); $('event-retry').hidden = true; savedPreview.clear(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; geographyPreviewControls.clear(); showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = (serviceMode !== 'live-enabled' && !localReplayHistoryAccess); currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasSourceGraphSignature = ''; atlasVisibleGraphSignature = ''; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
 function setBranch(data, event = 'complete', preferredBranchId = '') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchState.phase === 'final' ? (continuation.path?.length ? 'POSSIBLE CONSEQUENCE' : 'SELECTED EVENT') : branchPhaseLabel(branchState.phase);
@@ -2364,20 +2525,31 @@ async function streamRun(endpoint, body, request, signalOverride, expansionReser
   } finally {
     if (request === replayRequest) {
       if (rootGenerationActive) finishRootGenerationProgress('The exploration ended before it could be saved.');
-      streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; renderBranches();
+      streamBusy = false; $('live-submit').disabled = (serviceMode !== 'live-enabled' && !localReplayHistoryAccess); renderBranches();
       // Consequence generation starts only after an explicit branch entry.
     }
   }
 }
 async function runPrompt(prompt) {
-  if (!prompt.trim() || streamBusy) return;
-  if (serviceMode === 'replay-only') { status('Saved stories · run locally with your own Meta API key for fresh exploration'); return; }
-  if (serviceMode !== 'live-enabled') { status('Service mode could not be confirmed · open a saved world below'); return; }
-  if (!hasLiveAccess()) { status('Select a saved world, or enter a live access code.'); return; }
+  if (!prompt.trim() || streamBusy || historyQuestionBusy) return;
+  const historyWriteAllowed = canCreateFreshHistory();
+  if (!historyWriteAllowed) {
+    if (localReplayHistoryAccess) {
+      const setup = $('meta-key-setup');
+      if (setup && !setup.hidden) setup.open = true;
+      status('Configure a Meta API key to create a fresh history. Saved histories remain available for local replay.');
+    } else status(serviceMode === 'replay-only' ? 'Open this saved history locally to author another question.' : serviceMode !== 'live-enabled' ? 'Service mode could not be confirmed · open a saved history below' : 'Enter live access to create a history.');
+    return;
+  }
   const atlasData = atlasController?.getData?.();
   const intent = atlasController?.getAttachmentIntent?.() || atlasAttachmentIntent;
   let attachment;
-  if (intent?.mode === 'current-world' && intent.currentWorldId) {
+  const activeHistory = historySession.getState();
+  if (historyMode && activeHistory.questionId && activeHistory.historyId && selectedHistoryRecord?.id) {
+    attachment = { mode:'history-event', questionId:activeHistory.questionId, historyId:activeHistory.historyId, eventId:selectedHistoryRecord.id };
+  } else if (historyMode) {
+    attachment = { mode:'present-day', divergenceYear:activeHistory.date || 2026 };
+  } else if (intent?.mode === 'current-world' && intent.currentWorldId) {
     const world = atlasData?.worlds?.find(item => item.id === intent.currentWorldId);
     const ref = world?.eventRef || (world?.runId && world?.branchId ? { runId:world.runId, branchId:world.branchId } : null);
     if (!ref?.runId || !ref?.branchId) { status('Enter a saved event before attaching a question to the current world.'); return; }
@@ -2386,11 +2558,55 @@ async function runPrompt(prompt) {
     attachment = { mode:'present-day', divergenceYear:intent?.divergenceYear || 2026,
       ...(intent?.divergencePlace ? { divergencePlace:intent.divergencePlace } : {}) };
   }
-  viewStatus(''); reset({ preservePanel:true }); history.pushState(null, '', location.pathname + location.search); $('prompt').value = prompt; status('Checking your question…');
-  await streamRun('/api/run', { divergence:prompt, attachment }, replayRequest);
+  viewStatus(''); $('prompt').value = prompt;
+  const request = replayRequest;
+  historyQuestionBusy = true; historyCreationRequested = !historyMode;
+  $('history-creation-status').hidden = false; $('history-creation-status').textContent = 'Creating a new saved history…';
+  if (historyCreationRequested) document.body.classList.add('history-requested');
+  $('live-submit').disabled = true; status('Checking your question…'); setStageMessage('Framing a new history from your question…');
+  try {
+    const response = await fetch('/api/history/questions', { method:'POST', signal:navigation.signal,
+      headers:{ 'content-type':'application/json', 'x-demo-access-code':$('access').value },
+      body:JSON.stringify({ question:prompt.trim(), attachment }) });
+    const data = await response.json().catch(() => ({}));
+    if (request !== replayRequest) return;
+    if (!response.ok) throw new Error(data.error || `Unable to create history (${response.status})`);
+    const question = data.question, historyRecord = data.history || question?.histories?.at(-1);
+    if (!question?.id || !historyRecord?.id) throw new Error('The saved history response was incomplete.');
+    historyCreationRequested = false; $('history-creation-status').hidden = true; $('history-creation-status').textContent = '';
+    const knownQuestions = historySession.getState().questions;
+    const createdQuestion = { ...question, histories:Array.isArray(question.histories) ? question.histories.map(item => item.id === historyRecord.id ? historyRecord : item) : [historyRecord] };
+    reset({ preservePanel:true }); forcePushHistoryLocation = true;
+    const firstEvent = [...(historyRecord.events || [])].sort((a,b)=>a.year-b.year).at(-1);
+    const date = [question.divergenceYear, data.divergenceYear, firstEvent?.year, data.dateWindow?.toYear, 2026]
+      .find(year => Number.isSafeInteger(year) && year !== 0);
+    const event = [...(historyRecord.events || [])].filter(item => item.year <= date).sort((a,b)=>a.year-b.year).at(-1);
+    historySession.setQuestions([...knownQuestions.filter(item => item.id !== question.id), createdQuestion]);
+    historySession.setContext({ questionId:question.id, historyId:historyRecord.id, eventId:event?.id || '', date });
+    document.body.classList.add('has-story');
+    if (isAtlasPhone()) setAtlasFocused(true);
+    status('History ready · suggestions appear around the selected date');
+    setStageMessage('Your history is ready. Choose a saved event or review suggestions around this date.');
+  } catch (error) {
+    if (request === replayRequest) {
+      historyCreationRequested = !historyMode; $('history-creation-status').hidden = false; $('history-creation-status').textContent = error.message || 'Could not create a saved history.';
+      if (historyCreationRequested) document.body.classList.add('history-requested');
+      status(error.message || 'Could not create a saved history.');
+      setStageMessage(error.message || 'Could not create a saved history.');
+    }
+  } finally { historyQuestionBusy = false; if (request === replayRequest) { $('live-submit').disabled = serviceMode !== 'live-enabled' && !localReplayHistoryAccess; updateFreshHistoryCta(); } }
 }
 $('prompt-form').addEventListener('submit', e => { e.preventDefault(); runPrompt($('prompt').value); });
 $('focus-atlas')?.addEventListener('click', () => { setAtlasFocused(true); atlasController?.scene?.setZoom?.(0.78); $('atlas-scene')?.focus({ preventScroll:true }); });
+$('history-orbit-toggle')?.addEventListener('click', () => {
+  if (historySession.getState().histories.length < 2) return;
+  historyShowOrbit = !historyShowOrbit;
+  historyRenderSignature = '';
+  updateHistoryAtlasView();
+  $('history-orbit-toggle').setAttribute('aria-pressed', String(historyShowOrbit));
+  $('history-orbit-toggle').textContent = 'Show Orbit level';
+  $('history-orbit-toggle').setAttribute('aria-label', 'Show Orbit level');
+});
 $('atlas-show-tree')?.addEventListener('click', () => {
   setAtlasFocused(false);
   if (historyMode && isAtlasPhone()) { document.body.classList.add('atlas-panels-open'); document.body.classList.remove('atlas-details-open'); syncAtlasCompactButtons(); }
@@ -2463,17 +2679,28 @@ $('geography-reset-adjustments').addEventListener('click', () => {
   renderGeography();
 });
 $('load-run').addEventListener('click', () => loadRun($('runs').value));
+$('history-question-picker').addEventListener('change', event => {
+  if (!event.currentTarget.value) return;
+  if (!historySession.openQuestion(event.currentTarget.value)) status('This saved question has no date metadata or events to open.');
+});
 function toggleArchiveHistory() { archiveShowHistory = !archiveShowHistory; renderArchive(); if (archiveShowHistory) refreshHistory().catch(() => {}); }
 $('archive-history-toggle').addEventListener('click', toggleArchiveHistory);
 $('world-back').addEventListener('click', () => continuation.parentBranchId ? openAncestor(continuation.parentRunId, continuation.parentBranchId) : loadRun(continuation.parentRunId, { animate: false }));
-  $('access').addEventListener('change', () => { refreshHistory().catch(() => {}); renderBranches(); });
+$('access').addEventListener('change', () => { refreshHistory().catch(() => {}); refreshHistoryQuestions().catch(() => {}); renderBranches(); });
 function restoreLocationFromHash() {
   const hash = location.hash;
   if (hash === lastHandledLocationHash) return;
   lastHandledLocationHash = hash;
+  const nativeHistory = parseHistoryLocation(hash);
+  if (nativeHistory) {
+    activeHistoryLocationKey = `${nativeHistory.questionId}:${nativeHistory.historyId}`;
+    historyCreationRequested = false;
+    historySession.setContext({ ...nativeHistory, readOnly:true });
+    return;
+  }
   const id = runIdFromHash(hash);
-  if (id) loadRun(id, { animate: false, selectedBranchId: eventIdFromHash(hash) });
-  else { viewStatus(''); reset(); }
+  if (id) { activeHistoryLocationKey = ''; historySession.clear(); loadRun(id, { animate: false, selectedBranchId: eventIdFromHash(hash) }); }
+  else { activeHistoryLocationKey = ''; viewStatus(''); reset(); }
 }
 window.addEventListener('hashchange', restoreLocationFromHash);
 window.addEventListener('popstate', restoreLocationFromHash);
@@ -2481,7 +2708,8 @@ $('scene-view').addEventListener('click', () => { viewStatus(''); setView('scene
 $('cutout-view').addEventListener('click', () => {
   if (historyMode) {
     if (historyMedia.cutoutUrl) { viewStatus(''); setView('cutout', true); }
-    else viewStatus('No saved cutout is attached to this history event. New history media generation is not available here.');
+    else if (serviceMode === 'live-enabled' && hasLiveAccess() || localReplayHistoryAccess) requestHistoryMedia('cutout');
+    else viewStatus('No saved cutout is attached to this history event.');
     return;
   }
   const runId = currentRunId, branchId = selectedBranchId;
@@ -2599,7 +2827,14 @@ reset();
 initializeAtlas();
 serviceModeReady = loadServiceMode();
 refreshHistory().catch(() => { $('runs').replaceChildren(new Option('Archive unavailable', '')); });
-const linkedRun = runIdFromHash(location.hash); if (linkedRun) loadRun(linkedRun, { animate: false, selectedBranchId: eventIdFromHash(location.hash) });
+const linkedHistory = parseHistoryLocation(location.hash);
+if (linkedHistory) {
+  activeHistoryLocationKey = `${linkedHistory.questionId}:${linkedHistory.historyId}`;
+  serviceModeReady.then(() => historySession.setContext({ ...linkedHistory, readOnly:true }));
+} else {
+  const linkedRun = runIdFromHash(location.hash);
+  if (linkedRun) loadRun(linkedRun, { animate: false, selectedBranchId: eventIdFromHash(location.hash) });
+}
 import('./visuals.js').then(async ({createModelViewer}) => {
   try { modelApi = createModelViewer($('model-view')); setView(activeView); }
   catch { modelApi = null; setView(activeView); }

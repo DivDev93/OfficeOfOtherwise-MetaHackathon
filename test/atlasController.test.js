@@ -372,6 +372,42 @@ test('history projection is independent of legacy graph/geography sync and selec
   controller.destroy();
 });
 
+test('history spine projection enables sibling selection and count-chip question selection without tree entry', async () => {
+  const doc = fakeDocument(), host = doc.createElement('div'), toolbar = doc.createElement('div');
+  const active = { id:'q-active', question:'Active question', divergenceYear:-2500, histories:[
+    { id:'history-a', events:[{ id:'shared', year:-3000, place:{ lat:12, lon:20 } }, { id:'active-event', year:-2000, place:{ lat:13, lon:21 } }] },
+    { id:'history-b', forkedFromHistoryId:'history-a', forkEventId:'active-event', origin:{ forkYear:-2200 },
+      events:[{ id:'shared', year:-3000, place:{ lat:12, lon:20 } }, { id:'sibling-event', year:-1800, place:{ lat:15, lon:22 } }] },
+  ] };
+  const other = { id:'q-other', question:'Another question', histories:[{ id:'other-history', events:[] }] };
+  const scene = { setWorlds(value) { this.graph = value; }, setHistoryView(value) { this.history = value; },
+    setSurfaceLabelLevel() {}, setOrbitLevel() {}, setTravelMode() {}, getZoom() { return 0; }, getSurfaceDetailZoom() { return 0; } };
+  let selectedHistory = null, selectedQuestion = null;
+  const controller = await createAtlasController({ container:host, toolbarContainer:toolbar, document:doc, questions:[active,other],
+    rendererFactory:async (_container, callbacks) => { scene.callbacks = callbacks; return scene; },
+    onHistorySelect(id, meta) { selectedHistory = { id, meta }; },
+    onQuestionSelect(id, meta) { selectedQuestion = { id, meta }; },
+  });
+  const projection = controller.setHistoryView({ questions:[active,other], question:active, activeQuestionId:active.id,
+    historyId:'history-a', asOfYear:-1900, window:{ fromYear:-3000, toYear:-1001 }, showOrbit:true });
+  assert.equal(projection.spineLayout.spines.length, 2);
+  assert.equal(projection.siblingEarths[0].asOfYear, -1900);
+  assert.deepEqual(projection.siblingEarths[0].events.map(item => item.id), ['shared'], 'future sibling events stay off the same-date Earth snapshot');
+  assert.equal(projection.showOrbit, true);
+  assert.equal(byText(toolbar, 'Unfolded worlds (orbit)').hidden, true, 'legacy unfold number input is removed in history mode');
+  assert.equal(scene.history, projection);
+  const siblingId = projection.siblingEarths[0].historyId;
+  assert.equal(scene.callbacks.onHistorySelect(siblingId, { source:'pointer' }), true);
+  assert.equal(selectedHistory.id, siblingId);
+  assert.equal(selectedHistory.meta.date, -1900, 'sibling selection preserves the active as-of date');
+  assert.equal(scene.callbacks.onQuestionSelect(other.id, { source:'pointer' }), true);
+  assert.equal(selectedQuestion.id, other.id);
+  assert.equal(selectedQuestion.meta.question, other);
+  controller.setHistoryView(null);
+  assert.equal(byText(toolbar, 'Unfolded worlds (orbit)').hidden, false, 'legacy controls restore after history exit');
+  controller.destroy();
+});
+
 test('present-day Earth entry selects new-question attachment without entering a world or triggering scene generation', async () => {
   const doc = fakeDocument(), host = doc.createElement('div'), toolbar = doc.createElement('div');
   let appEntries = 0, attachment = null, sceneEntries = 0, selectedMeta = null;

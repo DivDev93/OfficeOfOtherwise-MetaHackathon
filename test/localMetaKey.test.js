@@ -41,12 +41,12 @@ test('local judge key switches replay to live in memory and resets to boot confi
   const appliedResponse = await postJson(url, '/api/local-meta-key', { apiKey: `  ${apiKey}  ` });
   const appliedText = await appliedResponse.text();
   assert.equal(appliedResponse.status, 200); assert.doesNotMatch(appliedText, /fixture-local-key-only-in-test/);
-  assert.deepEqual(JSON.parse(appliedText), { setupAvailable: true, metaKeyConfigured: true, metaKeyOverrideActive: true, replayOnly: false, localReviewAccess: true });
+  assert.deepEqual(JSON.parse(appliedText), { setupAvailable: true, metaKeyConfigured: true, metaKeyOverrideActive: true, replayOnly: false, localReviewAccess: true, localReplayHistoryAccess: false });
 
   const restoredResponse = await fetch(`${url}/api/local-meta-key`, { method: 'DELETE', headers: localHeaders(url) });
   const restoredText = await restoredResponse.text();
   assert.equal(restoredResponse.status, 200); assert.doesNotMatch(restoredText, /fixture-local-key-only-in-test/);
-  assert.deepEqual(JSON.parse(restoredText), { setupAvailable: true, metaKeyConfigured: false, metaKeyOverrideActive: false, replayOnly: true, localReviewAccess: false });
+  assert.deepEqual(JSON.parse(restoredText), { setupAvailable: true, metaKeyConfigured: false, metaKeyOverrideActive: false, replayOnly: true, localReviewAccess: false, localReplayHistoryAccess: true });
 });
 
 test('all lazy Meta runner factories receive the active server-only key and perform no external calls in the fixture', async t => {

@@ -15,11 +15,13 @@ export function normalizeAssetRef(value) {
 }
 
 function safeMediaUrl(value, runId, branchId) {
-  if (typeof value !== 'string' || value.length > 500 || !runId || !branchId) return undefined;
+  if (typeof value !== 'string' || value.length > 500) return undefined;
   let url;
   try { url = new URL(value, 'https://history.local'); } catch { return undefined; }
   if (url.origin !== 'https://history.local' || url.search || url.hash || !value.startsWith('/')) return undefined;
   const path = url.pathname;
+  if (/^\/history-media\/[a-f\d]{64}\.png$/i.test(path)) return value;
+  if (!runId || !branchId) return undefined;
   const runFile = path.match(/^\/runs\/([^/]+)\/(hero\.png|cutout\.png|model\.glb|model\.meshopt\.glb)$/);
   if (runFile) {
     let decoded;
@@ -293,7 +295,15 @@ export function migrateSavedTree(records, { windowRadiusYears = 500, maxEraGapYe
       history.suggestions?.sort((a, b) => a.year - b.year || a.id.localeCompare(b.id));
     }
     const first = group[0].run;
-    questions.push({ id: String(questionId), question: text(first.divergence ?? first.rootDivergence ?? first.continuation?.rootDivergence), histories: historyPaths });
+    const attachment = first.questionAttachment && typeof first.questionAttachment === 'object' ? first.questionAttachment : {};
+    const questionText = text(first.divergence ?? first.rootDivergence ?? first.continuation?.rootDivergence ?? attachment.question);
+    const title = text(first.questionTitle ?? attachment.title);
+    const divergenceYear = [attachment.divergenceYear, first.divergenceYear].find(isYear);
+    const place = attachment.divergencePlace ?? attachment.place ?? first.divergencePlace;
+    const origin = text(first.questionOrigin ?? attachment.origin);
+    questions.push({ id:String(questionId), question:questionText,
+      ...(title ? { title } : {}), ...(divergenceYear !== undefined ? { divergenceYear } : {}),
+      ...(place && typeof place === 'object' ? { place:structuredClone(place) } : {}), ...(origin ? { origin } : {}), histories:historyPaths });
   }
   return { version: 1, questions, metadata: { migration: 'history-v1-deterministic', counts: {
     questions: questions.length,

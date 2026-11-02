@@ -29,6 +29,30 @@ test('history suggestion agent accepts a named conflict and a compatible fit fro
   assert.match(calls[0].instructions, /"fits" means it can plausibly be true alongside every event/);
 });
 
+test('new history question sends bounded verified parent as-of context without importing old causes', async () => {
+  const question = { id: 'question-new', question: 'What if canal gardens spread?', title: 'Canal gardens spread',
+    divergenceYear: -2400, divergencePlace: { name: 'Sahara', lat: 20, lon: 10 }, origin: { kind: 'user-written' },
+    questionAttachment: { mode: 'history-event', questionId: 'parent-question', historyId: 'parent-history', eventId: 'parent-event',
+      parentContext: { question: 'What if the Sahara stayed green?', asOfEvent: { year: -2400, title: 'Water channels sustain gardens',
+        summary: 'Communities share seasonal irrigation channels.', place: { name: 'Sahara', lat: 20, lon: 10 } },
+        events: [{ year: -2400, title: 'Water channels sustain gardens', summary: 'Communities share seasonal irrigation channels.',
+          place: { name: 'Sahara', lat: 20, lon: 10 }, geography: 'Green Sahara' }], eventCount: 1, composedGeography: 'Green Sahara' } } };
+  const response = { suggestions: [{ year: -2300, place: { name: 'Sahara', lat: 20, lon: 10 }, title: 'Garden terraces spread',
+    summary: 'Communities extend cultivated terraces near shared water.', causeEventId: question.id, era: 'Late Holocene',
+    geography: { version: 1, changes: [] }, verdict: 'fits', conflictsWith: null, reason: '' }] };
+  const { agent, calls } = agentFor(response);
+  await agent.suggest({ question, history: { id: 'history-new', events: [] }, window: { fromYear: -2500, toYear: -2000 } });
+  const payload = JSON.parse(calls[0].input);
+  assert.deepEqual(payload.question, { id: 'question-new', text: question.question, title: question.title,
+    divergenceYear: -2400, divergencePlace: question.divergencePlace, origin: { kind: 'user-written' },
+    parentContext: { question: 'What if the Sahara stayed green?', asOfEvent: { year: -2400, title: 'Water channels sustain gardens',
+      summary: 'Communities share seasonal irrigation channels.', place: { name: 'Sahara', lat: 20, lon: 10 } },
+      events: [{ year: -2400, title: 'Water channels sustain gardens', summary: 'Communities share seasonal irrigation channels.',
+        place: { name: 'Sahara', lat: 20, lon: 10 }, geography: 'Green Sahara' }], eventCount: 1, composedGeography: 'Green Sahara' } });
+  assert.deepEqual(payload.history.events, [], 'the parent history remains context, not active causes');
+  assert.match(calls[0].instructions, /Parent context is the complete verified parent history/);
+});
+
 test('conflicts require a named history event and a concrete reason', async () => {
   const invalid = structuredClone(fixture.suggestions[0]);
   invalid.conflictsWith = 'imagined-event';

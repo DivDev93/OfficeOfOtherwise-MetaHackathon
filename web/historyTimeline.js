@@ -35,10 +35,11 @@ function erasFor(events) {
 export function mountHistoryTimeline(root, { getState, subscribe, session, onHistoryChange = () => {}, onEventSelect = () => {}, onWindowSelect = () => {}, document = globalThis.document } = {}) {
   const host = make(document, 'section', null, 'history-timeline');
   host.setAttribute('aria-label', 'History timeline'); root.replaceChildren(host);
+  const status = make(document, 'p', null, 'history-timeline-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   const tabs = make(document, 'div', null, 'history-timeline-histories');
   const timeline = make(document, 'div', null, 'history-timeline-events');
   const suggestions = make(document, 'section', null, 'history-timeline-suggestions');
-  host.append(tabs, timeline, suggestions);
+  host.append(tabs, timeline, suggestions, status);
   const openEras = new Map();
   const button = (label, action, id, extra = {}) => {
     const node = make(document, 'button', label, 'outline'); node.type = 'button'; node.dataset.action = action; node.dataset.id = id;
@@ -76,8 +77,10 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const histories = state.histories || question?.histories || [];
     const active = state.history || state.activeHistory || histories.find(item => item.id === state.historyId) || histories[0] || null;
     const activeDate = state.date ?? state.asOfYear;
-    host.hidden = !question || !active;
+    host.hidden = !state.questionId;
     tabs.replaceChildren(); timeline.replaceChildren(); suggestions.replaceChildren();
+    status.hidden = !!active || !state.questionId || !state.status;
+    status.textContent = state.status || (state.loading ? 'Loading saved histories…' : '');
     if (!active) return;
     if (histories.length > 1) {
       if (histories.length <= 4) {
@@ -143,7 +146,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const autoToggle = make(document, 'input'); autoToggle.type = 'checkbox'; autoToggle.checked = state.autoSuggest !== false; autoToggle.dataset.autoSuggest = 'true';
     autoToggle.setAttribute('aria-label', 'Automatically suggest events after changing date');
     autoLabel.append(autoToggle, document.createTextNode(' Auto-suggest')); controls.append(autoLabel);
-    if (state.autoSuggest === false && !state.windowCached) controls.append(button(`Suggest events around ${dateText}`, 'manual-suggest', 'current-window'));
+    if (!state.windowCached && !(state.suggestions || []).length) controls.append(button(state.autoSuggest === false ? `Suggest events around ${dateText}` : `Suggest events now around ${dateText}`, 'manual-suggest', 'current-window'));
     if (state.windowCached) controls.append(button(`More around ${dateText}`, 'manual-more', 'current-window'));
     controls.queryAll?.('button').forEach(node => { node.disabled = !!state.loading || !!state.paused; });
     suggestions.append(controls);

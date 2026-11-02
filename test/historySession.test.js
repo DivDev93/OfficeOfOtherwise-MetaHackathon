@@ -32,6 +32,46 @@ test('auto-suggest waits 800ms, reuses cached windows, and hover is inert', asyn
   clock.fire(); await tick(); assert.equal(suggestions, 1, 'only an uncached window requests generation');
 });
 
+test('question and sibling-history selection preserve the global date and stay read-only', async () => {
+  const clock = timers(), calls = [];
+  const q1 = { id:'q1', histories:[history('h1'), history('h1-sibling', [{ id:'future', year:2003, title:'Future', window:{fromYear:1001,toYear:2000} }])] };
+  const q2 = { id:'q2', histories:[{ id:'h2', events:[{ id:'older', year:100, title:'Older' }, { id:'latest', year:1500, title:'Latest' }] }] };
+  const session = createHistorySession({ setTimer:clock.setTimer, clearTimer:clock.clearTimer, fetchImpl:async (url, init = {}) => {
+    calls.push([url, init.method || 'GET']);
+    if (url === '/api/history/preferences') return response({ autoSuggest:true });
+    if (url.startsWith('/api/histories')) return response({ questions:[q1,q2] });
+    throw new Error(`Unexpected request ${url}`);
+  }});
+  session.setContext({ questionId:'q1', historyId:'h1', eventId:'event-1', date:1978 }); await tick();
+  session.selectHistory('h1-sibling'); await tick();
+  assert.equal(session.getState().date,1978);
+  session.selectQuestion('q2'); await tick();
+  assert.equal(session.getState().questionId,'q2');
+  assert.equal(session.getState().date,1978);
+  assert.equal(session.getState().selectedEventId,'latest', 'select the latest event at or before the retained date');
+  assert.equal(session.getState().questions.length,2);
+  assert.equal(clock.size,0);
+  assert.equal(calls.some(([url,method]) => url === '/api/history/suggest' || method === 'POST'), false);
+});
+
+test('opening an archived question without an active date uses only its stored divergence or event year', async () => {
+  const session = createHistorySession({fetchImpl:async url=> url==='/api/history/preferences' ? response({autoSuggest:true}) : response({})});
+  session.setQuestions([
+    {id:'dated',divergenceYear:250,histories:[{id:'dated-h',events:[]}]},
+    {id:'event-dated',histories:[{id:'event-h',events:[{id:'event',year:-900,title:'Saved event'}]}]},
+    {id:'undated',histories:[{id:'empty-h',events:[]}]},
+  ]);
+  assert.equal(session.openQuestion('dated'),true); assert.equal(session.getState().date,250);
+  session.clear(); session.setQuestions([
+    {id:'dated',divergenceYear:250,histories:[{id:'dated-h',events:[]}]},
+    {id:'event-dated',histories:[{id:'event-h',events:[{id:'event',year:-900,title:'Saved event'}]}]},
+    {id:'undated',histories:[{id:'empty-h',events:[]}]},
+  ]);
+  assert.equal(session.openQuestion('event-dated'),true); assert.equal(session.getState().date,-900);
+  session.clear(); session.setQuestions([{id:'undated',histories:[{id:'empty-h',events:[]}]}]);
+  assert.equal(session.openQuestion('undated'),false,'the picker cannot invent a year for empty legacy data');
+});
+
 test('off preference exposes explicit Suggest and More is a separate metered request', async () => {
   const clock = timers(); const calls = [];
   const session = createHistorySession({ setTimer: clock.setTimer, clearTimer: clock.clearTimer, fetchImpl: async (url, init = {}) => {
