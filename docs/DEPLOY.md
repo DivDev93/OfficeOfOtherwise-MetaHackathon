@@ -13,7 +13,7 @@ npm ci --ignore-scripts
 npm run demo
 ```
 
-Open `http://127.0.0.1:3000`. When `META_API_KEY` is unset, the server displays packaged saved runs in replay-only mode and makes no model calls. The offline suite can be run with `npm test`.
+Open `http://127.0.0.1:3000`. When `META_API_KEY` is unset, the server displays packaged saved runs and histories without making model calls. Fresh generation prompts for a locally configured key. The offline suite can be run with `npm test`.
 
 ## Optional fresh Meta functionality
 

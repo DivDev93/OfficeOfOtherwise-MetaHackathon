@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDemoServer } from '../server/index.js';
 import { createHistoryStore } from '../src/demo/historyStore.js';
 import { createHistoryMediaStore } from '../src/demo/historyMediaStore.js';
 import { historyEventRevision } from '../src/demo/historyMediaStore.js';
-import { dateWindowFor } from '../src/demo/historyQuestion.js';
+import { dateWindowFor, HistoryQuestionError } from '../src/demo/historyQuestion.js';
 
 const PNG = Buffer.from('89504e470d0a1a0a', 'hex');
 const event = (id, year, title, extras = {}) => ({ id, year, title, summary: `${title} shapes the landscape.`,
@@ -37,7 +37,7 @@ async function start(t, { historyQuestionGenerator, renderHistoryScene, segmentH
   const cookie = health.headers.get('set-cookie')?.split(';', 1)[0];
   const sessionId = /otherwise_session=([^;]+)/.exec(cookie)?.[1];
   const headers = { cookie, origin: url, 'sec-fetch-site': 'same-origin', 'x-demo-access-code': 'history-api-code', 'content-type': 'application/json' };
-  return { root, liveRunsDir, server, url, headers, sessionId };
+  return { root, liveRunsDir, runsDir, server, url, headers, sessionId };
 }
 
 const reply = async (base, path, headers, body) => fetch(`${base}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
@@ -73,11 +73,28 @@ test('authored question creates an empty user-written history and records only m
   assert.deepEqual(createHistoryStore(server.liveRunsDir).usage('demo', server.sessionId), { worldsEntered: 0, suggestionWindowsGenerated: 0, histories: 1 });
 });
 
+test('safe history-framing errors reach the caller without exposing provider details', async t => {
+  const safeMessage = 'Question framing returned an invalid date or place. No history was saved.';
+  const server = await start(t, { historyQuestionGenerator: async () => {
+    throw new HistoryQuestionError('invalid_frame', safeMessage, 503, { providerResponse: 'private raw response' });
+  } });
+  const result = await reply(server.url, '/api/history/questions', server.headers, { question: 'What if river observatories changed?' });
+  const body = await result.json();
+  assert.equal(result.status, 503);
+  assert.equal(body.code, 'invalid_frame');
+  assert.equal(body.error, safeMessage, 'known safe validation guidance replaces the generic server error');
+  assert.doesNotMatch(JSON.stringify(body), /private raw response/);
+  assert.deepEqual(createHistoryStore(server.liveRunsDir).list().map(item => item.id), ['question-one'], 'a failed frame does not add a history');
+});
+
 test('explicit history scene and cutout use durable identity refs and count one world per actor/event', async t => {
   let sceneCalls = 0, cutoutCalls = 0;
   const scene = async ({ prompt }) => { sceneCalls++; assert.match(prompt, /Water channels/); return { buffer: PNG, mime: 'image/png' }; };
   scene.enforcesDailyCap = true;
-  const cutout = async ({ image }) => { cutoutCalls++; assert.deepEqual(image, PNG); return { buffer: PNG, mime: 'image/png' }; };
+  const cutout = async ({ image, prompt }) => {
+    cutoutCalls++; assert.deepEqual(image, PNG); assert.equal(prompt, 'Water channels sustain gardens');
+    return { buffer: PNG, mime: 'image/png' };
+  };
   cutout.enforcesDailyCap = true;
   const server = await start(t, { renderHistoryScene: scene, segmentHistoryCutout: cutout });
   const identity = { questionId: 'question-one', historyId: 'history-one', eventId: 'event-one' };
@@ -106,6 +123,82 @@ test('explicit history scene and cutout use durable identity refs and count one 
   assert.match(saved.cutoutRef.url, /^\/history-media\/[a-f0-9]{64}\.png$/);
   assert.equal(createHistoryStore(server.liveRunsDir).usage('demo', server.sessionId).worldsEntered, 1,
     'scene and cutout count one unique event world');
+});
+
+test('history cutout reuses a canonically projected legacy hero when the durable event has no media refs', async t => {
+  let cutoutCalls = 0, sceneCalls = 0;
+  const scene = Object.assign(async () => { sceneCalls++; throw new Error('saved hero must be reused'); }, { enforcesDailyCap: true });
+  const cutout = Object.assign(async ({ image, prompt }) => {
+    cutoutCalls++; assert.deepEqual(image, PNG); assert.equal(prompt, 'tree trunk');
+    return { buffer: PNG, mime: 'image/png' };
+  }, { enforcesDailyCap: true });
+  const server = await start(t, { renderHistoryScene: scene, segmentHistoryCutout: cutout, seed: false });
+  const runId = 'legacy-oak-run';
+  const branch = { status: 'ok', divergence: 'A saved oak grove is preserved.', branches: [
+    { id: 'b1', year: 1883, title: 'Buried Oaks', summary: 'Buried Oaks shapes the landscape.',
+      place: { name: 'Oak Ridge', lat: 45, lon: -80 }, geography: { version: 1, changes: [] }, causeEventId: runId },
+  ], hero: { branchId: 'b1', subject: 'tree trunk', imagePrompt: 'A buried oak trunk with visible tree rings.' } };
+  const runDirectory = join(server.runsDir, runId);
+  await mkdir(runDirectory);
+  await Promise.all([
+    writeFile(join(runDirectory, 'branch.json'), JSON.stringify(branch)),
+    writeFile(join(runDirectory, 'hero.png'), PNG),
+  ]);
+  const eventId = `${runId}:b1`;
+  const historyId = `history-${encodeURIComponent(eventId)}`;
+  const saved = createHistoryStore(server.liveRunsDir);
+  saved.save({ id: runId, question: 'What if buried oak groves were protected?', title: 'Buried Oaks', histories: [
+    { id: historyId, events: [event(eventId, 1883, 'Buried Oaks', { causeEventId: runId, place: branch.branches[0].place })] },
+  ] });
+  const projected = await fetch(`${server.url}/api/histories`, { headers: server.headers });
+  const projectedBody = await projected.json();
+  const projectedEvent = projectedBody.questions.find(item => item.id === runId).histories[0].events[0];
+  assert.equal(projectedEvent.heroRef.url, `/runs/${runId}/hero.png`, 'history migration exposes the verified saved hero');
+  assert.equal(saved.get(runId).histories[0].events[0].heroRef, undefined, 'the raw saved event remains ref-free');
+
+  const result = await reply(server.url, '/api/history/cutout', server.headers, { questionId: runId, historyId, eventId });
+  const body = await result.json();
+  assert.equal(result.status, 200, JSON.stringify(body));
+  assert.equal(body.status, 'complete');
+  assert.equal(body.reused, false);
+  assert.equal(sceneCalls, 0, 'a valid legacy hero never triggers replacement scene generation');
+  assert.equal(cutoutCalls, 1, 'the explicit cutout request proceeds directly to SAM');
+});
+
+test('migrated history identities support scene, cutout and new-question attachment', async t => {
+  let sceneCalls = 0, cutoutCalls = 0, questionCalls = 0;
+  const scene = Object.assign(async () => { sceneCalls++; return { buffer: PNG, mime: 'image/png' }; }, { enforcesDailyCap: true });
+  const cutout = Object.assign(async ({ image }) => { cutoutCalls++; assert.deepEqual(image, PNG); return { buffer: PNG, mime: 'image/png' }; }, { enforcesDailyCap: true });
+  const server = await start(t, { renderHistoryScene: scene, segmentHistoryCutout: cutout,
+    historyQuestionGenerator: async ({ question, divergenceYear, place }) => {
+      questionCalls++;
+      return { id: 'new-attached-question', question, title: 'Sundaland river gardens', divergenceYear, divergencePlace: place,
+        origin: { kind: 'user-written' },
+        histories: [{ id: 'new-attached-history', events: [] }], dateWindow: dateWindowFor(divergenceYear) };
+    } });
+  const identity = { questionId: 'd67a4b82-10b4-4126-bbaa-b632390b4a4a',
+    historyId: 'history-d67a4b82-10b4-4126-bbaa-b632390b4a4a%3Ab2',
+    eventId: 'd67a4b82-10b4-4126-bbaa-b632390b4a4a:b2' };
+  createHistoryStore(server.liveRunsDir).save({ id: identity.questionId, question: 'What if the Sunda Shelf remained above water?',
+    histories: [{ id: identity.historyId, events: [event(identity.eventId, 1800, 'Sundaland River Plain Unites Islands', { causeEventId: identity.questionId })] }] });
+  const generated = await reply(server.url, '/api/history/scene', server.headers, identity);
+  const generatedBody = await generated.json();
+  assert.equal(generated.status, 200, JSON.stringify(generatedBody));
+  assert.equal(generatedBody.status, 'complete');
+  assert.equal((await (await reply(server.url, '/api/history/scene', server.headers, identity)).json()).reused, true);
+  assert.equal((await (await reply(server.url, '/api/history/cutout', server.headers, identity)).json()).status, 'complete');
+  const attached = await reply(server.url, '/api/history/questions', server.headers, {
+    question: 'What if river gardens connected the islands?', attachment: { mode: 'history-event', ...identity },
+  });
+  const attachedBody = await attached.json();
+  assert.equal(attached.status, 201, JSON.stringify(attachedBody));
+  assert.equal(attachedBody.question.questionAttachment.eventId, identity.eventId);
+  assert.equal(sceneCalls, 1); assert.equal(cutoutCalls, 1); assert.equal(questionCalls, 1);
+  for (const eventId of ['', ' x', 'x\u0000', 'x'.repeat(241), 42]) {
+    const invalid = await reply(server.url, '/api/history/scene', server.headers, { ...identity, eventId });
+    assert.equal(invalid.status, 400);
+  }
+  assert.equal(sceneCalls, 1, 'malformed identities never dispatch media');
 });
 
 test('history media becomes unknown after restart and does not dispatch again', async t => {

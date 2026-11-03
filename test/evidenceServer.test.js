@@ -11,7 +11,7 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const actualRuns = join(root, 'demo', 'runs');
 const actualEvidence = join(root, 'demo', 'evidence', 'v1.json');
 
-async function start(t, { runsDir = actualRuns, evidencePath = actualEvidence, liveRunsDir, runPipeline, importRunIds, env = { DEMO_REPLAY_ONLY: 'true' } } = {}) {
+async function start(t, { runsDir = actualRuns, evidencePath = actualEvidence, liveRunsDir, runPipeline, importRunIds, env = {} } = {}) {
   const server = createDemoServer({ runsDir, evidencePath, liveRunsDir, runPipeline, importRunIds, webDir: join(root, 'web'), env });
   await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
   t.after(() => new Promise(resolveClose => server.close(resolveClose)));
@@ -41,7 +41,7 @@ test('fresh evidence is streamed and served only from a registered run with a va
     return { runId, branch: artifact };
   };
   runner.enforcesDailyCap = true;
-  const url = await start(t, { liveRunsDir, runPipeline: runner, env: { DEMO_REPLAY_ONLY: 'false', DEMO_ACCESS_CODE: 'fixture-code', DEMO_DAILY_CAP_USD: '3' } });
+  const url = await start(t, { liveRunsDir, runPipeline: runner, env: { META_API_KEY: 'fixture-meta-key', DEMO_ACCESS_CODE: 'fixture-code', DEMO_DAILY_CAP_USD: '3' } });
   const response = await fetch(`${url}/api/run`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-demo-access-code': 'fixture-code' }, body: JSON.stringify({ divergence: artifact.divergence }) });
   assert.equal(response.status, 200);
   const stream = await response.text();
@@ -68,7 +68,7 @@ test('fresh evidence endpoint rejects stale digest and malformed or unsupported 
     return { runId, branch: artifact };
   };
   runner.enforcesDailyCap = true;
-  const url = await start(t, { liveRunsDir, runPipeline: runner, env: { DEMO_REPLAY_ONLY: 'false', DEMO_ACCESS_CODE: 'fixture-code', DEMO_DAILY_CAP_USD: '3' } });
+  const url = await start(t, { liveRunsDir, runPipeline: runner, env: { META_API_KEY: 'fixture-meta-key', DEMO_ACCESS_CODE: 'fixture-code', DEMO_DAILY_CAP_USD: '3' } });
   const post = () => fetch(`${url}/api/run`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-demo-access-code': 'fixture-code' }, body: JSON.stringify({ divergence: artifact.divergence }) });
   await (await post()).text();
   artifact.branches[0].uncertainty += ' altered after retrieval';

@@ -1,5 +1,25 @@
 # Agent rules: Office of Otherwise
 
+## Current integration — operator instruction, November 3, 2026
+
+The active history prototype is now on `main`. PR #11 was merged as
+`f0565b24f09fbd452a121fe684294fbbb589d19b`, followed by the history-model phases
+and the operator-requested local fixes. The operator authorized reviewing,
+committing and pushing verified progress to `main` in one batch; do not merge
+older work wholesale or retain regressions just to make Git clean. Preserve
+the parked `develop`/PR #7 pilot and recovery worktrees. The older Atlas candidate
+and submission-release routing below is historical where it conflicts with this
+instruction. Public deployment, submission and private 3D jobs remain unauthorized.
+
+## Local testing — operator instruction, November 2, 2026
+
+Run the local app with the repository's configured Meta key and existing spend
+ledger. Do not introduce or enable a replay-only or saved-only runtime mode, and
+do not ignore `.env` in preview launchers. Saved stories remain available as data
+in the normal app. If a key is missing, use the existing local key setup and a
+specific missing-key response for generation. Preserve authentication, spend caps,
+saved work, and the prohibition on private 3D jobs and public deployment.
+
 ## Active Atlas review candidate — October 31, 2026
 
 The operator expects ongoing prototype fixes to stay together. The active integrated candidate is `feat/atlas-zoom`, draft PR #11. Continue Atlas fixes there; main is the frozen submission baseline, not a complete copy of the reviewed local prototype. The candidate includes the prior terrain renderer, local geography controls, and rich hover-preview behavior. Read `docs/atlas-zoom/INTEGRATION_AUDIT.md` before replacing a component or choosing another baseline. Older terrain/voice worktrees are preserved recovery references, not parallel targets for new prototype changes. Keep PR #11 draft and unmerged pending operator approval. Keep PR #7 parked. No deployment or submission is authorized.

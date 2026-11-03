@@ -7,10 +7,12 @@ test('question classification runs before bounded Wonder framing and returns can
   const order = [];
   const agent = createHistoryQuestionAgent({
     policy: { async checkPrompt() { order.push('spark'); return { allowed: true }; } },
-    client: { async respond({ input }) {
+    client: { async respond({ input, reasoning, maxOutputTokens }) {
       order.push('wonder');
       const request = JSON.parse(input);
       assert.equal(request.divergenceYear, -500, 'explicit year is preserved for the model');
+      assert.deepEqual(reasoning, { effort: 'minimal' }, 'small JSON framing uses a low reasoning budget');
+      assert.equal(maxOutputTokens, 1000, 'the frame has bounded visible-output room after reasoning');
       return { text: JSON.stringify({ title: 'Wetland gardens flourish', divergenceYear: -500,
         place: { name: 'Sahara', lat: 20, lon: 10 } }) };
     } },

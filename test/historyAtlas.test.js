@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatHistoryQuestionChip, historyAtlasFrameBounds, historyAtlasStatus, historyOrbitMarkerScale, historyOrbitPositions, historySurfaceVisibility, historyWindowForYear, historyYearToAtlasX, historyZoomPresentation, layoutHistoryPins, projectHistoryAtlas, shouldShowPossibilityOutline } from '../web/historyAtlas.js';
+import { formatHistoryQuestionChip, historyAtlasFrameBounds, historyAtlasStatus, historyOrbitMarkerScale, historyOrbitPositions, historySurfaceVisibility, historyWindowForYear, historyYearToAtlasX, historyZoomPresentation, historyZoomStage, layoutHistoryPins, projectHistoryAtlas, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../web/historyAtlas.js';
 import { fitCenteredCameraDistance } from '../web/atlasLayout.js';
 
 const place = { name: 'Lake Chad', lat: 13, lon: 14 };
@@ -118,6 +118,7 @@ test('history zoom skips Orbit when optional or ineligible while preserving cont
   const orbitStart = historyZoomPresentation(0.72, true).state;
   const atlasStage = historyZoomPresentation(0.84, true).state;
   const atlasTransition = historyZoomPresentation(0.78, true).state;
+  const directTransition = historyZoomPresentation(0.45, false).state;
   assert.equal(surface.orbit, 0);
   assert.equal(middle.orbit, 0);
   assert.equal(atlas.orbit, 0);
@@ -128,6 +129,21 @@ test('history zoom skips Orbit when optional or ineligible while preserving cont
   assert.ok(atlasTransition.atlas > 0 && atlasTransition.atlas < 1, 'Orbit-to-Atlas remains continuous');
   assert.equal(atlasStage.atlas, 1, 'Atlas presentation is fully unfolded when the stage badge changes');
   assert.equal(atlasStage.orbit, 0);
+  assert.equal(historyZoomStage(0.25, false), 'surface', 'no-Orbit UI remains Surface while the direct view transition is incomplete');
+  assert.equal(historyZoomStage(0.68, false), 'atlas');
+  assert.equal(historyZoomPresentation(0.68, false).state.atlas, 1);
+  assert.ok(directTransition.atlas > 0 && directTransition.atlas < 1, 'no-Orbit path stays continuous before its Atlas stage');
+});
+
+test('history labels follow selectable event records at each representation level', () => {
+  const event = { historySurfacePin:true, historySpineNodeId:'event:q:e', visualKind:'history-event' };
+  const suggestion = { historySurfacePin:true, visualKind:'history-suggestion' };
+  const siblingEarth = { visualKind:'history-sibling' };
+  const siblingSpineNode = { historySpineNodeId:'event:q:sibling', visualKind:'history-spine-sibling' };
+  assert.equal(shouldLabelHistoryWorld(event, { surface:1, orbit:0, atlas:0 }), true);
+  assert.equal(shouldLabelHistoryWorld(suggestion, { surface:1, orbit:0, atlas:0 }), true);
+  assert.equal(shouldLabelHistoryWorld(siblingEarth, { surface:0, orbit:1, atlas:0 }), true);
+  assert.equal(shouldLabelHistoryWorld(siblingSpineNode, { surface:0, orbit:0, atlas:1 }), true);
 });
 
 test('history status badge reports the current presentation stage and active as-of event count', () => {

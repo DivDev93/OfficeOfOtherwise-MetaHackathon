@@ -292,7 +292,7 @@ test('duplicate persisted history IDs recover four immutable paths and keep late
   assert.throws(() => unsafeStore.save(corruptState.questions['deep-root']), /Duplicate history/, 'normalization also refuses to persist duplicate identities');
 });
 
-test('replay mode preserves stale migrated suggestions as pending and requires explicit More for new generation', async t => {
+test('keyless history preserves stale migrated suggestions as pending and requires explicit More for new generation', async t => {
   const liveRunsDir = await mkdtemp(join(tmpdir(), 'office-history-replay-stale-'));
   t.after(() => rm(liveRunsDir, { recursive: true, force: true }));
   const runDir = join(liveRunsDir, 'runs', 'legacy-replay-root');
@@ -303,7 +303,7 @@ test('replay mode preserves stale migrated suggestions as pending and requires e
       event('candidate-a', -3000, 'Shallow canal gardens spread', { causeEventId: 'legacy-replay-root' }),
       event('candidate-b', -1000, 'Reed craft follows the basin', { causeEventId: 'legacy-replay-root' }),
     ], hero: { branchId: 'visited' } }));
-  const replay = await start(t, { liveRunsDir, env: { DEMO_ACCESS_CODE: 'history-actions-code', DEMO_REPLAY_ONLY: 'true' } });
+  const replay = await start(t, { liveRunsDir, env: { DEMO_ACCESS_CODE: 'history-actions-code' } });
   const migrated = (await (await fetch(`${replay.url}/api/histories`, { headers: replay.headers })).json()).questions
     .find(item => item.id === 'legacy-replay-root').histories[0];
   const first = migrated.suggestions.find(item => item.suggestionForEventId === 'legacy-replay-root:candidate-a');
@@ -314,7 +314,7 @@ test('replay mode preserves stale migrated suggestions as pending and requires e
   assert.equal(firstWeave.status, 200, 'the migrated candidate remains directly usable before its history changes');
   const staleWeave = await fetch(`${replay.url}/api/history/weave`, { method: 'POST', headers: replay.headers,
     body: JSON.stringify({ questionId: 'legacy-replay-root', historyId: migrated.id, suggestionId: second.id }) });
-  assert.equal(staleWeave.status, 409, 'replay mode does not silently trust a stale compatibility verdict');
+  assert.equal(staleWeave.status, 409, 'a stale compatibility verdict is not silently trusted');
   const staleBody = await staleWeave.json();
   assert.equal(staleBody.code, 'suggestion_recheck_pending');
   assert.equal(staleBody.suggestion.id, second.id);

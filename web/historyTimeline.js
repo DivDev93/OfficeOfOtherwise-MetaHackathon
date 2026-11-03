@@ -17,6 +17,22 @@ function historyForkYear(history, histories, question) {
   const fallback = question?.divergenceYear ?? first;
   return Number.isSafeInteger(fallback) && fallback !== 0 ? fallback : 1;
 }
+function timelineIdentity(history, histories) {
+  const events = ordered(history?.events);
+  const peers = (histories || []).filter(item => String(item.id) !== String(history?.id));
+  let sharedPrefixLength = 0;
+  for (const peer of peers) {
+    const otherEvents = ordered(peer.events);
+    let length = 0;
+    while (length < events.length && length < otherEvents.length && String(events[length].id) === String(otherEvents[length].id)) length++;
+    sharedPrefixLength = Math.max(sharedPrefixLength,length);
+  }
+  const first = events[0] || null;
+  const firstEventId = String(first?.id || '');
+  const sharedStartCount = firstEventId ? (histories || []).filter(item => String(ordered(item.events)[0]?.id || '') === firstEventId).length : 0;
+  return { events, first, sharedStartCount, sharedPrefixLength, sharedThrough:sharedPrefixLength ? events[sharedPrefixLength - 1] : null,
+    distinguishing:events[sharedPrefixLength] || null, latest:events.at(-1) || null };
+}
 
 function erasFor(events) {
   const labels = deriveEras(events.map(event => { const item = { ...event }; delete item.era; return item; }));
@@ -32,41 +48,127 @@ function erasFor(events) {
 }
 
 /** Render the event timeline and current suggestion window without owning app navigation. */
-export function mountHistoryTimeline(root, { getState, subscribe, session, onHistoryChange = () => {}, onEventSelect = () => {}, onWindowSelect = () => {}, document = globalThis.document } = {}) {
+export function mountHistoryTimeline(root, { getState, subscribe, session, onHistoryChange = () => {}, onEventSelect = () => {}, onWindowSelect = () => {}, isCompact = () => false, onCompactInspect = () => {}, document = globalThis.document } = {}) {
   const host = make(document, 'section', null, 'history-timeline');
   host.setAttribute('aria-label', 'History timeline'); root.replaceChildren(host);
   const status = make(document, 'p', null, 'history-timeline-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   const tabs = make(document, 'div', null, 'history-timeline-histories');
   const timeline = make(document, 'div', null, 'history-timeline-events');
   const suggestions = make(document, 'section', null, 'history-timeline-suggestions');
-  host.append(tabs, timeline, suggestions, status);
+  suggestions.tabIndex = -1; suggestions.setAttribute('role','region'); suggestions.setAttribute('aria-label','Saved suggestions for the selected window');
+  const comparison = make(document, 'section', null, 'history-timeline-comparison'); comparison.hidden = true;
+  comparison.setAttribute('aria-label','Compare saved timelines');
+  host.append(tabs, timeline, suggestions, comparison, status);
   const openEras = new Map();
+  let galleryExpanded = false, lastRenderedHistoryId = '', lastRenderedSelectionId = '';
+  let comparisonOpen = false, comparisonHasFocus = false, comparisonFocusAction = 'back-to-timeline', comparisonFocusHistoryId = '', comparisonCards = null, comparisonPreviousRail = null, comparisonPreviousScrollTop = null;
   const button = (label, action, id, extra = {}) => {
     const node = make(document, 'button', label, 'outline'); node.type = 'button'; node.dataset.action = action; node.dataset.id = id;
     for (const [key, value] of Object.entries(extra)) if (value != null) node.dataset[key] = value;
     return node;
   };
+  const findAction = (root, action, historyId = '') => {
+    const nativeNodes = [...(root.querySelectorAll?.('button[data-action]') || [])];
+    const nodes = nativeNodes.length ? nativeNodes : [...(root.queryAll?.('button') || [])];
+    return nodes.find(node => node.dataset?.action === action && (!historyId || node.dataset?.historyId === historyId));
+  };
   tabs.addEventListener('click', event => {
+    const action = event.target.closest?.('button[data-action]');
+    if (action?.dataset.action === 'compare-timelines') { openComparison(); return; }
     const target = event.target.closest?.('button[data-history-id]');
     if (target) onHistoryChange(target.dataset.historyId, target.dataset.historyIndex);
   });
+  const setGalleryExpanded = open => {
+    galleryExpanded = open;
+    render(getState?.() || {});
+    if (open) suggestions.scrollIntoView?.({block:'nearest'});
+    findAction(suggestions,'toggle-gallery')?.focus?.({preventScroll:true});
+  };
+  const inspectSuggestion = id => {
+    onEventSelect(id);
+    if (galleryExpanded && isCompact()) {
+      setGalleryExpanded(false);
+      onCompactInspect(id);
+    }
+  };
   tabs.addEventListener('change', event => {
     const target = event.target;
     if (target?.matches?.('select[data-history-select]')) onHistoryChange(target.value, target.selectedOptions?.[0]?.dataset.index);
   });
+  function focusCompareButton() { findAction(tabs,'compare-timelines')?.focus?.({preventScroll:true}); }
+  function closeComparison({ focus = true } = {}) {
+    if (!comparisonOpen) return;
+    comparisonOpen = false; comparisonHasFocus = false;
+    render(getState?.() || {});
+    if (comparisonPreviousRail && comparisonPreviousScrollTop != null) comparisonPreviousRail.scrollTop = comparisonPreviousScrollTop;
+    comparisonPreviousRail = null; comparisonPreviousScrollTop = null;
+    if (focus) focusCompareButton();
+  }
+  function openComparison() {
+    comparisonOpen = true; comparisonHasFocus = true; comparisonFocusAction = 'back-to-timeline'; comparisonFocusHistoryId = '';
+    const rail = host.closest?.('.exploration-rail'); comparisonPreviousRail = rail || null; comparisonPreviousScrollTop = rail?.scrollTop ?? null;
+    if (rail) rail.scrollTop = 0;
+    render(getState?.() || {});
+    const activeCard = [...(comparison.querySelectorAll?.('article')?.length ? comparison.querySelectorAll('article') : comparison.queryAll?.('article') || [])]
+      .find(node => node.getAttribute?.('aria-current') === 'true');
+    const listRect = comparisonCards?.getBoundingClientRect?.(), cardRect = activeCard?.getBoundingClientRect?.();
+    if (listRect && cardRect) {
+      if (cardRect.top < listRect.top) comparisonCards.scrollTop += cardRect.top - listRect.top;
+      else if (cardRect.bottom > listRect.bottom) comparisonCards.scrollTop += cardRect.bottom - listRect.bottom;
+    } else if (activeCard && Number.isFinite(activeCard.offsetTop) && Number.isFinite(comparisonCards?.clientHeight) && comparisonCards.clientHeight > 0) {
+      comparisonCards.scrollTop = Math.max(0,activeCard.offsetTop - comparisonCards.clientHeight + activeCard.offsetHeight);
+    }
+    findAction(comparison,'back-to-timeline')?.focus?.({ preventScroll:true });
+  }
+  comparison.addEventListener('click', event => {
+    const target = event.target.closest?.('button[data-action]'); if (!target) return;
+    if (target.dataset.action === 'back-to-timeline') { closeComparison(); return; }
+    if (target.dataset.action === 'choose-history') {
+      const id = target.dataset.historyId, index = target.dataset.historyIndex;
+      comparisonOpen = false; comparisonHasFocus = false;
+      comparisonPreviousRail = null; comparisonPreviousScrollTop = null;
+      onHistoryChange(id,index);
+      render(getState?.() || {});
+      focusCompareButton();
+    }
+  });
+  comparison.addEventListener('focusin', event => {
+    comparisonHasFocus = true;
+    const target = event.target.closest?.('button[data-action]');
+    if (target) { comparisonFocusAction = target.dataset.action; comparisonFocusHistoryId = target.dataset.historyId || ''; }
+  });
+  comparison.addEventListener('focusout', event => {
+    if (!event.relatedTarget || !comparison.contains?.(event.relatedTarget)) comparisonHasFocus = false;
+  });
+  host.addEventListener('keydown', event => {
+    if (comparisonOpen && event.key === 'Escape') { event.preventDefault?.(); event.stopPropagation?.(); closeComparison(); }
+    else if (galleryExpanded && event.key === 'Escape') { event.preventDefault?.(); event.stopPropagation?.(); setGalleryExpanded(false); }
+  });
   timeline.addEventListener('click', async event => {
     const node = event.target.closest?.('button[data-action]'); if (!node) return;
+    if (node.dataset.action === 'jump-suggestions') { setGalleryExpanded(true); return; }
     if (node.dataset.action === 'cause') onEventSelect(node.dataset.id);
     else if (node.dataset.action === 'fork-event') await session?.forkEvent?.(node.dataset.id);
     else if (node.dataset.action === 'keep') await session?.keep?.(node.dataset.id, node.dataset.wovenId);
     else if (node.dataset.action === 'regenerate') await session?.regenerate?.(node.dataset.id, node.dataset.wovenId);
     else if (node.dataset.action === 'select-event') onEventSelect(node.dataset.id);
+    else if (node.dataset.action === 'select-suggestion') onEventSelect(node.dataset.id);
   });
   suggestions.addEventListener('click', async event => {
-    const node = event.target.closest?.('button[data-action]'); if (!node) return;
-    if (node.dataset.action === 'weave') await session?.weave?.(node.dataset.id);
+    const node = event.target.closest?.('button[data-action]');
+    if (!node) {
+      const card = event.target.closest?.('article.history-timeline-suggestion');
+      if (card?.dataset.suggestionId) inspectSuggestion(card.dataset.suggestionId);
+      return;
+    }
+    if (node.dataset.action === 'select-suggestion') inspectSuggestion(node.dataset.id);
+    else if (node.dataset.action === 'weave') await session?.weave?.(node.dataset.id);
     else if (node.dataset.action === 'fork-suggestion') await session?.forkSuggestion?.(node.dataset.id);
-    else if (node.dataset.action === 'suggest-window') onWindowSelect(Number(node.dataset.year));
+    else if (node.dataset.action === 'suggest-window') {
+      const group = (suggestions.queryAll?.('section') || []).find(item => item.dataset.windowKey === `${node.dataset.fromYear}:${node.dataset.toYear}`);
+      group?.scrollIntoView?.({block:'nearest'}); group?.focus?.({preventScroll:true});
+    }
+    else if (node.dataset.action === 'toggle-gallery') setGalleryExpanded(!galleryExpanded);
     else if (node.dataset.action === 'manual-suggest') await session?.suggest?.();
     else if (node.dataset.action === 'manual-more') await session?.more?.();
   });
@@ -77,38 +179,73 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const histories = state.histories || question?.histories || [];
     const active = state.history || state.activeHistory || histories.find(item => item.id === state.historyId) || histories[0] || null;
     const activeDate = state.date ?? state.asOfYear;
+    if (active && lastRenderedHistoryId && lastRenderedHistoryId !== String(active.id)) galleryExpanded = false;
+    host.classList?.toggle('history-gallery-expanded',galleryExpanded);
     host.hidden = !state.questionId;
-    tabs.replaceChildren(); timeline.replaceChildren(); suggestions.replaceChildren();
+    tabs.replaceChildren(); timeline.replaceChildren(); suggestions.replaceChildren(); comparison.replaceChildren(); comparison.hidden = true; tabs.hidden = true;
     status.hidden = !!active || !state.questionId || !state.status;
     status.textContent = state.status || (state.loading ? 'Loading saved histories…' : '');
     if (!active) return;
     if (histories.length > 1) {
-      if (histories.length <= 4) {
-        for (const [index, history] of histories.entries()) {
-          const forkYear = history.forkEventId || history.origin?.forkYear || history.forkYear || history.fork?.year
-            ? historyForkYear(history, histories, question) : null;
-          const tab = button(`History ${index + 1}${forkYear !== null ? ` · from ${labelYear(forkYear)}` : ''}`,
-            'history', history.id, { historyId: history.id, historyIndex: String(index) });
-          tab.dataset.historyId = history.id; tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(history.id === active.id)); tabs.append(tab);
-        }
-        tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Histories');
-      } else {
-        const label = make(document, 'label', 'Choose a history'); label.setAttribute('for', 'history-timeline-select');
-        const select = make(document, 'select'); select.id = 'history-timeline-select'; select.dataset.historySelect = 'true'; select.setAttribute('aria-label', 'Choose a history');
-        histories.forEach((history, index) => {
-          const forkYear = history.forkEventId || history.origin?.forkYear || history.forkYear || history.fork?.year
-            ? historyForkYear(history, histories, question) : null;
-          const option = make(document, 'option', `History ${index + 1}${forkYear !== null ? ` · from ${labelYear(forkYear)}` : ''}`);
-          option.value = history.id; option.dataset.index = String(index); option.selected = history.id === active.id; select.append(option);
-        });
-        tabs.append(label, select);
-      }
+      tabs.hidden = false;
+      const activeIndex = Math.max(0,histories.findIndex(item => String(item.id) === String(active.id)));
+      const identity = timelineIdentity(active,histories);
+      const summary = make(document,'div',null,'history-timeline-current');
+      const primaryEvent = identity.distinguishing || identity.latest;
+      const primaryName = primaryEvent?.title || 'No saved events yet';
+      const year = primaryEvent ? `${labelYear(primaryEvent.year)} · ` : '';
+      summary.append(make(document,'strong',primaryName,'history-timeline-current-title'),
+        make(document,'span',`Timeline ${activeIndex + 1} of ${histories.length} · ${year}${identity.events.length} event${identity.events.length === 1 ? '' : 's'}`,'history-timeline-current-meta'));
+      const compare = button(`Compare ${histories.length} timelines`,'compare-timelines','compare');
+      compare.setAttribute('aria-expanded',String(comparisonOpen)); compare.setAttribute('aria-controls','history-timeline-comparison');
+      tabs.append(summary,compare);
     }
+    if (comparisonOpen && histories.length > 1) {
+      galleryExpanded = false; host.classList?.remove('history-gallery-expanded');
+      tabs.hidden = true; timeline.hidden = true; suggestions.hidden = true; comparison.hidden = false;
+      comparison.replaceChildren();
+      const heading = make(document,'h3',`Compare ${histories.length} timelines`); heading.id = 'history-timeline-comparison-title';
+      const help = make(document,'p','Each timeline is a different version of this history. Events in one timeline happen together. Suggestions are not a new timeline unless you fork one.','history-timeline-comparison-help');
+      const back = button('Back to timeline','back-to-timeline','back');
+      const cards = make(document,'div',null,'history-timeline-comparison-cards');
+      comparisonCards = cards;
+      comparison.append(heading,help,back,cards); comparison.setAttribute('aria-labelledby',heading.id);
+      histories.forEach((history,index) => {
+        const identity = timelineIdentity(history,histories);
+        const card = make(document,'article',null,'history-timeline-choice');
+        const isCurrent = String(history.id) === String(active.id), primaryEvent = identity.distinguishing || identity.latest;
+        card.setAttribute('aria-current',String(isCurrent));
+        card.append(make(document,'h4',`Timeline ${index + 1}${isCurrent ? ' · Current' : ''}`));
+        const choose = button('', 'choose-history', history.id, {historyId:history.id,historyIndex:String(index)});
+        choose.className += ' history-timeline-choice-open';
+        choose.setAttribute('aria-label',`Open timeline ${index + 1}${primaryEvent ? `: ${primaryEvent.title}, ${labelYear(primaryEvent.year)}` : ''}`);
+        choose.setAttribute('aria-current',String(isCurrent));
+        choose.append(make(document,'strong',primaryEvent?.title || 'No saved event title','history-timeline-choice-title'),
+          make(document,'span',primaryEvent ? labelYear(primaryEvent.year) : 'Year not saved','history-timeline-choice-open-hint'));
+        card.append(choose);
+        const shared = identity.sharedPrefixLength
+          ? `Shares ${identity.sharedPrefixLength} opening event${identity.sharedPrefixLength === 1 ? '' : 's'} through ${labelYear(identity.sharedThrough.year)}`
+          : 'No shared opening event recorded';
+        card.append(make(document,'p',`${identity.events.length} event${identity.events.length === 1 ? '' : 's'} · ${shared}`,'history-timeline-choice-meta'));
+        if (identity.latest && identity.latest !== primaryEvent) card.append(make(document,'p',`Latest: ${labelYear(identity.latest.year)} · ${identity.latest.title}`,'history-timeline-choice-latest'));
+        cards.append(card);
+      });
+      timeline.hidden = true; suggestions.hidden = true;
+      if (comparisonHasFocus) findAction(comparison,comparisonFocusAction,comparisonFocusHistoryId)?.focus?.();
+      return;
+    }
+    comparison.hidden = true; tabs.hidden = histories.length <= 1; timeline.hidden = false; suggestions.hidden = false;
     const causes = new Map(active.events.map(item => [item.id, item]));
     const selected = state.selectedEventId;
+    const selectionChanged = String(active.id) !== lastRenderedHistoryId || String(selected ?? '') !== lastRenderedSelectionId;
+    const wovenSuggestionIds = new Set((active.events || []).map(item=>String(item.id)));
+    const timelineSuggestionCount = new Set([...(active.suggestions || []),...(state.suggestions || [])]
+      .filter(item=>item?.id!=null&&!wovenSuggestionIds.has(String(item.id))).map(item => String(item.id))).size;
+    if (timelineSuggestionCount) timeline.append(button(`View all suggestions · ${timelineSuggestionCount}`,'jump-suggestions','suggestions'));
     for (const era of erasFor(active.events)) {
       const eraKey = `${active.id}:${era.events[0]?.id || era.label}`;
       const details = make(document, 'details', null, 'history-era');
+      if (selectionChanged && era.events.some(item => String(item.id) === String(selected))) openEras.set(eraKey,true);
       details.open = openEras.has(eraKey) ? openEras.get(eraKey) : era.events.some(item => item.id === selected);
       details.addEventListener('toggle', () => openEras.set(eraKey, details.open));
       const summary = make(document, 'summary');
@@ -139,8 +276,14 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       details.append(list); timeline.append(details);
     }
     const dateText = activeDate ? labelYear(activeDate) : 'this date';
-    const heading = make(document, 'h3', `Could slot in around ${dateText}`);
-    suggestions.setAttribute('aria-label', `Suggestions around ${dateText}`); suggestions.append(heading);
+    const wovenIds = wovenSuggestionIds;
+    const savedById = new Map();
+    for (const item of active.suggestions || []) if (item?.id != null && !wovenIds.has(String(item.id))) savedById.set(String(item.id), item);
+    for (const item of state.suggestions || []) if (item?.id != null && !wovenIds.has(String(item.id))) savedById.set(String(item.id), { ...savedById.get(String(item.id)), ...item });
+    const savedSuggestions = [...savedById.values()].sort((a,b) => a.year - b.year || String(a.id).localeCompare(String(b.id)));
+    const heading = make(document, 'h3', `Saved suggestions · ${savedSuggestions.length}`);
+    const subheading = make(document,'p',`Browse every saved suggestion in this timeline. The date remains ${dateText} until you move the timebar.`,'history-timeline-suggestions-context');
+    suggestions.setAttribute('aria-label', `All ${savedSuggestions.length} saved suggestions in this timeline`); suggestions.append(heading,subheading);
     const controls = make(document, 'div', null, 'history-suggestion-controls');
     const autoLabel = make(document, 'label', null, 'history-auto-label');
     const autoToggle = make(document, 'input'); autoToggle.type = 'checkbox'; autoToggle.checked = state.autoSuggest !== false; autoToggle.dataset.autoSuggest = 'true';
@@ -160,26 +303,84 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       if (!cached.count) cached.count = (active.suggestions || []).filter(value => value.window?.fromYear === item.window.fromYear && value.window?.toYear === item.window.toYear).length;
       cachedWindows.set(key, cached);
     }
-    if (cachedWindows.size) {
+    if (cachedWindows.size && !galleryExpanded) {
       const jumps = make(document, 'div', null, 'history-window-jumps');
-      for (const item of cachedWindows.values()) {
+      for (const item of [...cachedWindows.values()].sort((a,b) => a.window.fromYear - b.window.fromYear || a.window.toYear - b.window.toYear)) {
         const from = item.window.fromYear, to = item.window.toYear;
-        const chip = button(`+${item.count} suggestions · ${labelYear(from)} to ${labelYear(to)}`, 'suggest-window', `${from}:${to}`, { year:String(from) });
-        chip.setAttribute('aria-label', `Show ${item.count} suggestions for ${labelYear(from)} to ${labelYear(to)}`); jumps.append(chip);
+        const currentWindow = state.window?.fromYear === from && state.window?.toYear === to;
+        const chip = button(`${currentWindow ? 'Current date · ' : ''}${item.count} · ${labelYear(from)} to ${labelYear(to)}`, 'suggest-window', `${from}:${to}`, { fromYear:String(from), toYear:String(to) });
+        chip.setAttribute('aria-pressed','false'); chip.setAttribute('aria-current',currentWindow ? 'true' : 'false');
+        chip.setAttribute('aria-label', `Jump to ${currentWindow ? 'current preparation window' : 'saved suggestions'}: ${item.count} for ${labelYear(from)} to ${labelYear(to)}`);
+        if (currentWindow) chip.className += ' is-active-window';
+        jumps.append(chip);
       }
       suggestions.append(jumps);
     }
-    const activeWindow = state.window;
-    const available = state.suggestions || active.suggestions?.filter(item => !activeWindow || item.window?.fromYear === activeWindow.fromYear && item.window?.toYear === activeWindow.toYear) || [];
-    if (!available.length) suggestions.append(make(document, 'p', state.status || (state.autoSuggest ? 'No suggestions in this window yet.' : `Use “Suggest events around ${dateText}” to explore this window.`), 'history-session-status'));
+    const visibleSuggestions = savedSuggestions;
+    if (!visibleSuggestions.length) suggestions.append(make(document, 'p', savedSuggestions.length ? 'No saved suggestions in this window.' : state.status || (state.autoSuggest ? 'No saved suggestions yet.' : `Use “Suggest events around ${dateText}” to explore this timeline.`), 'history-session-status'));
     else if (state.status) suggestions.append(make(document, 'p', state.status, 'history-session-status'));
-    for (const item of available) {
-      const card = make(document, 'article', null, 'history-timeline-suggestion');
-      card.append(make(document, 'div', `${labelYear(item.year)} · ${item.verdict === 'conflicts' ? 'Conflicts' : 'Fits'}`, `history-verdict ${item.verdict === 'conflicts' ? 'conflicts' : 'fits'}`),
-        make(document, 'h4', item.title || 'Untitled possibility'), make(document, 'p', item.summary || ''), make(document, 'p', item.reason || '', 'history-suggestion-reason'));
-      if (item.verdict === 'conflicts') card.append(button('What if instead…', 'fork-suggestion', item.id));
-      else card.append(button('Weave into history', 'weave', item.id));
-      suggestions.append(card);
+    const galleryActions = make(document,'div',null,'history-gallery-actions');
+    const expandGallery = button(galleryExpanded ? 'Close expanded gallery' : 'Expand gallery','toggle-gallery','gallery');
+    expandGallery.setAttribute('aria-expanded',String(galleryExpanded));
+    expandGallery.setAttribute('aria-label',galleryExpanded ? 'Close expanded suggestion gallery' : 'Expand suggestions into a comparison board');
+    galleryActions.append(expandGallery); suggestions.append(galleryActions);
+    const groups = new Map();
+    for (const item of cachedWindows.values()) groups.set(`${item.window.fromYear}:${item.window.toYear}`,{window:item.window,items:[]});
+    for (const item of visibleSuggestions) {
+      const key = item.window ? `${item.window.fromYear}:${item.window.toYear}` : 'unwindowed';
+      if (!groups.has(key)) groups.set(key,{ window:item.window || null, items:[] });
+      groups.get(key).items.push(item);
+    }
+    const orderedGroups = galleryExpanded ? [['all',{window:null,items:visibleSuggestions}]]
+      : [...groups.entries()].sort((a,b) => (a[1].window?.fromYear ?? a[1].items[0]?.year ?? 0) - (b[1].window?.fromYear ?? b[1].items[0]?.year ?? 0));
+    const groupList = make(document,'div',null,'history-timeline-suggestion-groups');
+    for (const [,group] of orderedGroups) {
+      const groupNode = make(document,'section',null,'history-timeline-suggestion-group');
+      const groupWindow = group.window;
+      const isCurrent = groupWindow && state.window?.fromYear === groupWindow.fromYear && state.window?.toYear === groupWindow.toYear;
+      groupNode.dataset.windowKey = groupWindow ? `${groupWindow.fromYear}:${groupWindow.toYear}` : 'unwindowed';
+      groupNode.tabIndex = -1;
+      const groupTitle = galleryExpanded ? 'All saved suggestions · oldest first' : groupWindow ? `${labelYear(groupWindow.fromYear)} to ${labelYear(groupWindow.toYear)}${isCurrent ? ' · Current date window' : ''}` : 'Other saved suggestions';
+      groupNode.append(make(document,'h4',groupTitle,'history-timeline-suggestion-group-title'));
+      if (!group.items.length) groupNode.append(make(document,'p','No saved suggestions in this window yet.','history-session-status'));
+      for (const item of group.items) {
+        const card = make(document, 'article', null, 'history-timeline-suggestion'); card.dataset.suggestionId = item.id;
+        const sceneStatus = [item.sceneRef?.status,item.heroRef?.status].find(status => ['queued','pending','unknown','empty'].includes(status));
+        const imageUrl = [item.sceneRef,item.heroRef].map(ref => typeof ref === 'string' ? ref : ref?.url).find(url => typeof url === 'string' && url.startsWith('/') && !url.startsWith('//'));
+        if (imageUrl) { const image = make(document,'img',null,'history-timeline-suggestion-image'); image.src = imageUrl; image.alt = ''; image.loading = 'lazy'; card.append(image); }
+        else card.append(make(document,'span',sceneStatus === 'pending' || sceneStatus === 'queued' ? 'Image preparing' : sceneStatus === 'unknown' ? 'Image status uncertain' : 'No saved image','history-timeline-suggestion-image-placeholder'));
+        const content = make(document,'div',null,'history-timeline-suggestion-content');
+        const currentDateWindow = item.window?.fromYear === state.window?.fromYear && item.window?.toYear === state.window?.toYear;
+        const windowText = galleryExpanded ? currentDateWindow ? ' · Current date window' : ''
+          : item.window ? ` · ${labelYear(item.window.fromYear)}–${labelYear(item.window.toYear)}${currentDateWindow ? ' · Current date window' : ''}` : '';
+        content.append(make(document, 'div', `${labelYear(item.year)} · ${item.verdict === 'conflicts' ? 'Conflicts' : 'Fits'}${windowText}`, `history-verdict ${item.verdict === 'conflicts' ? 'conflicts' : 'fits'}`));
+        const title = button(item.id === state.selectedEventId ? `Selected · ${item.title || 'Untitled possibility'}` : item.title || 'Untitled possibility','select-suggestion',item.id);
+        title.className += ' history-timeline-suggestion-title'; title.setAttribute('aria-pressed',String(item.id === state.selectedEventId));
+        title.setAttribute('aria-label',`${item.id === state.selectedEventId ? 'Selected suggestion' : 'Inspect suggestion'}: ${item.title || 'Untitled possibility'}, ${labelYear(item.year)}`);
+        content.append(title,make(document, 'p', item.summary || ''));
+        const reason = typeof item.reason === 'string' ? item.reason.trim() : '';
+        if (reason && !/^migrated from (?:an )?earlier exploration\.?$/i.test(reason)) content.append(make(document, 'p', reason, 'history-suggestion-reason'));
+        const actions = make(document,'div',null,'history-timeline-suggestion-actions');
+        if (item.id === state.selectedEventId) actions.append(make(document,'span','Selected','history-timeline-suggestion-selected'));
+        if (item.verdict === 'conflicts') actions.append(button('What if instead…', 'fork-suggestion', item.id));
+        else actions.append(button('Weave into history', 'weave', item.id));
+        content.append(actions); card.append(content); groupNode.append(card);
+      }
+      groupList.append(groupNode);
+    }
+    if (orderedGroups.length) suggestions.append(groupList);
+    if (selectionChanged) {
+      const selectedEra = timeline.queryAll?.('details').find(details => details.queryAll?.('button').some(button => button.dataset.action === 'select-event' && button.dataset.id === state.selectedEventId));
+      if (selectedEra) {
+        selectedEra.open = true;
+        const row = selectedEra.queryAll?.('li').find(item => item.dataset.eventId === state.selectedEventId);
+        row?.scrollIntoView?.({block:'nearest'});
+      } else {
+        const card = suggestions.queryAll?.('article').find(item => item.dataset.suggestionId === state.selectedEventId);
+        card?.scrollIntoView?.({block:'nearest'});
+      }
+      lastRenderedSelectionId = String(state.selectedEventId ?? '');
+      lastRenderedHistoryId = String(active.id);
     }
   }
   const unsubscribe = subscribe?.(render);

@@ -46,12 +46,12 @@ test('completion preserves blocked and empty outcomes', () => {
  assert.match(completionStatus({status:'empty',evidenceStatus:{status:'unavailable'}}),/no source passage is available/);
  assert.equal(completionStatus({status:'ok',renderStatus:'2d-only',renderReason:'no-segmentation-mask'}),'2D scene only · no SAM cutout available');
 });
-test('health response selects replay-only/live mode and fails closed when unavailable or malformed', () => {
- assert.equal(liveAccessMode({status:'ok',replayOnly:true}),'replay-only');
- assert.equal(liveAccessMode({status:'ok',replayOnly:false}),'live-enabled');
+test('health response selects setup/live mode and fails closed when unavailable or malformed', () => {
+ assert.equal(liveAccessMode({status:'ok',metaKeyConfigured:false}),'setup-required');
+ assert.equal(liveAccessMode({status:'ok',metaKeyConfigured:true}),'live-enabled');
  assert.equal(liveAccessMode(null),'unknown');
- assert.equal(liveAccessMode({status:'error',replayOnly:false}),'unknown');
- assert.equal(liveAccessMode({status:'ok',replayOnly:'false'}),'unknown');
+ assert.equal(liveAccessMode({status:'error',metaKeyConfigured:false}),'unknown');
+ assert.equal(liveAccessMode({status:'ok',metaKeyConfigured:'false'}),'unknown');
 });
 
 test('fixture event sequence exposes policy-cleared proposals before review and finalizes the hero later', () => {

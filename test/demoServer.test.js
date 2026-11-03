@@ -47,18 +47,18 @@ test('exposes an unauthenticated health endpoint for container probes', async t 
   const url = await fixture(t);
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { status: 'ok', setupAvailable: false, metaKeyConfigured: false, metaKeyOverrideActive: false, replayOnly: true, localReviewAccess: false, localReplayHistoryAccess: false, voiceEnabled: false, expansionLimit: 20, expansionUsed: 0 });
+  assert.deepEqual(await response.json(), { status: 'ok', setupAvailable: false, metaKeyConfigured: false, metaKeyOverrideActive: false, localReviewAccess: false, localHistoryAccess: false, voiceEnabled: false, expansionLimit: 20, expansionUsed: 0 });
   assert.match(response.headers.get('set-cookie'), /HttpOnly; SameSite=Strict/);
   assert.doesNotMatch(response.headers.get('set-cookie'), /Max-Age|Expires/i);
   assert.equal(response.headers.get('set-cookie').split(';')[0].startsWith('otherwise_session='), true);
   assert.equal((await fetch(`${url}/health`, { method: 'HEAD' })).status, 200);
   const noAccessCode = await fixture(t, { env: {} });
-  assert.deepEqual(await (await fetch(`${noAccessCode}/health`)).json(), { status: 'ok', setupAvailable: false, metaKeyConfigured: false, metaKeyOverrideActive: false, replayOnly: true, localReviewAccess: false, localReplayHistoryAccess: false, voiceEnabled: false, expansionLimit: 20, expansionUsed: 0 });
+  assert.deepEqual(await (await fetch(`${noAccessCode}/health`)).json(), { status: 'ok', setupAvailable: false, metaKeyConfigured: false, metaKeyOverrideActive: false, localReviewAccess: false, localHistoryAccess: false, voiceEnabled: false, expansionLimit: 20, expansionUsed: 0 });
   const configured = await fixture(t, { env: { DEMO_ACCESS_CODE: 'private-code', DEMO_MAX_EXPANSIONS_PER_SESSION: '4' } });
   assert.equal((await (await fetch(`${configured}/health`)).json()).expansionLimit, 4);
 });
 
-test('live gate defaults to replay and refuses runners without daily-cap enforcement', async t => {
+test('live generation requires authorization and a cap-enforcing runner', async t => {
   const url = await fixture(t, { runPipeline: async () => ({}) });
   assert.equal((await post(url, 'wrong')).status, 403);
   assert.equal((await post(url)).status, 503);
@@ -66,14 +66,19 @@ test('live gate defaults to replay and refuses runners without daily-cap enforce
   assert.equal((await post(unset, '')).status, 403);
 });
 
-test('replay-only mode refuses a configured live runner before invoking it', async t => {
-  let called = false;
-  const url = await fixture(t, { env: { DEMO_REPLAY_ONLY: 'true', DEMO_ACCESS_CODE: 'private-code' }, runPipeline: fake(async () => { called = true; return {}; }) });
+test('keyless generation reports key setup even when a stale legacy flag is set', async t => {
+  let runnerCreated = false;
+  const url = await fixture(t, {
+    env: { DEMO_REPLAY_ONLY: 'true', DEMO_ACCESS_CODE: 'private-code' },
+    runnerFactories: { createDemoRunner: () => { runnerCreated = true; return fake(async () => ({})); } },
+  });
   const response = await post(url);
   assert.equal(response.status, 503);
-  assert.deepEqual(await response.json(), { error: 'Live generation is disabled. Use replay mode.' });
-  assert.equal(called, false);
-  assert.deepEqual(await (await fetch(`${url}/health`)).json(), { status: 'ok', setupAvailable: false, metaKeyConfigured: false, metaKeyOverrideActive: false, replayOnly: true, localReviewAccess: false, localReplayHistoryAccess: false, voiceEnabled: false, expansionLimit: 20, expansionUsed: 0 });
+  assert.deepEqual(await response.json(), { error: 'Configure a Meta API key to generate a new run.', code: 'meta_key_required' });
+  assert.equal(runnerCreated, false, 'keyless requests are refused before a model runner is created');
+  const health = await (await fetch(`${url}/health`)).json();
+  assert.equal(health.metaKeyConfigured, false);
+  assert.equal('replayOnly' in health, false);
 });
 
 test('replay JSON redacts rejected branch text and keeps only safe rejection metadata', async t => {

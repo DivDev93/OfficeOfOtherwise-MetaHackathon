@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { atlasZoomGestureBlocked, dragModeForZoom, panDeltaForDrag, surfaceDragAngles, surfaceDetailFromPinch, surfaceDetailFromWheel, zoomFromPinch, zoomFromWheel } from '../web/atlas/interaction.js';
+import { atlasMarkerHitRadius, atlasZoomGestureBlocked, dragModeForZoom, panDeltaForDrag, surfaceDragAngles, surfaceDetailFromPinch, surfaceDetailFromWheel, zoomFromPinch, zoomFromWheel } from '../web/atlas/interaction.js';
+
+test('leaving a small visible marker ends hover inside the larger click target', () => {
+  const hoverRadius = atlasMarkerHitRadius(6, 22);
+  const clickRadius = atlasMarkerHitRadius(6, 22, true);
+  const offsets = [0, 5, 10, 21, 25];
+  assert.deepEqual(offsets.map(distance => distance <= hoverRadius), [true, true, false, false, false]);
+  assert.deepEqual(offsets.map(distance => distance <= clickRadius), [true, true, true, true, false],
+    'touch/click activation remains accessible without creating an invisible hover zone');
+  assert.equal(atlasMarkerHitRadius(30, 22, true), 30, 'large visible Earths retain their complete activation target');
+});
 
 test('canvas zoom gestures are blocked by overlay controls found in the event path or hit-test stack', () => {
   const canvas = {};

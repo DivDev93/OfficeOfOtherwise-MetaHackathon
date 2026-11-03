@@ -19,18 +19,20 @@ const $ = id => document.getElementById(id);
 const savedPreview = createSavedPreviewPopover(document.body, { document, viewport: () => ({ width:window.innerWidth || 1024, height:window.innerHeight || 768 }) });
 const historySession = createHistorySession({ fetchImpl: fetch });
 const voice = createVoiceInput({ prompt: $('prompt'), access: $('access'), controls: $('voice-controls'), record: $('voice-record'), stop: $('voice-stop'), cancel: $('voice-cancel'), message: $('voice-status') });
-let voiceEnabled = false, localReviewAccess = false, localReplayHistoryAccess = false;
+let voiceEnabled = false, localReviewAccess = false, localHistoryAccess = false, metaKeyConfigured = false;
 const localMetaKeySetup = createLocalMetaKeySetup({ details: $('meta-key-setup'), input: $('meta-key-input'), useButton: $('meta-key-use'), clearButton: $('meta-key-clear'), status: $('meta-key-status'), configStatus: $('meta-key-config-status'), fetchImpl: fetch, refreshServiceMode: loadServiceMode });
 const hasLiveAccess = () => localReviewAccess || !!$('access').value;
-const canCreateFreshHistory = () => serviceMode === 'live-enabled' && hasLiveAccess();
+const canCreateFreshHistory = () => serviceMode === 'live-enabled' && hasLiveAccess() || localHistoryAccess && metaKeyConfigured;
 function updateFreshHistoryCta() {
   const button = $('live-submit');
   if (!button) return;
-  const keyRequired = localReplayHistoryAccess && !canCreateFreshHistory();
-  const label = keyRequired ? 'Configure Meta API key' : 'Create history';
+  const busy = historyQuestionBusy || streamBusy;
+  const keyRequired = localHistoryAccess && !metaKeyConfigured && !canCreateFreshHistory();
+  const label = busy ? 'Creating history…' : keyRequired ? 'Configure Meta API key' : 'Create history';
   if (button.firstChild?.nodeType === 3) button.firstChild.textContent = `${label} `;
-  button.setAttribute('aria-label', keyRequired ? 'Configure a Meta API key to create a fresh history' : 'Create a fresh history');
-  button.title = keyRequired ? 'Configure a Meta API key to create a fresh history; saved histories remain available for local replay.' : '';
+  button.setAttribute('aria-label', busy ? 'Creating a fresh history' : keyRequired ? 'Configure a Meta API key to create a fresh history' : 'Create a fresh history');
+  button.title = busy ? 'A fresh history is being created.' : keyRequired ? 'Configure a Meta API key to create a fresh history; saved histories remain available for local replay.' : '';
+  button.disabled = busy || serviceMode !== 'live-enabled' && !(localHistoryAccess && !metaKeyConfigured);
 }
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let branchState = { branches: [], heroId: null, phase: 'idle' }, serviceMode = 'unknown', base = '', hasImage = false, hasCutout = false, hasModel = false, modelAsset = '', modelLoading = false, modelLoaded = false, modelError = false, modelRequestId = 0, loadingModelUrl = '', loadedModelUrl = '', activeView = 'scene', atlasController = null, atlasInitPromise = null, atlasPreviewWorld = null, atlasAttachmentIntent = { mode:'current-world', parentId:null, divergenceYear:null }, modelApi = null, trace = [], savedTrace = [], savedRuns = [], selectedBranchId = null, replayActive = false, replayLoaded = false, replayRequest = 0;
@@ -39,8 +41,27 @@ let expansionLimit = 20, serverExpansionUsed = 0, activeExpansion = null, preser
 let atlasGeographyOverride = null;
 let atlasDetailsFocusTimer = null;
 let historyMode = false, historyShowOrbit = false, historyCreationRequested = false, historyQuestionBusy = false, selectedHistoryRecord = null, selectedHistoryId = '', selectedHistoryQuestionId = '', historyMedia = { sceneUrl:'',cutoutUrl:'',modelUrl:'' }, historyMediaJob = null, historyViewSignature = '', historyRenderSignature = '', historyRenderFailed = false;
+let invitationPreviousView = null;
+let invitationPreviousAtlasState = null;
+let invitationPreviousStatus = null;
+let historyHoverPreview = null, historyHoverTimer = null, historyFocusPreviewActive = false;
+const historyHoverDelayMs = 220;
+const historyAutoSceneRefs = new Map(), historyAutoScenePreparationKeys = new Set(), historyAutoSceneStates = new Map(), historyAutoScenePending = new Map(), historyAutoSceneBlockedContexts = new Set(), historyCutoutStates = new Map(), historyMediaRetryOf = new Map();
+let historyAutoSceneQueue = Promise.resolve(), historyAutoScenePollTimer = null;
 const historyTimeline = mountHistoryTimeline($('history-timeline-host'), { getState:() => historySession.getState(), subscribe:fn => historySession.subscribe(fn), session:historySession,
-  onHistoryChange:id => historySession.selectHistory(id), onEventSelect:id => selectHistoryEvent(id), onWindowSelect:year => historySession.setDate(year), document });
+  onHistoryChange:id => historySession.selectHistory(id), onEventSelect:id => selectHistoryEvent(id), onWindowSelect:window => historySession.selectSuggestionWindow(window),
+  isCompact:() => window.matchMedia?.('(max-width: 700px)').matches === true,
+  onCompactInspect:() => {
+    if (!window.matchMedia?.('(max-width: 700px)').matches) return;
+    if (!document.body.classList.contains('atlas-focused')) setAtlasFocused(true);
+    document.body.classList.add('atlas-details-open');
+    document.body.classList.remove('atlas-panels-open');
+    syncAtlasCompactButtons();
+    const detailsClose = $('atlas-close-details');
+    const focusTarget = detailsClose && !detailsClose.hidden ? detailsClose : $('hero-title');
+    if (focusTarget && focusTarget === $('hero-title')) focusTarget.tabIndex = -1;
+    focusTarget?.focus?.({preventScroll:true});
+  }, document });
 const historyTimebar = mountHistoryTimebar($('history-timebar-host'), { getState:() => historySession.getState(), subscribe:fn => historySession.subscribe(fn),
   onDateChange:year => historySession.setDate(year), onEventSelect:id => selectHistoryEvent(id), document });
 historySession.subscribe(syncHistoryUi);
@@ -125,6 +146,16 @@ function historyRefUrl(ref) {
   return /^\/runs\/[A-Za-z0-9._%-]+\/(?:hero\.png|cutout\.png|model\.glb|model\.meshopt\.glb)$/.test(url)
     || /^\/(?:event-scenes|event-cutouts|history-media)\/[a-f\d]{64}\.png$/i.test(url) ? url : '';
 }
+function historyRefStatus(ref) { return typeof ref === 'object' && ref ? String(ref.status || '') : ref ? 'complete' : ''; }
+function historyMediaRetryKey(kind,identity) { return `${kind}:${historySceneIdentityKey(identity)}`; }
+function historyRefRetryOf(ref) { return typeof ref === 'object' && /^[a-f\d]{64}$/i.test(ref.retryOf || '') ? ref.retryOf : ''; }
+const historySceneIdentityKey = ({ questionId, historyId, eventId }) => JSON.stringify([questionId, historyId, eventId]);
+function savedHistorySceneUrl(event) {
+  return historyRefUrl(event?.sceneRef) || historyRefUrl(event?.heroRef);
+}
+function historySceneUrlFor(event, questionId, historyId) {
+  return savedHistorySceneUrl(event) || historyAutoSceneRefs.get(historySceneIdentityKey({ questionId, historyId, eventId:event?.id })) || '';
+}
 function legacyHistorySource(event) {
   const match = /^([A-Za-z0-9_-]{1,128}):([A-Za-z0-9_-]{1,128})$/.exec(event?.id || '');
   if (!match) return null;
@@ -133,33 +164,192 @@ function legacyHistorySource(event) {
   if (!branch || branch.title !== event.title || branch.year !== event.year || (event.summary && branch.summary !== event.summary)) return null;
   return { runId:match[1], branch, manifest };
 }
-function renderHistoryEvent(event) {
+function renderHistoryEvent(event, { preview = false, suggestion = false, questionId = null, historyId = null } = {}) {
   if (!event) return;
+  viewStatus('');
+  const owner = historySession.getState();
+  const eventQuestionId = questionId || owner.questionId, eventHistoryId = historyId || owner.historyId;
   selectedHistoryRecord = event;
-  selectedHistoryId = historySession.getState().historyId;
-  selectedHistoryQuestionId = historySession.getState().questionId;
-  historyMedia = { sceneUrl:historyRefUrl(event.sceneRef) || historyRefUrl(event.heroRef),
-    cutoutUrl:historyRefUrl(event.cutoutRef), modelUrl:historyRefUrl(event.modelRef) };
+  selectedHistoryId = eventHistoryId;
+  selectedHistoryQuestionId = eventQuestionId;
+  const mediaIdentity = { questionId:eventQuestionId, historyId:eventHistoryId, eventId:event.id };
+  historyMedia = { sceneUrl:historySceneUrlFor(event,eventQuestionId,eventHistoryId) || (preview ? historyRefUrl(event.cutoutRef) : ''),
+    sceneStatus:historyAutoSceneStates.get(historySceneIdentityKey(mediaIdentity)) || historyRefStatus(event.sceneRef),
+    cutoutUrl:historyRefUrl(event.cutoutRef), cutoutStatus:historyCutoutStates.get(historySceneIdentityKey(mediaIdentity)) || historyRefStatus(event.cutoutRef), modelUrl:historyRefUrl(event.modelRef) };
+  if (historyRefRetryOf(event.sceneRef)) historyMediaRetryOf.set(historyMediaRetryKey('scene',mediaIdentity),historyRefRetryOf(event.sceneRef));
+  if (historyRefRetryOf(event.cutoutRef)) historyMediaRetryOf.set(historyMediaRetryKey('cutout',mediaIdentity),historyRefRetryOf(event.cutoutRef));
   modelRequestId++; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = '';
   modelApi?.clear?.();
   $('history-asof-header').hidden = false;
   $('hero-title').textContent = `${formatYear(event.year)} · ${event.title}`;
   $('hero-description').textContent = event.summary || '';
-  $('hero-tag').textContent = 'HISTORY EVENT';
+  $('hero-tag').textContent = suggestion ? (preview ? 'SUGGESTION PREVIEW' : 'SELECTED SUGGESTION') : 'HISTORY EVENT';
   $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren();
   $('event-consequences').hidden = true; $('event-children').replaceChildren(); $('event-retry').hidden = true; $('event-scene-action').hidden = true;
   $('evidence-toggle').hidden = true; $('evidence-panel').hidden = true;
   const source = legacyHistorySource(event);
-  if (source) loadEvidenceForBranch(source.runId, source.branch);
-  setStageMessage(historyMedia.sceneUrl ? 'Loading the saved scene for this history event…' : 'No saved scene is attached to this history event.');
+  if (source && !preview) loadEvidenceForBranch(source.runId, source.branch);
+  const prepStatus = historyAutoSceneStates.get(historySceneIdentityKey(mediaIdentity));
+  const sceneStatus = historyMedia.sceneUrl ? 'complete' : prepStatus || historyMedia.sceneStatus;
+  setStageMessage(historyMedia.sceneUrl ? 'Saved scene ready.' : sceneStatus === 'queued' || sceneStatus === 'pending' ? 'Preparing a saved scene for this history event…' : sceneStatus === 'unknown' ? 'Scene status is uncertain. Check saved history media to see whether an image finished.' : sceneStatus === 'retryable' ? 'Scene preparation is temporarily unavailable; you can try again later.' : sceneStatus === 'empty' ? 'No scene was produced for this event. The saved history is still available.' : 'No saved scene is attached to this history event.');
+  const sceneRetryOf = historyMediaRetryOf.get(historyMediaRetryKey('scene',mediaIdentity));
+  if (!preview && sceneStatus === 'unknown' && sceneRetryOf) viewStatus('The previous scene result is uncertain and may already have incurred a charge. A new scene generation may incur another charge.');
+  else if (!preview && sceneStatus === 'empty' && sceneRetryOf) viewStatus('No scene was produced for this event. You can try a new saved attempt.');
   setView(continuationViewSelection || 'scene');
 }
-function selectHistoryEvent(eventId) {
+function cancelHistoryHoverTimer() {
+  if (historyHoverTimer !== null) clearTimeout(historyHoverTimer);
+  historyHoverTimer = null;
+}
+function finishHistoryEventPreview() {
+  cancelHistoryHoverTimer();
+  if (!historyHoverPreview) return;
+  const saved = historyHoverPreview;
+  historyHoverPreview = null;
+  historyFocusPreviewActive = false;
+  document.body.classList.remove('history-event-previewing');
+  syncAtlasCompactButtons();
+  selectedHistoryRecord = saved.event;
+  selectedHistoryId = saved.historyId;
+  selectedHistoryQuestionId = saved.questionId;
+  historyMedia = { ...saved.media };
+  if (saved.event) {
+    renderHistoryEvent(saved.event, { suggestion:saved.suggestion });
+    selectedHistoryRecord = saved.event;
+    selectedHistoryId = saved.historyId;
+    selectedHistoryQuestionId = saved.questionId;
+    historyMedia = { ...saved.media };
+    setView(saved.activeView);
+  } else {
+    selectedHistoryRecord = null;
+    selectedHistoryId = saved.historyId;
+    selectedHistoryQuestionId = saved.questionId;
+    historyMedia = { ...saved.media };
+    $('hero-title').textContent = saved.title;
+    $('hero-description').textContent = saved.description;
+    $('hero-tag').textContent = saved.tag;
+    setStageMessage(saved.stageMessage);
+    activeView = saved.activeView;
+    continuationViewSelection = saved.continuationViewSelection;
+    $('hero-image').hidden = true; $('cutout-image').hidden = true; $('model-view').hidden = true;
+    $('stage-empty').hidden = false;
+    for (const [id, name] of [['scene-view','scene'],['cutout-view','cutout'],['model-button','model']]) {
+      $(id).classList.toggle('active', name === saved.activeView);
+      $(id).setAttribute('aria-selected', String(name === saved.activeView));
+      $(id).tabIndex = name === saved.activeView ? 0 : -1;
+    }
+  }
+  continuationViewSelection = saved.continuationViewSelection;
+  $('stage-empty').querySelector('p').textContent = saved.emptyText;
+}
+function scheduleHistoryEventPreviewEnd() {
+  cancelHistoryHoverTimer();
+  if (!historyHoverPreview) return;
+  historyHoverTimer = setTimeout(finishHistoryEventPreview, historyHoverDelayMs);
+}
+function previewHistoryEvent(event, historyId, { suggestion = false, focus = false, questionId = null } = {}) {
+  if (!historyMode || !event) return;
+  cancelHistoryHoverTimer();
+  historyFocusPreviewActive = focus;
+  if (!historyHoverPreview) {
+    const committed = historySession.getState();
+    historyHoverPreview = {
+    event:selectedHistoryRecord, historyId:selectedHistoryId, questionId:selectedHistoryQuestionId,
+    suggestion:!!selectedHistoryRecord && [...(committed.history?.suggestions || []),...(committed.suggestions || [])].some(item => String(item.id) === String(selectedHistoryRecord.id)),
+    media:{ ...historyMedia }, activeView, continuationViewSelection,
+    title:$('hero-title').textContent, description:$('hero-description').textContent, tag:$('hero-tag').textContent,
+    stageMessage:$('stage-empty').querySelector('p')?.textContent || '', emptyText:$('stage-empty').querySelector('p')?.textContent || '',
+    };
+  }
+  renderHistoryEvent(event, { preview:true, suggestion, questionId:questionId || historySession.getState().questionId, historyId:historyId || historySession.getState().historyId });
+  document.body.classList.add('history-event-previewing');
+  syncAtlasCompactButtons();
+  $('hero-tag').textContent = suggestion ? 'SUGGESTION PREVIEW' : 'TEMPORARY EVENT PREVIEW';
+  $('event-scene-action').hidden = true;
+  $('evidence-toggle').hidden = true;
+  if (historyMedia.sceneUrl) setView('scene');
+  else {
+    setView('scene');
+    $('stage-empty').querySelector('p').textContent = 'No saved image for this event.';
+    setStageMessage('No saved image is attached to this event.');
+  }
+  for (const id of ['scene-view','cutout-view','model-button']) $(id).disabled = true;
+}
+function historyEventFromAtlasWorld(world) {
+  if (!world || !historyMode || !/^history-(?:event|spine|sibling|suggestion)/.test(world.visualKind || '')) return null;
   const state = historySession.getState();
-  const event = state.history?.events?.find(item => item.id === eventId);
-  if (!event) return;
-  historySession.selectEvent(eventId);
-  if (selectedHistoryRecord?.id !== event.id) renderHistoryEvent(event);
+  const historyId = String(world.historyId || world.ownerHistoryId || state.historyId || '');
+  const activeQuestionHistories = state.histories || state.question?.histories || [];
+  const activeQuestionHasOwner = activeQuestionHistories.some(item => String(item.id) === historyId);
+  const questionId = String(world.questionId || (activeQuestionHasOwner ? state.questionId : (state.questions || []).find(item => (item.histories || []).some(history => String(history.id) === historyId))?.id) || state.questionId);
+  const ownerQuestion = String(state.questionId) === questionId ? state.question
+    : (state.questions || []).find(item => String(item.id) === questionId) || null;
+  const owner = (ownerQuestion?.histories || []).find(item => String(item.id) === historyId)
+    || (String(state.questionId) === questionId && String(state.historyId) === historyId ? state.history : null);
+  const eventId = String(world.eventId || world.latestEvent?.id || world.id || '');
+  if (world.visualKind === 'history-suggestion') {
+    const activeHistory = String(state.historyId) === historyId;
+    const candidates = [...(owner?.suggestions || []), ...(activeHistory ? state.suggestions || [] : [])];
+    const suggestion = candidates.find(item => String(item.id) === eventId
+      && (item.historyId == null || String(item.historyId) === historyId));
+    return suggestion ? { event:suggestion, historyId, questionId, suggestion:true } : null;
+  }
+  const event = owner?.events?.find(item => String(item.id) === eventId)
+    || (world.visualKind === 'history-sibling' ? [...(owner?.events || [])].filter(item => item.year <= state.date).sort((a,b) => a.year-b.year).at(-1) : null)
+    || owner?.events?.find(item => String(item.id) === String(world.sourceEventId || ''));
+  return event ? { event, historyId, questionId } : null;
+}
+const historyTimelineHost = $('history-timeline-host');
+function previewHistoryTimelineControl(button, focus = false) {
+  if (!button || !historyTimelineHost.contains(button)) return;
+  const state = historySession.getState();
+  const recordId = button.dataset.id || button.dataset.suggestionId;
+  const record = state.history?.events?.find(item => item.id === recordId);
+  if (record) { previewHistoryEvent(record, state.historyId, { focus }); return; }
+  const suggestion = [...(state.history?.suggestions || []), ...(state.suggestions || [])]
+    .find(item => item.id === recordId && (item.historyId == null || item.historyId === state.historyId));
+  if (suggestion) previewHistoryEvent(suggestion, state.historyId, { suggestion:true, focus });
+}
+historyTimelineHost.addEventListener('pointerover', event => {
+  previewHistoryTimelineControl(event.target.closest?.('button[data-id]') || event.target.closest?.('article.history-timeline-suggestion'));
+});
+historyTimelineHost.addEventListener('pointerout', event => {
+  const button = event.target.closest?.('button[data-id]') || event.target.closest?.('article.history-timeline-suggestion');
+  if (!button) return;
+  const sourceCard = button.matches?.('article.history-timeline-suggestion') ? button : button.closest?.('article.history-timeline-suggestion');
+  const relatedCard = event.relatedTarget?.closest?.('article.history-timeline-suggestion');
+  if (sourceCard && sourceCard === relatedCard || event.relatedTarget?.closest?.('button[data-id]') === button) return;
+  if (!historyFocusPreviewActive) finishHistoryEventPreview();
+});
+historyTimelineHost.addEventListener('focusin', event => {
+  previewHistoryTimelineControl(event.target.closest?.('button[data-id]'), true);
+});
+historyTimelineHost.addEventListener('focusout', event => {
+  if (event.relatedTarget?.closest?.('#chronicle')) return;
+  historyFocusPreviewActive = false;
+  scheduleHistoryEventPreviewEnd();
+});
+$('chronicle').addEventListener('pointerenter', cancelHistoryHoverTimer);
+$('chronicle').addEventListener('pointerleave', () => { if (!historyFocusPreviewActive) finishHistoryEventPreview(); });
+$('chronicle').addEventListener('focusin', () => { historyFocusPreviewActive = true; cancelHistoryHoverTimer(); });
+$('chronicle').addEventListener('focusout', event => {
+  if (event.relatedTarget && $('chronicle').contains?.(event.relatedTarget)) return;
+  if (!event.relatedTarget?.closest?.('#history-timeline-host')) { historyFocusPreviewActive = false; scheduleHistoryEventPreviewEnd(); }
+});
+function selectHistoryEvent(eventId, selection = {}) {
+  finishHistoryEventPreview();
+  const state = historySession.getState();
+  historySession.selectRecord({
+    questionId:selection.questionId || state.questionId,
+    historyId:selection.historyId || state.historyId,
+    eventId:String(eventId || ''),
+    date:Number.isSafeInteger(selection.date) ? selection.date : state.date,
+    readOnly:true,
+  });
+}
+function selectHistoryAtlasWorld(event, detail = {}) {
+  const eventId = event?.id || detail?.eventId;
+  if (eventId) selectHistoryEvent(eventId, { questionId:detail.questionId || event?.questionId, historyId:detail.historyId || event?.historyId, date:detail.date });
 }
 function showHistoryGeography(state) {
   const events = state.history?.events || [];
@@ -178,6 +368,8 @@ function historyAtlasLevelStatus(level) {
 function syncHistoryUi(state = historySession.getState()) {
   const active = !!state.question && !!state.history && Array.isArray(state.histories);
   const requested = !!state.questionId || historyCreationRequested;
+  if (historyHoverPreview && (!active || state.questionId !== historyHoverPreview.questionId
+      || state.historyId !== historyHoverPreview.historyId || state.selectedEventId !== historyHoverPreview.event?.id)) finishHistoryEventPreview();
   const enteringHistory = active && !historyMode;
   const leavingHistory = historyMode && !active;
   historyMode = active;
@@ -220,13 +412,27 @@ function syncHistoryUi(state = historySession.getState()) {
   const count = state.history.events.filter(event => event.year <= state.date).length;
   $('history-asof-header').textContent = `History as of ${formatYear(state.date)} · ${count} ${count === 1 ? 'event' : 'events'}`;
   const selected = state.history.events.find(event => event.id === state.selectedEventId);
+  const selectedSuggestion = (state.history.suggestions || []).find(item => item.id === state.selectedEventId)
+    || (state.suggestions || []).find(item => item.id === state.selectedEventId);
+  const selectedRecord = selected || selectedSuggestion;
   const changedSelectionContext = selectedHistoryQuestionId !== state.questionId || selectedHistoryId !== state.historyId;
+  const selectedRecordChanged = !selectedHistoryRecord || selectedHistoryRecord !== selectedRecord
+    || selectedHistoryRecord.id !== state.selectedEventId || changedSelectionContext;
   if (changedSelectionContext) {
     atlasPreviewWorld = null;
     savedPreview.clear();
   }
-  if (!selectedHistoryRecord || selectedHistoryRecord !== selected || selectedHistoryRecord.id !== state.selectedEventId || changedSelectionContext) {
-    if (selected) renderHistoryEvent(selected);
+  const updatingCommittedPreviewSnapshot = historyHoverPreview && selectedRecord
+    && historyHoverPreview.questionId === state.questionId && historyHoverPreview.historyId === state.historyId
+    && historyHoverPreview.event?.id === selectedRecord.id && selectedHistoryRecord?.id !== selectedRecord.id;
+  if (selectedRecordChanged && updatingCommittedPreviewSnapshot) {
+    historyHoverPreview.event = selectedRecord;
+    const sceneUrl = historySceneUrlFor(selectedRecord,state.questionId,state.historyId);
+    if (sceneUrl) historyHoverPreview.media = { ...historyHoverPreview.media, sceneUrl, sceneStatus:'complete' };
+    const cutoutUrl = historyRefUrl(selectedRecord.cutoutRef);
+    if (cutoutUrl) historyHoverPreview.media = { ...historyHoverPreview.media, cutoutUrl, cutoutStatus:'complete' };
+  } else if (selectedRecordChanged) {
+    if (selectedRecord) renderHistoryEvent(selectedRecord, { suggestion:!selected && !!selectedSuggestion });
     else if (enteringHistory || changedSelectionContext) {
       const latest = [...state.history.events].filter(event => event.year <= state.date).sort((a,b) => a.year-b.year).at(-1);
       if (latest) { historySession.selectEvent(latest.id); renderHistoryEvent(latest); }
@@ -247,6 +453,7 @@ function syncHistoryUi(state = historySession.getState()) {
   if (historyViewSignature !== nextSignature) { historyViewSignature = nextSignature; showHistoryGeography(state); }
   updateHistoryAtlasView(state);
   $('map-status').textContent = historyAtlasLevelStatus($('atlas-scene')?.dataset.atlasLevel || 'surface');
+  scheduleAutomaticHistoryScenePreparation(state);
 }
 function updateHistoryAtlasView(state = historySession.getState()) {
   if (!historyMode || !state.history || !atlasController?.setHistoryView) return;
@@ -258,8 +465,10 @@ function updateHistoryAtlasView(state = historySession.getState()) {
     window:state.window, suggestions:state.suggestions, selectedEventId:state.selectedEventId,
     questions:state.questions, activeQuestionId:state.questionId, showOrbit:historyShowOrbit,
     surfaceMode, composedGeography, surfaceGeography:surfaceMode === 'present' ? presentDayGeography() : surfaceGeography };
-  const signature = JSON.stringify([state.questionId,state.historyId,state.date,state.window?.fromYear,state.window?.toYear,
-    surfaceMode,view.surfaceGeography,historyShowOrbit,state.questions?.map(item=>[item.id,(item.histories||[]).map(history=>[history.id,history.events?.length])])]);
+  // Atlas records preserve event content and media refs, so same-count hydration updates must
+  // invalidate the scene just like selection, date, or geography changes do.
+  const signature = JSON.stringify([state.questionId,state.historyId,state.date,state.selectedEventId,state.window,
+    surfaceMode,view.surfaceGeography,historyShowOrbit,state.question,state.history,state.suggestions,state.questions]);
   if (signature === historyRenderSignature && !historyRenderFailed) return;
   historyRenderSignature = signature;
   try {
@@ -309,7 +518,7 @@ function syncHistoryQuestionPicker(state = historySession.getState()) {
   select.value = state.questionId || '';
 }
 async function refreshHistoryQuestions() {
-  if (!hasLiveAccess() && !localReplayHistoryAccess) return [];
+  if (!hasLiveAccess() && !localHistoryAccess) return [];
   try {
     const response = await fetch('/api/histories', { headers:$('access').value ? { 'x-demo-access-code':$('access').value } : {} });
     if (!response.ok) return [];
@@ -376,7 +585,7 @@ async function postWithCapacityRetry(url, options, onRetry = () => {}) {
 }
 const eventKey = (runId, branchId) => JSON.stringify([runId, branchId]);
 const isSelected = (runId, branchId) => currentRunId === runId && selectedBranchId === branchId;
-const taskLabel = state => state === 'needs-access' && serviceMode === 'replay-only' ? 'Run locally with Meta API key' : ({ 'not-started': 'Not explored', queued: 'Queued', 'in-progress': 'In progress', complete: 'Saved', uncertain: 'Stopped · retry', failed: 'Stopped · retry', retryable: 'Can retry', 'needs-access': 'Needs live access', 'limit-reached': 'Step limit reached', empty: 'No consequences' })[state] || 'Status unavailable';
+const taskLabel = state => ({ 'not-started': 'Not explored', queued: 'Queued', 'in-progress': 'In progress', complete: 'Saved', uncertain: 'Stopped · retry', failed: 'Stopped · retry', retryable: 'Can retry', 'needs-access': 'Needs live access', 'limit-reached': 'Step limit reached', empty: 'No consequences' })[state] || 'Status unavailable';
 function consequenceState(runId, branchId, manifest = currentManifest) {
   if (!runId) return 'not-started';
   const work = eventWork.get(eventKey(runId, branchId));
@@ -422,7 +631,7 @@ function eventSceneStatus(runId, branch, manifest) {
   if (!work) return 'Scene not checked';
   if (work.sceneQueued || work.sceneRunning) return 'Preparing scene';
   if (work.sceneInProgress) return 'Scene generation in progress';
-  if (/access|run locally/i.test(work.sceneMessage || '')) return serviceMode === 'replay-only' ? 'Run locally for fresh scene generation' : 'Scene needs live access';
+  if (/access|run locally/i.test(work.sceneMessage || '')) return 'Scene needs live access';
   if (work.sceneRetryable) return 'Scene unavailable · retry from the story list';
   if (work.sceneCheckDone) return work.sceneCheckStatus === 'missing' ? 'No saved scene' : 'Scene unavailable';
   if (work.sceneOnlyComplete || work.sceneMessage) return 'Scene unavailable';
@@ -454,7 +663,22 @@ function showBranchPreview(runId, branch, manifest, anchor) {
 }
 function showAtlasPreview(world, anchorInfo = null) {
   atlasPreviewWorld = world || null;
-  if (!world) { savedPreview.clear(null, { delay:true }); return; }
+  if (!world) {
+    if (anchorInfo?.source === 'pointer' || !historyFocusPreviewActive) finishHistoryEventPreview();
+    savedPreview.clear(); return;
+  }
+  const historyEvent = historyEventFromAtlasWorld(world);
+  if (historyEvent) {
+    savedPreview.clear();
+    previewHistoryEvent(historyEvent.event, historyEvent.historyId, { questionId:historyEvent.questionId, suggestion:historyEvent.suggestion, focus:anchorInfo?.source === 'keyboard' });
+    return;
+  }
+  if (historyMode && /^history-(?:event|spine|sibling|suggestion)/.test(world.visualKind || '')) {
+    finishHistoryEventPreview();
+    savedPreview.clear();
+    return;
+  }
+  if (historyMode && historyHoverPreview) finishHistoryEventPreview();
   const canvas = $('atlas-scene')?.querySelector('canvas');
   const anchor = anchorInfo && Number.isFinite(anchorInfo.clientX) && Number.isFinite(anchorInfo.clientY)
     ? {
@@ -823,7 +1047,7 @@ function initializeAtlas() {
     reducedMotion:reducedMotion.matches,
     getZoomOutTarget:zoom => isAtlasPhone() && zoom < 0.22 ? 0.68 : null,
     onPreview:(world, anchor) => showAtlasPreview(world, anchor),
-    onHistoryEventSelect:(event, detail) => selectHistoryEvent(event?.id || detail?.eventId),
+    onHistoryEventSelect:selectHistoryAtlasWorld,
     onHistorySelect:(historyId) => historySession.selectHistory(historyId),
     onQuestionSelect:(question) => historySession.selectQuestion(typeof question === 'string' ? question : question?.id),
     onQuestionPreview:(question, anchor) => showAtlasPreview(question ? {
@@ -970,7 +1194,7 @@ function syncAtlasCompactButtons(level = '') {
     invitationPanel.setAttribute('aria-hidden', String(invitationUnavailable));
   }
   if (detailSheet) {
-    const detailSheetHidden = (compact && !detailsOpen) || (currentLevel === 'lift' && !reducedMotionLift);
+    const detailSheetHidden = ((compact && !detailsOpen) && !historyHoverPreview) || (currentLevel === 'lift' && !reducedMotionLift);
     restoreAtlasFocusBeforeHiding(detailSheet, detailSheetHidden);
     detailSheet.inert = detailSheetHidden;
     detailSheet.setAttribute('aria-hidden', String(detailSheetHidden));
@@ -1295,6 +1519,12 @@ function updateGeographyControl(axis, input) {
   $(`geography-${prefix}-number`).value = bounded;
 }
 const status = text => $('status').textContent = text;
+function showHistoryCreationStatus(message) {
+  const region = $('history-creation-status');
+  if (!region) return;
+  region.hidden = false;
+  region.textContent = message;
+}
 const viewStatus = (text, loading = false) => { $('view-status').textContent = text; $('view-status').hidden = !text; $('view-loading-indicator').hidden = !text || !loading; };
 function updateRootGenerationProgress(message) {
   if (!rootGenerationActive) return;
@@ -1323,14 +1553,11 @@ function applyServiceMode(mode) {
     voiceDisclosure.open = voiceEnabled && invitationOpen;
   }
   $('live-access').hidden = localReviewAccess || (mode !== 'live-enabled' && !voiceEnabled);
-  $('live-submit').disabled = (mode !== 'live-enabled' && !localReplayHistoryAccess) || streamBusy;
-  const replayMessage = 'Saved stories · run locally with your own Meta API key for fresh exploration';
   const liveMessage = localReviewAccess ? 'Local exploration · saved worlds' : 'Saved runs · live access by invite';
-  $('service-mode').textContent = localReplayHistoryAccess ? 'Saved histories · local replay' : mode === 'replay-only' ? replayMessage : mode === 'live-enabled' ? liveMessage : 'Saved runs · service mode unknown';
-  $('footer-service-mode').textContent = localReplayHistoryAccess ? 'Saved histories · local replay · configure a Meta API key for fresh questions' : mode === 'replay-only' ? replayMessage : mode === 'live-enabled' ? (localReviewAccess ? 'Fresh local exploration is enabled' : 'Fresh exploration is available with live access') : 'Saved stories · service mode unknown';
+  $('service-mode').textContent = mode === 'live-enabled' ? liveMessage : mode === 'setup-required' ? 'Saved histories · Meta key setup required' : localHistoryAccess ? 'Saved histories available' : 'Saved runs · service mode unknown';
+  $('footer-service-mode').textContent = mode === 'live-enabled' ? (localReviewAccess ? 'Fresh local exploration is enabled' : 'Fresh exploration is available with live access') : mode === 'setup-required' ? 'Saved histories are available · configure a Meta API key for fresh questions' : 'Saved stories · service mode unknown';
   updateFreshHistoryCta();
-  if (localReplayHistoryAccess && !canCreateFreshHistory()) status('Saved histories are available for local replay · configure a Meta API key to create a fresh history');
-  else if (mode === 'replay-only') status(replayMessage);
+  if (mode === 'setup-required' && localHistoryAccess) status('Saved histories are available · configure a Meta API key to create a fresh history');
   else if (mode === 'unknown') status('Service mode unavailable · cached stories remain available');
   renderBranches();
 }
@@ -1344,36 +1571,89 @@ async function loadServiceMode() {
     if (Number.isSafeInteger(health.expansionUsed) && health.expansionUsed >= 0) serverExpansionUsed = health.expansionUsed;
     voiceEnabled = health.status === 'ok' && health.voiceEnabled === true;
     localReviewAccess = health.status === 'ok' && health.localReviewAccess === true;
-    localReplayHistoryAccess = health.status === 'ok' && health.localReplayHistoryAccess === true;
+    localHistoryAccess = health.status === 'ok' && health.localHistoryAccess === true;
+    metaKeyConfigured = health.status === 'ok' && health.metaKeyConfigured === true;
     voice.setLocalAccess?.(localReviewAccess);
     voice.setEnabled(voiceEnabled);
     applyServiceMode(liveAccessMode(health));
+    if (historyMode) scheduleAutomaticHistoryScenePreparation(historySession.getState());
     if (serverExpansionUsed >= expansionLimit) status(`This browser session reached its exploration limit (${expansionLimit}).`);
-    if (localReviewAccess || localReplayHistoryAccess) { refreshHistory().catch(() => {}); refreshHistoryQuestions().catch(() => {}); }
+    if (localReviewAccess || localHistoryAccess) { refreshHistory().catch(() => {}); refreshHistoryQuestions().catch(() => {}); }
     return health;
-  } catch { localMetaKeySetup.setHealth(null); voiceEnabled = false; localReviewAccess = false; localReplayHistoryAccess = false; voice.setLocalAccess?.(false); voice.setEnabled(false); applyServiceMode('unknown'); return null; }
+  } catch { localMetaKeySetup.setHealth(null); voiceEnabled = false; localReviewAccess = false; localHistoryAccess = false; metaKeyConfigured = false; voice.setLocalAccess?.(false); voice.setEnabled(false); applyServiceMode('unknown'); return null; }
 }
-function setInvitationOpen(open) {
+function setInvitationOpen(open, { restoreNavigation = true } = {}) {
+  const wasOpen = document.body.classList.contains('invitation-open');
   if (open) {
+    if (!wasOpen) {
+      invitationPreviousView = activeView;
+      invitationPreviousAtlasState = {
+        focused:document.body.classList.contains('atlas-focused'),
+        details:document.body.classList.contains('atlas-details-open'),
+        panels:document.body.classList.contains('atlas-panels-open'),
+      };
+    }
+    $('workspace')?.classList.remove('hero-focus');
     setAtlasFocused(false);
     document.body.classList.remove('atlas-details-open', 'atlas-panels-open');
     syncAtlasCompactButtons();
   }
   document.body.classList.toggle('invitation-open', open);
+  if (!open && wasOpen) {
+    const restoreView = invitationPreviousView;
+    invitationPreviousView = null;
+    const navigation = invitationPreviousAtlasState;
+    invitationPreviousAtlasState = null;
+    if (restoreNavigation && navigation) {
+      document.body.classList.toggle('atlas-focused',navigation.focused);
+      document.body.classList.toggle('atlas-details-open',navigation.details);
+      document.body.classList.toggle('atlas-panels-open',navigation.panels);
+      $('atlas-reopen-controls').hidden = !navigation.focused;
+      $('focus-atlas')?.setAttribute('aria-pressed',String(navigation.focused));
+      syncAtlasCompactButtons();
+    }
+    if (restoreView) setView(restoreView);
+  }
   const hasStory = document.body.classList.contains('has-story');
   $('show-invitation').setAttribute('aria-expanded', String(!hasStory || open));
+  syncInvitationDraftControls();
   const disclosure = $('voice-disclosure');
   if (disclosure) disclosure.open = voiceEnabled && open;
   syncAtlasCompactButtons();
 }
+function syncInvitationDraftControls() {
+  const cancel = $('cancel-new-exploration');
+  if (!cancel) return;
+  const isOpen = document.body.classList.contains('invitation-open');
+  const hasStory = document.body.classList.contains('has-story');
+  cancel.hidden = !isOpen || !hasStory;
+  cancel.disabled = historyQuestionBusy;
+}
+function cancelNewExplorationDraft() {
+  if (historyQuestionBusy || !document.body.classList.contains('has-story') || !document.body.classList.contains('invitation-open')) return;
+  const previousStatus = invitationPreviousStatus;
+  invitationPreviousStatus = null;
+  $('prompt').value = '';
+  $('history-creation-status').hidden = true; $('history-creation-status').textContent = '';
+  setInvitationOpen(false);
+  if (previousStatus !== null) status(previousStatus);
+  $('show-invitation')?.focus?.({preventScroll:true});
+}
 function openNewExploration() {
   const opening = !document.body.classList.contains('invitation-open');
-  if (opening) $('prompt').value = '';
+  if (!opening && document.body.classList.contains('has-story')) { cancelNewExplorationDraft(); return; }
+  if (opening) {
+    invitationPreviousStatus = $('status')?.textContent ?? null;
+    $('history-creation-status').hidden = true; $('history-creation-status').textContent = '';
+    $('prompt').value = '';
+  }
   setInvitationOpen(opening);
   if (opening) $('prompt').focus({ preventScroll:true });
 }
 function setView(view, userSelected = false) {
   if (userSelected) continuationViewSelection = view;
+  const invitationOpen = document.body.classList.contains('invitation-open');
+  if (invitationOpen && invitationPreviousView && !userSelected) view = invitationPreviousView;
   const historySelection = historyMode && !!selectedHistoryRecord;
   const selectedHasAssets = !selectedBranchId || selectedBranchId === branchState.heroId;
   const selectedEvent = eventWork.get(eventKey(currentRunId, selectedBranchId));
@@ -1394,7 +1674,18 @@ function setView(view, userSelected = false) {
   updateSceneAction(historySelection ? null : selectedEvent);
   $('event-progress').textContent = historySelection ? (imageAvailable ? 'Saved history media' : 'No saved media is attached to this event.') : [selectedEvent?.sceneLoading && view === 'scene' ? '' : selectedEvent?.sceneMessage, selectedEvent?.childrenMessage, selectedEvent?.cutoutMessage].filter(Boolean).join(' · ');
   $('event-loading-indicator').hidden = !selectedEvent?.childrenLoading || !selectedEvent?.running;
-  $('scene-view').disabled = !imageAvailable; $('cutout-view').disabled = historySelection ? !cutoutAvailable && !(serviceMode === 'live-enabled' && hasLiveAccess() || localReplayHistoryAccess) : !selectedBranchId; $('model-button').disabled = historySelection ? !modelAvailable || !modelApi : !selectedBranchId;
+  $('scene-view').disabled = !imageAvailable; $('cutout-view').disabled = historySelection ? (!cutoutAvailable && !(canCreateFreshHistory() || localHistoryAccess && !metaKeyConfigured)) || historyMediaJob?.startsWith('cutout:') : !selectedBranchId; $('model-button').hidden = !modelAvailable; $('model-button').disabled = historySelection ? !modelAvailable || !modelApi : !selectedBranchId;
+  if (historySelection) {
+    const cutoutRetryOf = historyMediaRetryOf.get(historyMediaRetryKey('cutout',{questionId:selectedHistoryQuestionId,historyId:selectedHistoryId,eventId:selectedHistoryRecord.id}));
+    const cutoutLabel = historyMedia.cutoutStatus === 'pending' ? 'Check SAM status' : historyMedia.cutoutStatus === 'empty' && cutoutRetryOf ? 'Try SAM again' : historyMedia.cutoutStatus === 'unknown' && cutoutRetryOf ? 'New SAM attempt' : historyMedia.cutoutStatus === 'unknown' ? 'Check SAM status' : 'SAM cutout';
+    $('cutout-view').textContent = cutoutLabel;
+    $('cutout-view').title = historyMedia.cutoutStatus === 'unknown' && cutoutRetryOf
+      ? 'The previous result is uncertain and may already have incurred a charge. A new SAM attempt may incur another charge.'
+      : historyMedia.cutoutStatus === 'empty' && cutoutRetryOf ? 'SAM found no usable subject. Try a new generation for this saved scene.' : '';
+    if (historyMedia.cutoutStatus === 'unknown' && cutoutRetryOf && !historyMedia.cutoutUrl) viewStatus('Previous SAM result is unknown and may already have incurred a charge. A new attempt may incur another charge.');
+    else if (historyMedia.cutoutStatus === 'unknown' && !historyMedia.cutoutUrl) viewStatus('SAM result is unconfirmed. Check the saved history status before starting another attempt.');
+    else if (historyMedia.cutoutStatus === 'empty' && !historyMedia.cutoutUrl) viewStatus(cutoutRetryOf ? 'SAM found no usable subject in this scene. You can try a new generation.' : 'SAM found no usable subject in this scene. The saved scene remains available.');
+  } else { $('cutout-view').textContent = 'SAM cutout'; $('cutout-view').title = ''; }
   $('hero-image').hidden = !imageAvailable || view !== 'scene';
   $('cutout-image').hidden = !cutoutAvailable || view !== 'cutout';
   $('model-view').hidden = !modelAvailable || view !== 'model';
@@ -1412,7 +1703,7 @@ function setView(view, userSelected = false) {
   }
   $('chronicle-stage').setAttribute('aria-labelledby', `${view === 'scene' ? 'scene-view' : view === 'cutout' ? 'cutout-view' : 'model-button'}`);
   const modelFocus = modelAvailable && !!modelApi && view === 'model';
-  const heroFocus = modelFocus || cutoutAvailable && view === 'cutout';
+  const heroFocus = !invitationOpen && (modelFocus || cutoutAvailable && view === 'cutout');
   $('workspace').classList.toggle('hero-focus', heroFocus);
   $('back-to-atlas').hidden = !heroFocus;
   $('orbit-button').hidden = !modelFocus;
@@ -1514,10 +1805,18 @@ function updateSceneAction(work = eventWork.get(eventKey(currentRunId, selectedB
   if (!button) return;
   if (!historyMode && document.body.classList.contains('history-requested')) { button.hidden = true; $('chronicle-stage')?.classList.remove('has-scene-action'); return; }
   if (historyMode) {
-    const allowed = serviceMode === 'live-enabled' && hasLiveAccess() || localReplayHistoryAccess;
-    button.hidden = !selectedHistoryRecord || !!historyMedia.sceneUrl || !allowed || activeView !== 'scene' || !!historyMediaJob;
-    button.textContent = 'Generate scene';
-    button.setAttribute('aria-label', `Generate scene for ${selectedHistoryRecord?.title || 'this history event'}`);
+    const allowed = canCreateFreshHistory();
+    const identity = selectedHistoryRecord && { questionId:selectedHistoryQuestionId, historyId:selectedHistoryId, eventId:selectedHistoryRecord.id };
+    const prepStatus = identity && (historyAutoSceneStates.get(historySceneIdentityKey(identity)) || historyMedia.sceneStatus);
+    const retryOf = identity && historyMediaRetryOf.get(historyMediaRetryKey('scene',identity));
+    const canCheck = ['unknown','pending'].includes(prepStatus) && (localHistoryAccess || allowed) && !retryOf;
+    const setupRequired = localHistoryAccess && !metaKeyConfigured;
+    const retryLabel = retryOf && prepStatus === 'unknown' ? 'Try new scene' : retryOf && prepStatus === 'empty' ? 'Try scene again' : '';
+    const unrepeatableTerminal = ['unknown','empty'].includes(prepStatus) && !canCheck && !retryLabel;
+    button.hidden = !!historyHoverPreview || !selectedHistoryRecord || !!historyMedia.sceneUrl || !(allowed || canCheck || setupRequired || !!retryLabel) || activeView !== 'scene' || !!historyMediaJob || prepStatus === 'queued' || unrepeatableTerminal;
+    button.textContent = canCheck ? (prepStatus === 'pending' ? 'Check scene status' : 'Check saved media') : prepStatus === 'pending' ? 'Check scene status' : setupRequired ? 'Configure Meta key' : retryLabel || (prepStatus === 'retryable' ? 'Retry scene' : 'Generate scene');
+    button.setAttribute('aria-label', `${canCheck || prepStatus === 'pending' ? 'Check saved media for' : setupRequired ? 'Configure Meta key to generate scene for' : retryLabel ? `${retryLabel} for` : prepStatus === 'retryable' ? 'Retry scene for' : 'Generate scene for'} ${selectedHistoryRecord?.title || 'this history event'}`);
+    button.title = prepStatus === 'unknown' && retryOf ? 'The previous scene result is uncertain and may already have incurred a charge. A new generation may incur another charge.' : prepStatus === 'empty' && retryOf ? 'No scene was produced. A new attempt may use the history image budget.' : '';
     $('chronicle-stage')?.classList.toggle('has-scene-action', !button.hidden);
     return;
   }
@@ -1553,31 +1852,327 @@ async function loadEvidenceForBranch(runId, branch) {
   setEvidenceOpen(button.getAttribute('aria-expanded') === 'true');
 }
 async function requestHistoryMedia(kind) {
-  if (!historyMode || !selectedHistoryRecord || historyMediaJob) return;
+  if (!historyMode || historyHoverPreview || !selectedHistoryRecord || historyMediaJob) return;
   const state = historySession.getState();
   const identity = { questionId:state.questionId, historyId:state.historyId, eventId:selectedHistoryRecord.id };
   if (!identity.questionId || !identity.historyId || !identity.eventId) return;
+  const key = historySceneIdentityKey(identity);
+  const savedStatus = kind === 'scene' ? historyAutoSceneStates.get(key) || historyMedia.sceneStatus : historyCutoutStates.get(key) || historyMedia.cutoutStatus;
+  const retryOf = historyMediaRetryOf.get(historyMediaRetryKey(kind,identity)) || '';
+  if (['empty','unknown'].includes(savedStatus) && !retryOf) {
+    viewStatus('Checking saved history media…',true);
+    const refreshed = await reconcileHistoryMediaAttachment(kind,identity,state);
+    if (refreshed.url) { viewStatus('Saved media is ready'); if (!document.body.classList.contains('invitation-open')) setView(kind === 'scene' ? 'scene' : 'cutout',true); }
+    if (refreshed.url) return;
+    const retryAvailable = historyMediaRetryOf.has(historyMediaRetryKey(kind,identity));
+    if (kind === 'scene') updateSceneAction(); else setView(activeView);
+    viewStatus(refreshed.status === 'empty' ? kind === 'scene' ? retryAvailable ? 'No scene was produced. Select Try scene again to start another saved attempt.' : 'No scene was produced; no retry is available for this saved attempt.' : retryAvailable ? 'SAM found no usable subject. Select Try SAM again to start another attempt.' : 'SAM found no usable subject; no retry is available for this saved attempt.' : retryAvailable ? 'The previous result is uncertain and may already have incurred a charge. A new generation may incur another charge.' : 'The previous result is still unconfirmed. Reopen this history later to check again.');
+    return;
+  }
+  if (kind === 'cutout' && !canCreateFreshHistory()) return;
   const current = () => {
     const active = historySession.getState();
     return active.questionId === identity.questionId && active.historyId === identity.historyId && active.selectedEventId === identity.eventId;
   };
   historyMediaJob = `${kind}:${identity.questionId}:${identity.historyId}:${identity.eventId}`;
   updateSceneAction();
-  viewStatus(kind === 'scene' ? 'Creating a saved scene for this history event…' : 'Creating a SAM cutout for this history event…', true);
+  const label = kind === 'scene' ? 'scene' : 'SAM cutout';
+  const destination = () => historyHoverPreview ? historyHoverPreview.media : historyMedia;
+  const postUntilSettled = async (requestKind, pendingLabel, retryKey = historyMediaRetryKey(requestKind,identity)) => {
+    const maxPolls = 20;
+    const retry = historyMediaRetryOf.get(retryKey) || '';
+    for (let poll = 0; poll < maxPolls; poll++) {
+      if (!current()) return { cancelled:true, result:{} };
+      const response = await fetch(`/api/history/${requestKind}`, { method:'POST', headers:{ 'content-type':'application/json','x-demo-access-code':$('access').value }, body:JSON.stringify(retry ? { ...identity,retryOf:retry } : identity) });
+      const result = await response.json().catch(() => ({}));
+      if (result.retryOf) historyMediaRetryOf.set(retryKey,result.retryOf);
+      if (result.status === 'pending' || result.status === 'in-progress' || response.status === 202) {
+        if (poll + 1 === maxPolls) return { pending:true, result };
+        viewStatus(`${pendingLabel} is still being prepared…`,true);
+        await new Promise(resolve => setTimeout(resolve,600));
+        continue;
+      }
+      if (!response.ok && result.status !== 'retryable') { const error = new Error(result.error || `Could not create the ${requestKind}`); error.code = result.code; error.status = response.status; throw error; }
+      return { response, result };
+    }
+    return { pending:true, result:{} };
+  };
+  viewStatus(kind === 'scene' ? 'Preparing a saved scene for this history event…' : 'Preparing the SAM cutout…', true);
   try {
-    const response = await fetch(`/api/history/${kind}`, { method:'POST', headers:{ 'content-type':'application/json','x-demo-access-code':$('access').value }, body:JSON.stringify(identity) });
-    const result = await response.json().catch(() => ({}));
-    if (!current()) return;
-    if (!response.ok) throw new Error(result.error || `Could not create the ${kind}`);
-    const url = historyRefUrl(result.url || result.ref);
-    if (result.status === 'complete' && url) {
-      if (kind === 'scene') historyMedia.sceneUrl = url; else historyMedia.cutoutUrl = url;
-      viewStatus(kind === 'scene' ? 'Saved scene ready' : 'SAM cutout ready');
-      setView(kind === 'scene' ? 'scene' : 'cutout', true);
-    } else if (result.status === 'pending' || result.status === 'in-progress') viewStatus(`The ${kind} is still being prepared. Select ${kind === 'scene' ? 'Generate scene' : 'SAM cutout'} again to check.`);
-    else viewStatus(result.error || (result.status === 'missing-image' ? 'Create a scene before requesting a cutout.' : `No ${kind} is available for this history event yet.`));
-  } catch (error) { if (current()) viewStatus(error.message || `Could not create the ${kind}`); }
-  finally { historyMediaJob = null; updateSceneAction(); if (historyMode) setView(activeView); }
+    let attempt = await postUntilSettled(kind,label);
+    if (!current() || attempt.cancelled) return;
+    let result = attempt.result;
+    if (kind === 'cutout' && result.status === 'missing-image' && result.prerequisite === 'scene') {
+      viewStatus('Preparing the saved scene needed for the SAM cutout…',true);
+      const sceneAttempt = await postUntilSettled('scene','Required scene');
+      if (!current() || sceneAttempt.cancelled) return;
+      const sceneResult = sceneAttempt.result, sceneUrl = historyRefUrl(sceneResult.url || sceneResult.ref);
+      if (sceneAttempt.pending) { viewStatus('The scene is still preparing. Select SAM cutout again to continue when ready.'); return; }
+      if (sceneResult.status === 'complete' && sceneUrl) {
+        if (sceneResult.attached === false) {
+          const reconciled = await reconcileHistoryMediaAttachment('scene',identity,state);
+          if (!reconciled.url) { viewStatus('The required scene could not be confirmed in saved history; SAM was not started.'); return; }
+        } else {
+          historyAutoSceneRefs.set(key,sceneUrl); historyAutoSceneStates.set(key,'complete'); historyAutoScenePending.delete(key); historyAutoScenePreparationKeys.add(key);
+          destination().sceneUrl = sceneUrl;
+        }
+      } else if (sceneResult.status === 'unknown') {
+        historyAutoSceneStates.set(key,'unknown'); await reconcileHistoryMediaAttachment('scene',identity,state);
+        viewStatus('Scene status is uncertain. Check saved media before retrying SAM.'); return;
+      } else if (sceneResult.status === 'retryable' || sceneResult.code === 'budget_exhausted') {
+        historyAutoSceneStates.set(key,'retryable'); viewStatus('Scene preparation is temporarily unavailable. You can select SAM cutout again later.'); return;
+      } else if (sceneResult.status === 'empty') {
+        historyAutoSceneStates.set(key,'empty'); viewStatus('No scene was produced, so SAM could not run. The history event remains available.'); return;
+      } else { viewStatus(sceneResult.error || 'The saved scene needed for SAM could not be prepared.'); return; }
+      attempt = await postUntilSettled('cutout','SAM cutout');
+      if (!current() || attempt.cancelled) return;
+      result = attempt.result;
+    }
+    if (attempt.pending) {
+      if (kind === 'scene') { historyAutoSceneStates.set(key,'pending'); historyAutoScenePending.set(key,{identity,polls:0}); scheduleHistorySceneOverlayPoll(); }
+      else { historyCutoutStates.set(key,'pending'); destination().cutoutStatus = 'pending'; }
+      viewStatus(`${label} is still preparing. Select ${kind === 'scene' ? 'Check scene status' : 'Check SAM status'} to continue checking.`); return;
+    }
+    if (result.status === 'complete') {
+      let url = historyRefUrl(result.url || result.ref);
+      if (result.attached === false) {
+        const reconciled = await reconcileHistoryMediaAttachment(kind,identity,state);
+        if (!reconciled.url) { viewStatus(`${label} could not be confirmed in saved history; no unattached result was shown.`); return; }
+        url = reconciled.url;
+      }
+      if (!url) { viewStatus(`${label} completed without a saved image reference.`); return; }
+      if (kind === 'scene') {
+        historyAutoSceneRefs.set(key,url); historyAutoSceneStates.set(key,'complete'); historyAutoScenePending.delete(key); historyAutoScenePreparationKeys.add(key); historyMediaRetryOf.delete(historyMediaRetryKey('scene',identity));
+        destination().sceneUrl = url; destination().sceneStatus = 'complete';
+      } else {
+        historyCutoutStates.set(key,'complete'); historyMediaRetryOf.delete(historyMediaRetryKey('cutout',identity)); destination().cutoutUrl = url; destination().cutoutStatus = 'complete';
+        if (historyHoverPreview) historyHoverPreview.activeView = 'cutout';
+      }
+      if (!historyHoverPreview) { viewStatus(kind === 'scene' ? 'Saved scene ready' : 'SAM cutout ready'); if (!document.body.classList.contains('invitation-open')) setView(kind === 'scene' ? 'scene' : 'cutout', true); }
+      return;
+    }
+    if (result.status === 'unknown') {
+      if (kind === 'scene') historyAutoSceneStates.set(key,'unknown'); else historyCutoutStates.set(key,'unknown');
+      if (result.retryOf) historyMediaRetryOf.set(historyMediaRetryKey(kind,identity),result.retryOf);
+      if (kind === 'cutout') destination().cutoutStatus = 'unknown';
+      const reconciled = await reconcileHistoryMediaAttachment(kind,identity,state);
+      if (reconciled.url) { viewStatus('Saved media is ready'); if (!historyHoverPreview && !document.body.classList.contains('invitation-open')) setView(kind === 'scene' ? 'scene' : 'cutout',true); }
+      else viewStatus('The saved media status is uncertain. Use Check saved media to refresh the history record.');
+    } else if (result.status === 'empty') {
+      if (kind === 'scene') historyAutoSceneStates.set(key,'empty'); else historyCutoutStates.set(key,'empty');
+      if (result.retryOf) historyMediaRetryOf.set(historyMediaRetryKey(kind,identity),result.retryOf);
+      if (kind === 'cutout') destination().cutoutStatus = 'empty';
+      if (!historyHoverPreview) viewStatus(kind === 'scene' ? 'No scene was produced for this event. The saved history is still available.' : 'SAM did not find a usable subject in this scene. The saved scene remains available.');
+    } else if (result.status === 'retryable' || result.code === 'budget_exhausted') {
+      if (kind === 'scene') historyAutoSceneStates.set(key,'retryable'); else historyCutoutStates.set(key,'retryable');
+      if (!historyHoverPreview) viewStatus(`${label} is temporarily unavailable. Select ${kind === 'scene' ? 'Retry scene' : 'SAM cutout'} again later.`);
+    } else if (!historyHoverPreview) viewStatus(result.error || (result.status === 'missing-image' ? 'The scene needed for SAM could not be prepared.' : `No ${kind} is available for this history event yet.`));
+  } catch (error) {
+    if (current() && !historyHoverPreview) {
+      if (error.code === 'meta_key_required') { const setup = $('meta-key-setup'); if (setup) setup.open = true; status('Configure a Meta API key to create saved history media.'); $('meta-key-input')?.focus?.({preventScroll:true}); }
+      viewStatus(error.message || `Could not create the ${kind}`);
+    }
+  }
+  finally { historyMediaJob = null; updateSceneAction(); if (historyMode && !historyHoverPreview) setView(activeView); }
+}
+function reflectAutomaticHistoryScene(identity) {
+  const state = historySession.getState();
+  if (state.questionId !== identity.questionId || state.historyId !== identity.historyId) return;
+  const url = historyAutoSceneRefs.get(historySceneIdentityKey(identity));
+  const status = historyAutoSceneStates.get(historySceneIdentityKey(identity));
+  if (historyHoverPreview?.event?.id === identity.eventId && historyHoverPreview.historyId === identity.historyId && url) historyHoverPreview.media.sceneUrl = url;
+  if (selectedHistoryRecord?.id !== identity.eventId || selectedHistoryId !== identity.historyId) return;
+  if (url) {
+    historyMedia.sceneUrl = url;
+    setStageMessage('Saved scene ready.');
+    setView(historyHoverPreview ? 'scene' : activeView);
+  } else if (status === 'queued' || status === 'pending') {
+    setStageMessage('Preparing a saved scene for this history event…');
+    updateSceneAction();
+  } else if (status === 'unknown') {
+    setStageMessage('Scene preparation could not be confirmed; no saved image is available.');
+    updateSceneAction();
+  } else if (status === 'retryable' || status === 'failed') {
+    setStageMessage(status === 'retryable' ? 'Scene preparation is temporarily unavailable; no saved image is available yet.' : 'Scene preparation failed; saved event details remain available.');
+    updateSceneAction();
+  }
+}
+function historySceneCandidates(state) {
+  const candidates = [], seen = new Set();
+  const add = record => {
+    if (!record?.id) return;
+    const identity = { questionId:state.questionId, historyId:state.historyId, eventId:String(record.id) };
+    const key = historySceneIdentityKey(identity);
+    if (seen.has(key)) return;
+    seen.add(key); candidates.push({ identity, record, key });
+  };
+  for (const suggestion of state.suggestions || []) add(suggestion);
+  const selected = state.history?.events?.find(event => event.id === state.selectedEventId);
+  add(selected);
+  return candidates;
+}
+function scheduleHistorySceneOverlayPoll() {
+  if (historyAutoScenePollTimer !== null) return;
+  historyAutoScenePollTimer = setTimeout(() => { historyAutoScenePollTimer = null; refreshPendingHistorySceneOverlays().catch(() => {}); }, 1200);
+}
+async function refreshPendingHistorySceneOverlays() {
+  const state = historySession.getState();
+  const activePending = [...historyAutoScenePending.values()].filter(item => item.identity.questionId === state.questionId && item.identity.historyId === state.historyId);
+  if (!activePending.length) return;
+  try {
+    const response = await fetch(`/api/histories?asOfYear=${encodeURIComponent(state.date)}`, { headers:$('access').value ? { 'x-demo-access-code':$('access').value } : {} });
+    if (!response.ok) throw new Error(`History image status ${response.status}`);
+    const data = await response.json();
+    const question = data.questions?.find(item => item.id === state.questionId);
+    const owner = question?.histories?.find(item => item.id === state.historyId);
+    for (const record of [...(owner?.events || []), ...(owner?.suggestions || [])]) {
+      const identity = { questionId:state.questionId, historyId:state.historyId, eventId:String(record.id) };
+      const key = historySceneIdentityKey(identity), url = savedHistorySceneUrl(record);
+      if (url) {
+        historyAutoSceneRefs.set(key,url); historyAutoSceneStates.set(key,'complete'); historyAutoScenePending.delete(key);
+        historySession.updateMediaReference({ questionId:state.questionId, historyId:state.historyId, eventId:String(record.id) }, 'sceneRef', record.sceneRef || { status:'complete', url });
+        reflectAutomaticHistoryScene(identity); continue;
+      }
+      const status = typeof record.sceneRef === 'object' ? record.sceneRef.status : '';
+      if (status === 'unknown') { historyAutoSceneStates.set(key,'unknown'); historyAutoScenePending.delete(key); reflectAutomaticHistoryScene(identity); }
+      else if (status === 'retryable') { historyAutoSceneStates.set(key,'retryable'); historyAutoScenePending.delete(key); reflectAutomaticHistoryScene(identity); }
+    }
+    for (const item of activePending) {
+      const key = historySceneIdentityKey(item.identity);
+      if (!historyAutoScenePending.has(key)) continue;
+      item.polls++;
+      if (item.polls >= 5) {
+        historyAutoScenePending.delete(key); historyAutoSceneStates.set(key,'unknown'); reflectAutomaticHistoryScene(item.identity);
+      }
+    }
+  } catch {
+    for (const item of activePending) {
+      const key = historySceneIdentityKey(item.identity); if (!historyAutoScenePending.has(key)) continue;
+      item.polls++;
+      if (item.polls >= 5) { historyAutoScenePending.delete(key); historyAutoSceneStates.set(key,'failed'); reflectAutomaticHistoryScene(item.identity); }
+    }
+  }
+  if ([...historyAutoScenePending.values()].some(item => item.identity.questionId === state.questionId && item.identity.historyId === state.historyId)) scheduleHistorySceneOverlayPoll();
+}
+async function reconcileHistorySceneAttachment(identity, state) {
+  try {
+    const response = await fetch(`/api/histories?asOfYear=${encodeURIComponent(state.date)}`, { headers:$('access').value ? { 'x-demo-access-code':$('access').value } : {} });
+    if (!response.ok) throw new Error(`History image status ${response.status}`);
+    const data = await response.json();
+    const question = data.questions?.find(item => item.id === identity.questionId);
+    const owner = question?.histories?.find(item => item.id === identity.historyId);
+    const record = [...(owner?.events || []), ...(owner?.suggestions || [])].find(item => String(item.id) === identity.eventId);
+    const url = savedHistorySceneUrl(record);
+    if (!url) return false;
+    const key = historySceneIdentityKey(identity);
+    historyAutoSceneRefs.set(key,url); historyAutoSceneStates.set(key,'complete');
+    historySession.updateMediaReference(identity, 'sceneRef', record.sceneRef || { status:'complete', url });
+    reflectAutomaticHistoryScene(identity);
+    return true;
+  } catch { return false; }
+}
+async function reconcileHistoryMediaAttachment(kind, identity, state = historySession.getState()) {
+  try {
+    const response = await fetch(`/api/histories?asOfYear=${encodeURIComponent(state.date)}`, { headers:$('access').value ? { 'x-demo-access-code':$('access').value } : {} });
+    if (!response.ok) throw new Error(`History media status ${response.status}`);
+    const data = await response.json();
+    const question = data.questions?.find(item => item.id === identity.questionId);
+    const owner = question?.histories?.find(item => item.id === identity.historyId);
+    const record = [...(owner?.events || []), ...(owner?.suggestions || [])].find(item => String(item.id) === identity.eventId);
+    const ref = record?.[kind === 'scene' ? 'sceneRef' : 'cutoutRef'];
+    const url = kind === 'scene' ? savedHistorySceneUrl(record) : historyRefUrl(ref);
+    const status = historyRefStatus(ref), retryOf = historyRefRetryOf(ref);
+    const key = historySceneIdentityKey(identity);
+    if (retryOf) historyMediaRetryOf.set(historyMediaRetryKey(kind,identity),retryOf);
+    if (kind === 'scene' && url) { historyAutoSceneRefs.set(key,url); historyAutoSceneStates.set(key,'complete'); historyAutoScenePending.delete(key); }
+    if (kind === 'cutout') historyCutoutStates.set(key,url ? 'complete' : status || 'unknown');
+    if (url) historySession.updateMediaReference(identity, kind === 'scene' ? 'sceneRef' : 'cutoutRef', ref || { status:'complete', url });
+    if (url) historyMediaRetryOf.delete(historyMediaRetryKey(kind,identity));
+    const media = historyHoverPreview?.event?.id === identity.eventId && historyHoverPreview.historyId === identity.historyId
+      ? historyHoverPreview.media
+      : historyHoverPreview?.event?.id === identity.eventId && historyHoverPreview.questionId === identity.questionId
+        ? historyHoverPreview.media : selectedHistoryRecord?.id === identity.eventId && selectedHistoryId === identity.historyId ? historyMedia : null;
+    if (media) {
+      media[kind === 'scene' ? 'sceneStatus' : 'cutoutStatus'] = url ? 'complete' : status;
+      if (url) media[kind === 'scene' ? 'sceneUrl' : 'cutoutUrl'] = url;
+    }
+    if (kind === 'scene' && url) reflectAutomaticHistoryScene(identity);
+    return { url, status, record };
+  } catch { return { url:'', status:'unknown', record:null }; }
+}
+function scheduleAutomaticHistoryScenePreparation(state = historySession.getState()) {
+  if (!historyMode || state.loading || !state.history || !state.questionId || !state.historyId
+      || !canCreateFreshHistory()) return;
+  const contextKey = JSON.stringify([state.questionId,state.historyId]);
+  const batch = [];
+  for (const candidate of historySceneCandidates(state)) {
+    const { identity, record, key } = candidate;
+    const existing = savedHistorySceneUrl(record) || historyAutoSceneRefs.get(key);
+    if (existing) { historyAutoSceneRefs.set(key,existing); historyAutoSceneStates.set(key,'complete'); continue; }
+    const knownStatus = historyAutoSceneStates.get(key);
+    if (['empty','unknown','retryable'].includes(knownStatus)) { reflectAutomaticHistoryScene(identity); continue; }
+    const savedStatus = historyRefStatus(record.sceneRef);
+    if (['empty','unknown','retryable'].includes(savedStatus)) {
+      historyAutoSceneStates.set(key,savedStatus); reflectAutomaticHistoryScene(identity); continue;
+    }
+    if (savedStatus === 'pending') {
+      historyAutoSceneStates.set(key,'pending');
+      if (!historyAutoScenePending.has(key)) historyAutoScenePending.set(key,{identity,polls:0});
+      reflectAutomaticHistoryScene(identity); scheduleHistorySceneOverlayPoll(); continue;
+    }
+    if (historyAutoSceneBlockedContexts.has(contextKey)) { historyAutoSceneStates.set(key,'retryable'); reflectAutomaticHistoryScene(identity); continue; }
+    if (historyAutoScenePreparationKeys.has(key)) {
+      if (historyAutoSceneStates.get(key) === 'pending') scheduleHistorySceneOverlayPoll();
+      continue;
+    }
+    historyAutoScenePreparationKeys.add(key); historyAutoSceneStates.set(key,'queued'); batch.push(candidate);
+    reflectAutomaticHistoryScene(identity);
+  }
+  if (!batch.length) return;
+  historyAutoSceneQueue = historyAutoSceneQueue.then(async () => {
+    for (const candidate of batch) {
+      const { identity, key } = candidate;
+      const current = historySession.getState();
+      const stillEligible = current.questionId === identity.questionId && current.historyId === identity.historyId
+        && historySceneCandidates(current).some(item => item.key === key)
+        && !savedHistorySceneUrl(historySceneCandidates(current).find(item => item.key === key)?.record);
+      if (!stillEligible || historyAutoSceneBlockedContexts.has(contextKey)) {
+        historyAutoSceneStates.delete(key); historyAutoScenePreparationKeys.delete(key); continue;
+      }
+      historyAutoSceneStates.set(key,'pending'); reflectAutomaticHistoryScene(identity);
+      try {
+        const response = await fetch('/api/history/scene', { method:'POST', headers:{ 'content-type':'application/json','x-demo-access-code':$('access').value }, body:JSON.stringify(identity) });
+        const result = await response.json().catch(() => ({}));
+        if (result.retryOf) historyMediaRetryOf.set(historyMediaRetryKey('scene',identity),result.retryOf);
+        const url = historyRefUrl(result.url || result.ref);
+        if (response.ok && result.status === 'complete' && url) {
+          if (result.attached === false) {
+            if (await reconcileHistorySceneAttachment(identity,current)) continue;
+            historyAutoSceneStates.set(key,'unknown'); reflectAutomaticHistoryScene(identity); continue;
+          }
+          historyAutoSceneRefs.set(key,url); historyAutoSceneStates.set(key,'complete');
+          historyAutoScenePending.delete(key);
+          historySession.updateMediaReference(identity, 'sceneRef', { status:'complete', url });
+          reflectAutomaticHistoryScene(identity); continue;
+        }
+        if (response.status === 202 || result.status === 'pending' || result.status === 'in-progress') {
+          historyAutoSceneStates.set(key,'pending'); historyAutoScenePending.set(key,{identity,polls:0});
+          reflectAutomaticHistoryScene(identity); scheduleHistorySceneOverlayPoll(); continue;
+        }
+        if (result.status === 'retryable' || result.code === 'budget_exhausted') {
+          historyAutoSceneBlockedContexts.add(contextKey);
+          historyAutoSceneStates.set(key,'retryable'); reflectAutomaticHistoryScene(identity);
+          for (const rest of batch.slice(batch.indexOf(candidate)+1)) { historyAutoSceneStates.set(rest.key,'retryable'); reflectAutomaticHistoryScene(rest.identity); }
+          break;
+        }
+        if (result.status === 'unknown') { historyAutoSceneStates.set(key,'unknown'); reflectAutomaticHistoryScene(identity); continue; }
+        if (result.status === 'empty') { historyAutoSceneStates.set(key,'empty'); reflectAutomaticHistoryScene(identity); continue; }
+        historyAutoSceneStates.set(key,'failed'); reflectAutomaticHistoryScene(identity);
+      } catch {
+        historyAutoSceneStates.set(key,'failed'); reflectAutomaticHistoryScene(identity);
+      }
+    }
+  }).catch(() => {});
 }
 function renderEventWork() {
   if (historyMode || document.body.classList.contains('history-requested')) { $('event-consequences').hidden = true; $('event-retry').hidden = true; $('event-scene-action').hidden = true; return; }
@@ -1672,7 +2267,7 @@ function queueSceneTask(runId, branch, work, access, allowGeneration, refresh, r
         work.sceneUrl = result.url; work.sceneMessage = ''; work.sceneRetryable = false; work.sceneMissing = false;
         if (work.sceneOnlyPrefetch && !work.childrenRunning) work.sceneOnlyComplete = true;
       } else if (result.status === 'missing') {
-        work.sceneMessage = serviceMode === 'replay-only' ? 'Run locally with your own Meta API key for fresh scene generation' : 'No saved scene is available for this event.'; work.sceneRetryable = false; work.sceneMissing = true;
+        work.sceneMessage = 'No saved scene is available for this event.'; work.sceneRetryable = false; work.sceneMissing = true;
         if (work.sceneOnlyPrefetch) work.sceneOnlyComplete = true;
       } else {
         work.sceneMessage = result.status === 'in-progress' ? 'Scene generation is in progress' : 'Scene generation did not complete; retry to check';
@@ -1786,7 +2381,7 @@ function activateBranch(branch, retry = false, { background = false, sceneOnly =
   if (!allowGeneration && savedChild?.status !== 'complete') {
     work.childrenLoading = false; work.childrenQueued = false; work.childrenRunning = false; work.running = false;
     work.consequenceStatus = savedChild?.status || 'not-started';
-    work.childrenMessage = ['failed', 'uncertain'].includes(savedChild?.status) ? serviceMode === 'replay-only' ? 'This attempt stopped · run locally with live Meta access to continue' : 'This attempt stopped · live access is required to continue' : savedChild?.status ? 'This saved attempt needs review' : serviceMode === 'replay-only' ? 'Not explored yet · run locally with your own Meta API key for fresh exploration' : 'Not explored yet · live access is required to explore this event';
+    work.childrenMessage = ['failed', 'uncertain'].includes(savedChild?.status) ? 'This attempt stopped · live access is required to continue' : savedChild?.status ? 'This saved attempt needs review' : 'Not explored yet · live access is required to explore this event';
     work.sceneMessage ||= work.sceneUrl ? '' : '';
     work.retryable = false; work.interrupted = true;
     renderEventWork(); return;
@@ -2028,7 +2623,10 @@ $('event-retry').addEventListener('click', () => {
   if (action === 'retry') activateBranch(branch, true);
 });
 $('event-scene-action').addEventListener('click', () => {
-  if (historyMode) { requestHistoryMedia('scene'); return; }
+  if (historyMode) {
+    if (!canCreateFreshHistory() && localHistoryAccess && !metaKeyConfigured) { const setup = $('meta-key-setup'); if (setup) setup.open = true; status('Configure a Meta API key to create a saved scene.'); $('meta-key-input')?.focus?.({preventScroll:true}); return; }
+    requestHistoryMedia('scene'); return;
+  }
   const branch = branchState.branches.find(item => item.id === selectedBranchId), work = eventWork.get(eventKey(currentRunId, selectedBranchId));
   if (!branch || !work || work.sceneQueued || work.sceneRunning) return;
   const runId = currentRunId;
@@ -2120,7 +2718,7 @@ async function expandBranch(branch) {
   const action = continuationAction({ runId: currentRunId, branchId: branch.id, children: continuation.children, path: continuation.path, busy: streamBusy, mode: serviceMode, access: hasLiveAccess() });
   if (action.type === 'open') { await loadRun(action.runId, { animate: false, autoConsequences:false }); return; }
   if (action.type !== 'generate') {
-    const message = serviceMode === 'replay-only' ? 'Fresh exploration needs the demo running locally with your own Meta API key. Saved descendants remain available.' : action.message;
+    const message = action.message;
     status(message);
     if (message) {
       const notice = $('selected-branch-context');
@@ -2160,7 +2758,7 @@ function renderArchive() {
   if (currentRunId && visible.some(run => run.id === currentRunId)) $('runs').value = currentRunId;
   $('archive-history-toggle').textContent = archiveShowHistory ? 'Hide previous explorations' : 'Show previous explorations';
   $('archive-history-toggle').setAttribute('aria-pressed', String(archiveShowHistory));
-  $('archive-history-hint').textContent = archiveShowHistory && !hasLiveAccess() && !localReplayHistoryAccess && serviceMode === 'live-enabled' ? 'Enter your access code to see saved explorations.' : '';
+  $('archive-history-hint').textContent = archiveShowHistory && !hasLiveAccess() && !localHistoryAccess && serviceMode === 'live-enabled' ? 'Enter your access code to see saved explorations.' : '';
 }
 function learnRunMetadata(id, branch, manifest) {
   const hero = branch.branches?.find(item => item.id === (branch.hero?.branchId || branch.hero?.id));
@@ -2175,7 +2773,7 @@ function learnRunMetadata(id, branch, manifest) {
 async function refreshHistory() {
   const request = ++historyRequest;
   const headers = $('access').value ? { 'x-demo-access-code': $('access').value } : {};
-  const responses = await Promise.allSettled([fetch('/runs'), hasLiveAccess() || localReplayHistoryAccess ? fetch('/api/history', { headers }) : Promise.resolve(null)]);
+  const responses = await Promise.allSettled([fetch('/runs'), hasLiveAccess() || localHistoryAccess ? fetch('/api/history', { headers }) : Promise.resolve(null)]);
   const all = [];
   for (const result of responses) {
     if (result.status !== 'fulfilled' || !result.value?.ok) continue;
@@ -2217,7 +2815,7 @@ function renderHeroModels() {
     card.append(model, role, metrics); host.append(card);
   }
 }
-function reset({ preservePanel = false, preserveExpansion = false } = {}) { historyCreationRequested = false; $('history-creation-status').hidden = true; $('history-creation-status').textContent = ''; historySession.clear(); evidenceRequest++; $('evidence-toggle').hidden = true; $('evidence-content').replaceChildren(); $('evidence-panel').hidden = true; $('evidence-toggle').setAttribute('aria-expanded', 'false'); updateSceneAction(null); $('event-retry').hidden = true; savedPreview.clear(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; geographyPreviewControls.clear(); showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = (serviceMode !== 'live-enabled' && !localReplayHistoryAccess); currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasSourceGraphSignature = ''; atlasVisibleGraphSignature = ''; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
+function reset({ preservePanel = false, preserveExpansion = false } = {}) { historyCreationRequested = false; $('history-creation-status').hidden = true; $('history-creation-status').textContent = ''; historySession.clear(); evidenceRequest++; $('evidence-toggle').hidden = true; $('evidence-content').replaceChildren(); $('evidence-panel').hidden = true; $('evidence-toggle').setAttribute('aria-expanded', 'false'); updateSceneAction(null); $('event-retry').hidden = true; savedPreview.clear(); finishHistoryEventPreview(); setAtlasFocused(false); atlasGeographyOverride = null; applyAtlasGeographyLevel($('atlas-scene')?.dataset.atlasLevel || 'surface'); finishRootGenerationProgress(); if (!preserveExpansion) { activeExpansion?.controller.abort(); activeExpansion = null; atlasNodes = atlasNodes.filter(node => !node.isExpansionPlaceholder); } assetLoadRequest++; assetsLoading = false; preserveGraphUntilReady = preservePanel; savedNavigationState = preservePanel ? 'loading' : ''; surfaceMode = 'scenario'; geographyPreviewControls.clear(); showGeography(null); voice.cancel(); replayRequest = navigation.begin().id; treeRenderRequest++; streamBusy = false; $('live-submit').disabled = serviceMode !== 'live-enabled'; currentRunId = ''; currentManifest = null; atlasCurrentWorldRunId = ''; continuation = { path: [], children: [] }; selectedContext = null; continuationViewSelection = null; renderAncestry(); if (!preservePanel) $('exploration-tree-status')?.replaceChildren(); $('event-children')?.replaceChildren(); $('event-consequences').hidden = true; branchState = { branches: [], heroId: null, phase: 'idle' }; trace = []; savedTrace = []; selectedBranchId = null; replayActive = false; replayLoaded = false; base = ''; hasImage = hasCutout = hasModel = false; modelAsset = ''; modelLoading = modelLoaded = modelError = false; loadingModelUrl = ''; loadedModelUrl = ''; modelRequestId++; modelApi?.clear?.(); if (!preservePanel) { atlasNodes = []; atlasSourceGraphSignature = ''; atlasVisibleGraphSignature = ''; atlasController?.setGraph({ mapNodes:[], currentWorldId:null }); } setInvitationOpen(false,{restoreNavigation:false}); $('guardrail').hidden = true; $('generation').hidden = true; $('map-status').textContent = 'DRAG · SCROLL TO ZOOM'; $('hero-title').textContent = preservePanel ? 'Opening saved story…' : 'A world to step into'; $('hero-tag').textContent = branchPhaseLabel('idle'); $('hero-description').textContent = preservePanel ? '' : 'A scene, a subject, a new dimension.'; $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren(); setStageMessage(preservePanel ? 'Loading the selected saved story…' : 'A scene, a subject, a new dimension.'); renderBranches(); renderTrace(); setView('scene'); }
 function setBranch(data, event = 'complete', preferredBranchId = '') {
   branchState = branchProgress(branchState, event, data);
   $('hero-tag').textContent = branchState.phase === 'final' ? (continuation.path?.length ? 'POSSIBLE CONSEQUENCE' : 'SELECTED EVENT') : branchPhaseLabel(branchState.phase);
@@ -2424,7 +3022,7 @@ async function loadRun(id, { animate = true, autoConsequences = true, selectedBr
           : ['failed', 'uncertain'].includes(savedChild?.status) ? 'This attempt stopped without saved consequences. Try this event again to continue.'
             : ['failed', 'retryable'].includes(savedChild?.status) && savedChild?.code === 'budget_exhausted' ? 'The spend limit ended this attempt. Try this event again to start a new attempt.'
               : savedChild?.status ? 'This saved attempt needs review'
-                : serviceMode === 'replay-only' ? 'Not explored yet · run locally with your own Meta API key for fresh exploration' : 'Not explored yet';
+                : 'Not explored yet';
         eventWork.set(key, work);
         renderEventWork();
       }
@@ -2492,7 +3090,7 @@ async function handleEvent(type, data, request) {
 }
 async function streamRun(endpoint, body, request, signalOverride, expansionReservation = null) {
   if (endpoint === '/api/run') startRootGenerationProgress();
-  streamBusy = true; $('live-submit').disabled = true; renderBranches();
+    streamBusy = true; updateFreshHistoryCta(); renderBranches();
   const signal = signalOverride || navigation.signal;
   try {
     const response = await fetch(endpoint, { method:'POST', signal, headers:{'content-type':'application/json','x-demo-access-code':$('access').value}, body:JSON.stringify(body) });
@@ -2525,34 +3123,52 @@ async function streamRun(endpoint, body, request, signalOverride, expansionReser
   } finally {
     if (request === replayRequest) {
       if (rootGenerationActive) finishRootGenerationProgress('The exploration ended before it could be saved.');
-      streamBusy = false; $('live-submit').disabled = (serviceMode !== 'live-enabled' && !localReplayHistoryAccess); renderBranches();
+      streamBusy = false; updateFreshHistoryCta(); renderBranches();
       // Consequence generation starts only after an explicit branch entry.
     }
   }
 }
 async function runPrompt(prompt) {
-  if (!prompt.trim() || streamBusy || historyQuestionBusy) return;
+  if (historyQuestionBusy) return;
+  if (streamBusy) {
+    const message = 'Wait for the current exploration to finish before creating a new history.';
+    showHistoryCreationStatus(message); return;
+  }
+  if (!prompt.trim()) {
+    const message = 'Enter a question to create a new history.';
+    showHistoryCreationStatus(message); return;
+  }
   const historyWriteAllowed = canCreateFreshHistory();
   if (!historyWriteAllowed) {
-    if (localReplayHistoryAccess) {
+    let message;
+    if (localHistoryAccess && !metaKeyConfigured) {
       const setup = $('meta-key-setup');
-      if (setup && !setup.hidden) setup.open = true;
-      status('Configure a Meta API key to create a fresh history. Saved histories remain available for local replay.');
-    } else status(serviceMode === 'replay-only' ? 'Open this saved history locally to author another question.' : serviceMode !== 'live-enabled' ? 'Service mode could not be confirmed · open a saved history below' : 'Enter live access to create a history.');
+      if (setup && !setup.hidden) { setup.open = true; $('meta-key-input')?.focus?.({preventScroll:true}); }
+      message = 'Configure a Meta API key to create a fresh history. Saved histories remain available.';
+    } else message = serviceMode !== 'live-enabled' ? 'Configure a Meta API key or open a saved history below.' : 'Enter live access to create a history.';
+    showHistoryCreationStatus(message);
     return;
   }
   const atlasData = atlasController?.getData?.();
   const intent = atlasController?.getAttachmentIntent?.() || atlasAttachmentIntent;
   let attachment;
   const activeHistory = historySession.getState();
-  if (historyMode && activeHistory.questionId && activeHistory.historyId && selectedHistoryRecord?.id) {
-    attachment = { mode:'history-event', questionId:activeHistory.questionId, historyId:activeHistory.historyId, eventId:selectedHistoryRecord.id };
+  const committedHistoryEvent = activeHistory.history?.events?.find(item => item.id === activeHistory.selectedEventId);
+  const selectedSuggestion = [...(activeHistory.suggestions || []), ...(activeHistory.history?.suggestions || [])]
+    .find(item => item.id === activeHistory.selectedEventId);
+  const attachedHistoryEvent = committedHistoryEvent || activeHistory.history?.events?.find(item => item.id === selectedSuggestion?.suggestionForEventId)
+    || [...(activeHistory.history?.events || [])].filter(item => item.year <= activeHistory.date).sort((a,b) => b.year-a.year).at(0);
+  if (historyMode && activeHistory.questionId && activeHistory.historyId && attachedHistoryEvent) {
+    attachment = { mode:'history-event', questionId:activeHistory.questionId, historyId:activeHistory.historyId, eventId:attachedHistoryEvent.id };
   } else if (historyMode) {
     attachment = { mode:'present-day', divergenceYear:activeHistory.date || 2026 };
   } else if (intent?.mode === 'current-world' && intent.currentWorldId) {
     const world = atlasData?.worlds?.find(item => item.id === intent.currentWorldId);
     const ref = world?.eventRef || (world?.runId && world?.branchId ? { runId:world.runId, branchId:world.branchId } : null);
-    if (!ref?.runId || !ref?.branchId) { status('Enter a saved event before attaching a question to the current world.'); return; }
+    if (!ref?.runId || !ref?.branchId) {
+      const message = 'Enter a saved event before attaching a question to the current world.';
+      showHistoryCreationStatus(message); return;
+    }
     attachment = { mode:'current-world', parentRunId:ref.runId, parentBranchId:ref.branchId };
   } else {
     attachment = { mode:'present-day', divergenceYear:intent?.divergenceYear || 2026,
@@ -2561,13 +3177,21 @@ async function runPrompt(prompt) {
   viewStatus(''); $('prompt').value = prompt;
   const request = replayRequest;
   historyQuestionBusy = true; historyCreationRequested = !historyMode;
-  $('history-creation-status').hidden = false; $('history-creation-status').textContent = 'Creating a new saved history…';
+  syncInvitationDraftControls();
+  showHistoryCreationStatus('Creating a new saved history…');
   if (historyCreationRequested) document.body.classList.add('history-requested');
-  $('live-submit').disabled = true; status('Checking your question…'); setStageMessage('Framing a new history from your question…');
+  updateFreshHistoryCta(); status('Checking your question…'); setStageMessage('Framing a new history from your question…');
   try {
+    const questionInput = { question:prompt.trim() };
+    if (attachment?.mode === 'history-event') questionInput.attachment = attachment;
+    else if (historyMode) questionInput.divergenceYear = activeHistory.date || 2026;
+    else if (intent?.mode === 'present-day') {
+      if (Number.isSafeInteger(intent.divergenceYear) && intent.divergenceYear !== 0) questionInput.divergenceYear = intent.divergenceYear;
+      if (intent.divergencePlace) questionInput.place = intent.divergencePlace;
+    }
     const response = await fetch('/api/history/questions', { method:'POST', signal:navigation.signal,
       headers:{ 'content-type':'application/json', 'x-demo-access-code':$('access').value },
-      body:JSON.stringify({ question:prompt.trim(), attachment }) });
+      body:JSON.stringify(questionInput) });
     const data = await response.json().catch(() => ({}));
     if (request !== replayRequest) return;
     if (!response.ok) throw new Error(data.error || `Unable to create history (${response.status})`);
@@ -2589,14 +3213,22 @@ async function runPrompt(prompt) {
     setStageMessage('Your history is ready. Choose a saved event or review suggestions around this date.');
   } catch (error) {
     if (request === replayRequest) {
-      historyCreationRequested = !historyMode; $('history-creation-status').hidden = false; $('history-creation-status').textContent = error.message || 'Could not create a saved history.';
+      historyCreationRequested = !historyMode; showHistoryCreationStatus(error.message || 'Could not create a saved history.');
       if (historyCreationRequested) document.body.classList.add('history-requested');
       status(error.message || 'Could not create a saved history.');
       setStageMessage(error.message || 'Could not create a saved history.');
     }
-  } finally { historyQuestionBusy = false; if (request === replayRequest) { $('live-submit').disabled = serviceMode !== 'live-enabled' && !localReplayHistoryAccess; updateFreshHistoryCta(); } }
+  } finally { historyQuestionBusy = false; syncInvitationDraftControls(); updateFreshHistoryCta(); }
 }
 $('prompt-form').addEventListener('submit', e => { e.preventDefault(); runPrompt($('prompt').value); });
+$('cancel-new-exploration').addEventListener('click', cancelNewExplorationDraft);
+$('cancel-new-exploration').hidden = true;
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || !document.body.classList.contains('invitation-open') || !document.body.classList.contains('has-story')) return;
+  event.preventDefault(); event.stopPropagation();
+  if (historyQuestionBusy) { status('History creation is in progress and cannot be cancelled from here.'); return; }
+  cancelNewExplorationDraft();
+});
 $('focus-atlas')?.addEventListener('click', () => { setAtlasFocused(true); atlasController?.scene?.setZoom?.(0.78); $('atlas-scene')?.focus({ preventScroll:true }); });
 $('history-orbit-toggle')?.addEventListener('click', () => {
   if (historySession.getState().histories.length < 2) return;
@@ -2647,6 +3279,7 @@ $('atlas-open-details')?.addEventListener('click', () => {
   }
 });
 $('atlas-close-details')?.addEventListener('click', () => {
+  finishHistoryEventPreview();
   if (atlasDetailsFocusTimer !== null) clearTimeout(atlasDetailsFocusTimer);
   atlasDetailsFocusTimer = null;
   document.body.classList.remove('atlas-details-open');
@@ -2686,7 +3319,7 @@ $('history-question-picker').addEventListener('change', event => {
 function toggleArchiveHistory() { archiveShowHistory = !archiveShowHistory; renderArchive(); if (archiveShowHistory) refreshHistory().catch(() => {}); }
 $('archive-history-toggle').addEventListener('click', toggleArchiveHistory);
 $('world-back').addEventListener('click', () => continuation.parentBranchId ? openAncestor(continuation.parentRunId, continuation.parentBranchId) : loadRun(continuation.parentRunId, { animate: false }));
-$('access').addEventListener('change', () => { refreshHistory().catch(() => {}); refreshHistoryQuestions().catch(() => {}); renderBranches(); });
+$('access').addEventListener('change', () => { refreshHistory().catch(() => {}); refreshHistoryQuestions().catch(() => {}); renderBranches(); if (historyMode) scheduleAutomaticHistoryScenePreparation(historySession.getState()); });
 function restoreLocationFromHash() {
   const hash = location.hash;
   if (hash === lastHandledLocationHash) return;
@@ -2704,12 +3337,16 @@ function restoreLocationFromHash() {
 }
 window.addEventListener('hashchange', restoreLocationFromHash);
 window.addEventListener('popstate', restoreLocationFromHash);
-$('scene-view').addEventListener('click', () => { viewStatus(''); setView('scene', true); });
+$('scene-view').addEventListener('click', () => { if (historyHoverPreview) return; viewStatus(''); setView('scene', true); });
 $('cutout-view').addEventListener('click', () => {
+  if (historyHoverPreview) return;
   if (historyMode) {
     if (historyMedia.cutoutUrl) { viewStatus(''); setView('cutout', true); }
-    else if (serviceMode === 'live-enabled' && hasLiveAccess() || localReplayHistoryAccess) requestHistoryMedia('cutout');
-    else viewStatus('No saved cutout is attached to this history event.');
+    else if (canCreateFreshHistory()) requestHistoryMedia('cutout');
+    else if (localHistoryAccess && !metaKeyConfigured) {
+      const setup = $('meta-key-setup'); if (setup) setup.open = true;
+      status('Configure a Meta API key to create a new SAM cutout.'); $('meta-key-input')?.focus?.({preventScroll:true});
+    } else viewStatus('No saved cutout is attached to this history event.');
     return;
   }
   const runId = currentRunId, branchId = selectedBranchId;
@@ -2762,7 +3399,7 @@ $('cutout-view').addEventListener('click', () => {
         work.cutoutUrl = result.url;
         if (isSelected(runId, branchId)) { setView('cutout', true); viewStatus('SAM cutout ready'); }
       } else if (isSelected(runId, branchId)) {
-        viewStatus(result.status === 'empty' ? 'SAM did not find a usable cutout for this scene.' : result.status === 'missing-image' ? 'The event scene must finish before a cutout can be created.' : result.status === 'missing' ? (serviceMode === 'replay-only' ? 'Run locally with your own Meta API key to create a fresh SAM cutout.' : 'A cutout needs live access.') : result.status === 'in-progress' ? 'Cutout generation is still in progress. Select SAM cutout again to check.' : 'The cutout could not be confirmed. Select SAM cutout again to check.');
+        viewStatus(result.status === 'empty' ? 'SAM did not find a usable cutout for this scene.' : result.status === 'missing-image' ? 'The event scene must finish before a cutout can be created.' : result.status === 'missing' ? 'A cutout needs live access.' : result.status === 'in-progress' ? 'Cutout generation is still in progress. Select SAM cutout again to check.' : 'The cutout could not be confirmed. Select SAM cutout again to check.');
       }
     } catch (error) { work.cutoutMessage = error.message || 'Could not create the cutout'; if (isSelected(runId, branchId)) viewStatus(work.cutoutMessage); }
     finally { work.cutoutRunning = false; if (isSelected(runId, branchId)) renderEventWork(); }
@@ -2772,6 +3409,7 @@ $('cutout-view').addEventListener('click', () => {
   }).catch(error => { work.cutoutRunning = false; if (isSelected(runId, branchId)) viewStatus(error.message || 'Could not create the cutout'); });
 });
 $('model-button').addEventListener('click', () => {
+  if (historyHoverPreview) return;
   if (historyMode && selectedHistoryRecord) {
     if (historyMedia.modelUrl && modelApi) { viewStatus(''); setView('model', true); }
     else viewStatus('A saved 3D model is not attached to this history event.');
@@ -2783,7 +3421,7 @@ $('model-button').addEventListener('click', () => {
   else viewStatus('A 3D object is not available for this event. Fresh private 3D generation is not configured in this local preview.');
 });
 document.querySelector('[role="tablist"]').addEventListener('keydown', event => {
-  const tabs = [...document.querySelectorAll('[role="tab"]')].filter(tab => !tab.disabled);
+  const tabs = [...document.querySelectorAll('[role="tab"]')].filter(tab => !tab.disabled && !tab.hidden);
   const current = tabs.indexOf(event.target);
   if (current < 0) return;
   const next = event.key === 'ArrowRight' ? (current + 1) % tabs.length

@@ -5,7 +5,7 @@ import {
   ATLAS_CAMERA_DISTANCE, SURFACE_CAMERA_DISTANCE, allowEarthBodySelection, altitudeForZoom,
   atlasZoomState, createWorldRegistry, layoutAtlasWorlds, measuredFps,
   nearestDirectionalNeighbor, nearestProjectedAnchorHit, selectSurfaceLabels, surfaceFacingRotation, surfaceFacingOrientation, transformSurfaceNormal,
-  slerpUnitVector, selectSurfaceWorldLabelIds, worldRadiusForScreenPixels, cappedTextureSize,
+  slerpUnitVector, selectSurfaceWorldLabelIds, worldRadiusForScreenPixels, surfacePinScaleForPixels, cappedTextureSize,
   fitCameraDistance, fitCenteredCameraDistance, layoutOrbitNeighborhood, zoomForAltitude,
   fitSurfaceCameraDistance,
   surfacePanelCenterOffset,
@@ -216,6 +216,18 @@ test('44 CSS-pixel pin targets and arrow navigation use projected screen coordin
   assert.equal(allowEarthBodySelection(1), true);
 });
 
+test('Surface ring outer edges stay 14px, with selected rings at 18px across camera depths', () => {
+  const fov = 38, height = 900, outerRadius = 0.018;
+  for (const distance of [0.7, 1.3211845209686486, 5.4]) {
+    for (const [selected, expected] of [[false, 14], [true, 18]]) {
+      const scale = surfacePinScaleForPixels(distance, fov, height, outerRadius, selected);
+      const projectedDiameter = 2 * outerRadius * scale * height / (2 * distance * Math.tan(fov * Math.PI / 360));
+      assert.ok(Math.abs(projectedDiameter - expected) < 1e-10);
+    }
+  }
+  assert.equal(surfacePinScaleForPixels(1, fov, height, 0, false), 0);
+});
+
 test('44px target sphere includes projected boundary rays in 64 directions across Orbit and Atlas viewports', () => {
   const fov = 38;
   const zooms = [0.57, 0.7, 0.84, 0.92, 1];
@@ -368,12 +380,16 @@ test('negative-latitude/longitude surface markers remain on the unit Earth and c
 
 test('world hit candidates require visible anchors before applying the inflated pointer target', () => {
   const source = readFileSync(new URL('../web/atlas/scene.js', import.meta.url), 'utf8');
-  const hitWorldTarget = source.match(/function hitWorldTarget\(event\) \{([\s\S]*?)\n  \}\n  function hitWorld\(/)?.[1];
+  const hitWorldTarget = source.match(/function hitWorldTarget\(event, \{ activation = false \} = \{\}\) \{([\s\S]*?)\n  \}\n  function hitWorld\(/)?.[1];
   assert.ok(hitWorldTarget, 'the active world hit-test function is present');
   assert.match(hitWorldTarget, /if \(viewDepth <= 0 \|\| !targetVisiblePastEarth\(center, state\)\) continue;/,
     'hidden anchors are culled even when the 44px selection sphere reaches in front of Earth');
   assert.ok(hitWorldTarget.indexOf('targetVisiblePastEarth(center, state)') < hitWorldTarget.indexOf('raycaster.ray.intersectSphere'),
     'anchor visibility is checked before the inflated sphere can produce a hit');
+  assert.match(hitWorldTarget, /const pointerRay = raycaster\.ray\.clone\(\)/);
+  assert.ok(hitWorldTarget.indexOf('raycaster.ray.copy(pointerRay)') > hitWorldTarget.indexOf('targetVisiblePastEarth(center, state)')
+    && hitWorldTarget.indexOf('raycaster.ray.copy(pointerRay)') < hitWorldTarget.indexOf('raycaster.ray.intersectSphere'),
+  'visibility probes restore the real pointer ray instead of making every visible anchor a hit');
 });
 
 test('surface arc interpolation stays finite for coincident, near-coincident and antipodal nodes', () => {

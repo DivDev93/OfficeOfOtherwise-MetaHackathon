@@ -51,7 +51,7 @@ async function setup(t, options = {}) {
   return { url: await start(), start, stop, liveRunsDir, runsDir, get calls() { return calls; }, contexts };
 }
 
-test('continuation is durable, reuses a child after restart in replay-only mode, and restores assets/history', async t => {
+test('continuation is durable, reuses a saved child after restart without a mode lock, and restores assets/history', async t => {
   const f = await setup(t);
   const created = completion(await (await post(f.url)).text());
   assert.equal(created.reused, false);
@@ -62,7 +62,7 @@ test('continuation is durable, reuses a child after restart in replay-only mode,
   const parent = await (await fetch(`${f.url}/runs/root`)).json();
   assert.deepEqual(parent.continuation.children, [{ branchId: 'b1', runId: created.runId, status: 'complete' }]);
   await f.stop();
-  const url = await f.start({ env: { DEMO_ACCESS_CODE: 'local-code', DEMO_REPLAY_ONLY: 'true' } });
+  const url = await f.start({ env: { DEMO_ACCESS_CODE: 'local-code' } });
   const reused = completion(await (await post(url)).text());
   assert.equal(reused.reused, true);
   assert.equal(reused.runId, created.runId);
@@ -72,7 +72,7 @@ test('continuation is durable, reuses a child after restart in replay-only mode,
   const history = await (await fetch(`${url}/api/history`, { headers })).json();
   assert.equal(history.runs.length, 2);
   assert.equal(history.runs.find(item => item.id === created.runId).parentRunId, 'root');
-  assert.equal((await post(url, { runId: created.runId, branchId: 'b1' })).status, 503);
+  assert.equal(f.calls, 1, 'reusing the saved root continuation does not invoke generation');
 });
 
 test('second-generation context retains root divergence and ordered saved ancestry, with a bounded depth', async t => {

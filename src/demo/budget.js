@@ -35,9 +35,9 @@ export function configuredDailyCap({ env = process.env, spendCapUsd } = {}) {
   return daily;
 }
 
-export function configuredRateLimit({ env = process.env, isLoopback = false, replayOnly = true } = {}) {
+export function configuredRateLimit({ env = process.env, isLoopback = false, hasMetaKey = false } = {}) {
   const raw = env.DEMO_RATE_LIMIT;
-  const defaultLimit = isLoopback && !replayOnly ? 60 : 5;
+  const defaultLimit = isLoopback && hasMetaKey ? 60 : 5;
   const limit = raw === undefined || String(raw).trim() === '' ? defaultLimit : Number(raw);
   if (!Number.isSafeInteger(limit) || limit < 1) {
     throw new Error('Invalid DEMO_RATE_LIMIT: must be a positive integer');
@@ -67,16 +67,8 @@ export function validateStartupConfig({ env = process.env, outputRoot = 'out' } 
   }
   const apiKey = (env.META_API_KEY || env.MODEL_API_KEY || '').trim();
   const hasMetaKey = apiKey.length > 0;
-  const explicitReplayOnly = env.DEMO_REPLAY_ONLY === 'true';
-  const hasAccessCode = typeof env.DEMO_ACCESS_CODE === 'string' && env.DEMO_ACCESS_CODE.trim().length > 0;
-  if (!explicitReplayOnly && hasAccessCode && !hasMetaKey) {
-    throw new Error('META_API_KEY is required when DEMO_ACCESS_CODE is configured and DEMO_REPLAY_ONLY is not true');
-  }
-  const replayOnly = explicitReplayOnly || !hasMetaKey;
-  if (!replayOnly) {
-    fileLedger(resolveLedgerPath({ env, outputRoot })).initialize();
-  }
-  return { replayOnly, hasMetaKey, spendCapUsd, dailyCapUsd, enable3d };
+  if (hasMetaKey) fileLedger(resolveLedgerPath({ env, outputRoot })).initialize();
+  return { hasMetaKey, spendCapUsd, dailyCapUsd, enable3d };
 }
 
 export const taskSpendCap = configuredSpendCap;

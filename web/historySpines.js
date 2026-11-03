@@ -262,14 +262,18 @@ export function buildHistorySceneRecords(projection) {
       id, questionId, historyId:String(pinsById.get(id)?.historyId ?? node.historyId), parentId:null,
       lat:Number(node.event.lat ?? node.event.place?.lat), lon:Number(node.event.lon ?? node.event.place?.lon),
       year:node.year, historySpineNodeId:node.id, historySpineRole:role,
+      selected:String(projection?.selectedEventId || '') === id
+        && String(projection?.selectedEventHistoryId || projection?.historyId || '') === String(pinsById.get(id)?.historyId ?? node.historyId),
       visualKind:pinsById.has(id) ? 'history-event' : (role === 'sibling' ? 'history-spine-sibling' : 'history-spine-event'),
       highlighted:pinsById.has(id) ? pinsById.get(id).highlighted === true
         : String(node.event.id) === latestEventId && String(node.historyId) === String(projection.historyId),
-      historySurfacePin:pinsById.has(id), selectable:role !== 'sibling',
+      historySurfacePin:pinsById.has(id), selectable:true,
     });
   }
   const suggestions = (projection?.suggestions || []).map(item => ({
     ...item, id:String(item.id), questionId, parentId:null, historySurfacePin:true,
+    selected:String(projection?.selectedEventId || '') === String(item.id)
+      && String(projection?.selectedEventHistoryId || projection?.historyId || '') === String(item.historyId ?? projection.historyId),
     lat:Number(item.lat ?? item.place?.lat), lon:Number(item.lon ?? item.place?.lon), selectable:true,
   }));
   const siblingEarths = (projection?.siblingEarths || layout.siblingEarths || []).map(snapshot => {

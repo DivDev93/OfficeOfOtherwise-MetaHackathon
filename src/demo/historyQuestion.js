@@ -66,7 +66,7 @@ export function createHistoryQuestionAgent({ client, policy, model = 'muse-wonde
         const response = await client.respond({ model, label: 'history-question:frame', instructions: FRAME_INSTRUCTIONS,
           input: JSON.stringify({ question: cleanedQuestion, ...(parentContext !== undefined ? { parentContext } : {}),
             ...(divergenceYear !== undefined ? { divergenceYear } : {}), ...(place !== undefined ? { place } : {}) }),
-          maxOutputTokens: 700, signal });
+          reasoning: { effort: 'minimal' }, maxOutputTokens: 1000, signal });
         output = extractJson(response.text);
       } catch (error) {
         if (error instanceof SpendCapError) throw error;

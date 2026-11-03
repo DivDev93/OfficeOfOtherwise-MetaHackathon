@@ -41,14 +41,14 @@ async function startReplay(t, { packagedFallback = false, liveCollision = false,
       completion: { runId: 'beringia', branch: { status: 'ok', divergence: 'Metadata-only parent record.', branches: [] } },
     });
   }
-  const { server, replayOnly } = createConfiguredDemoServer({
+  const { server, hasMetaKey } = createConfiguredDemoServer({
     outputRoot,
     liveRunsDir,
     ...(liveCollision ? { importRunIds: [chain[0][0]] } : {}),
     ...(packageRootIsLiveRoot ? { packagedReplayRoot: liveRunsDir, importRunIds: ['beringia'] } : {}),
-    env: { DEMO_3D_ENABLED: 'false', DEMO_REPLAY_ONLY: 'true', DEMO_ACCESS_CODE: 'local-replay-code', HOST: '127.0.0.1', PORT: '0' },
+    env: { DEMO_3D_ENABLED: 'false', DEMO_ACCESS_CODE: 'local-replay-code', HOST: '127.0.0.1', PORT: '0' },
   });
-  assert.equal(replayOnly, true);
+  assert.equal(hasMetaKey, false);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => {
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
@@ -285,7 +285,8 @@ test('canonical path aliases cannot make the packaged root a writable target', a
 test('clean replay default serves the recorded Beringia path and saved alternative without generation', async t => {
   const { base } = await startReplay(t);
   const health = await (await fetch(`${base}/health`)).json();
-  assert.equal(health.replayOnly, true);
+  assert.equal(health.metaKeyConfigured, false);
+  assert.equal('replayOnly' in health, false);
 
   let manifest = await (await fetch(`${base}/runs/beringia`)).json();
   assert.equal(manifest.divergence, 'What if the Bering land bridge never flooded?');
@@ -338,7 +339,7 @@ test('clean replay default serves the recorded Beringia path and saved alternati
   assert.ok(cutoutBytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])));
 
   const blocked = await fetch(`${base}/api/run`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ divergence: 'What if?' }) });
-  assert.equal(blocked.status, 503);
+  assert.equal(blocked.status, 403, 'an unauthenticated caller still needs local browser authorization or an access code');
 });
 
 test('packaged manifest source and output hashes are well-formed', async () => {

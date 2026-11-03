@@ -3,7 +3,6 @@ FROM node:22-slim
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8080 \
-    DEMO_REPLAY_ONLY=true \
     DEMO_3D_ENABLED=false
 
 WORKDIR /app

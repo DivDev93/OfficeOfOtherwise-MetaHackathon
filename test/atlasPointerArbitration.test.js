@@ -8,7 +8,8 @@ const scene = readFileSync(new URL('../web/atlas/scene.js', import.meta.url), 'u
 test('regular Atlas hover and activation share nearest projected-anchor arbitration', () => {
   const resolver = scene.match(/function nearestPointerTarget\(event, pagedClusterHit, \{ activation = false \} = \{\}\) \{([\s\S]*?)\n  \}/)?.[1];
   assert.ok(resolver, 'the scene exposes one resolver for pointer targets');
-  assert.match(resolver, /hitWorldTarget\(event\)/);
+  assert.match(resolver, /hitWorldTarget\(event, \{ activation \}\)/,
+    'hover and activation share ordering while preserving distinct marker footprints');
   assert.match(resolver, /hitQuestionChip\(event\)/);
   assert.match(resolver, /hitPresentEarth\(event\)/);
   assert.match(resolver, /hitClusterTarget\(event, \{ excludePaged: true \}\)/);

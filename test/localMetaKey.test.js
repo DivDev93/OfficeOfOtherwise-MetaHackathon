@@ -31,22 +31,22 @@ function tinyWav() {
 }
 
 test('local judge key switches replay to live in memory and resets to boot config without exposing the key', async t => {
-  const { url } = await start(t, { env: { DEMO_REPLAY_ONLY: 'true' } });
+  const { url } = await start(t, { env: {} });
   const browserGet = { 'sec-fetch-site': 'same-origin' };
   const initial = await (await fetch(`${url}/health`, { headers: browserGet })).json();
   assert.equal(initial.setupAvailable, true, 'same-origin browser health GET may omit Origin');
-  assert.equal(initial.metaKeyConfigured, false); assert.equal(initial.metaKeyOverrideActive, false); assert.equal(initial.replayOnly, true);
+  assert.equal(initial.metaKeyConfigured, false); assert.equal(initial.metaKeyOverrideActive, false); assert.equal('replayOnly' in initial, false);
 
   const apiKey = 'fixture-local-key-only-in-test';
   const appliedResponse = await postJson(url, '/api/local-meta-key', { apiKey: `  ${apiKey}  ` });
   const appliedText = await appliedResponse.text();
   assert.equal(appliedResponse.status, 200); assert.doesNotMatch(appliedText, /fixture-local-key-only-in-test/);
-  assert.deepEqual(JSON.parse(appliedText), { setupAvailable: true, metaKeyConfigured: true, metaKeyOverrideActive: true, replayOnly: false, localReviewAccess: true, localReplayHistoryAccess: false });
+  assert.deepEqual(JSON.parse(appliedText), { setupAvailable: true, metaKeyConfigured: true, metaKeyOverrideActive: true, localReviewAccess: true, localHistoryAccess: true });
 
   const restoredResponse = await fetch(`${url}/api/local-meta-key`, { method: 'DELETE', headers: localHeaders(url) });
   const restoredText = await restoredResponse.text();
   assert.equal(restoredResponse.status, 200); assert.doesNotMatch(restoredText, /fixture-local-key-only-in-test/);
-  assert.deepEqual(JSON.parse(restoredText), { setupAvailable: true, metaKeyConfigured: false, metaKeyOverrideActive: false, replayOnly: true, localReviewAccess: false, localReplayHistoryAccess: true });
+  assert.deepEqual(JSON.parse(restoredText), { setupAvailable: true, metaKeyConfigured: false, metaKeyOverrideActive: false, localReviewAccess: false, localHistoryAccess: true });
 });
 
 test('all lazy Meta runner factories receive the active server-only key and perform no external calls in the fixture', async t => {

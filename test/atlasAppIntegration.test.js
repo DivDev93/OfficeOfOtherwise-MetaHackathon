@@ -41,8 +41,11 @@ test('Atlas controller is the only spatial entry surface and previews stay separ
   assert.match(app, /onQuestionEnter:\(\) => \{\}/);
   assert.match(app, /const intent = atlasController\?\.getAttachmentIntent/);
   assert.match(app, /await fetch\('\/api\/history\/questions', \{ method:'POST'/, 'explicit prompt submission creates a saved history through the history API');
-  assert.match(app, /mode:'history-event', questionId:activeHistory\.questionId, historyId:activeHistory\.historyId, eventId:selectedHistoryRecord\.id/,
-    'history event selection is the attachment context');
+  assert.match(app, /const committedHistoryEvent = activeHistory\.history\?\.events\?\.find\(item => item\.id === activeHistory\.selectedEventId\)/);
+  assert.match(app, /const attachedHistoryEvent = committedHistoryEvent \|\| activeHistory\.history\?\.events\?\.find\(item => item\.id === selectedSuggestion\?\.suggestionForEventId\)/,
+    'selected suggestions attach through their canonical anchor event');
+  assert.match(app, /mode:'history-event', questionId:activeHistory\.questionId, historyId:activeHistory\.historyId, eventId:attachedHistoryEvent\.id/,
+    'new history attachments use a canonical event identity');
   assert.doesNotMatch(app, /await streamRun\('\/api\/run'/, 'the legacy divergence runner is no longer the history entry route');
   assert.match(app, /setGraph\(graph\)/);
 });
@@ -99,7 +102,7 @@ test('Orbit compact panels expose a selected-world card and accessible controls'
   assert.match(css, /\.atlas-details-close\{[^}]*flex:0 0 44px;width:44px;min-width:44px;min-height:44px/,
     'the visible phone details close action has a 44px touch target');
   assert.match(app, /const cardHidden = !compact \|\| detailsOpen \|\| card\.hidden;[\s\S]*card\.inert = cardHidden;[\s\S]*card\.setAttribute\('aria-hidden', String\(cardHidden\)\)/, 'the hidden compact card leaves keyboard and accessibility navigation');
-  assert.match(app, /const detailSheetHidden = \(compact && !detailsOpen\) \|\| \(currentLevel === 'lift' && !reducedMotionLift\);\s*restoreAtlasFocusBeforeHiding\(detailSheet, detailSheetHidden\);\s*detailSheet\.inert = detailSheetHidden;[\s\S]*detailSheet\.setAttribute\('aria-hidden', String\(detailSheetHidden\)\)/, 'focus moves to the scene before a hidden story sheet becomes inert');
+  assert.match(app, /const detailSheetHidden = \(\(compact && !detailsOpen\) && !historyHoverPreview\) \|\| \(currentLevel === 'lift' && !reducedMotionLift\);\s*restoreAtlasFocusBeforeHiding\(detailSheet, detailSheetHidden\);\s*detailSheet\.inert = detailSheetHidden;[\s\S]*detailSheet\.setAttribute\('aria-hidden', String\(detailSheetHidden\)\)/, 'focus moves to the scene before a collapsed sheet becomes inert, except while its transient preview is expanded');
   assert.match(css, /\.atlas-world-card\{display:grid;position:absolute;[\s\S]*?opacity:0;visibility:hidden/, 'the card stays renderable so Orbit can fade it in');
   assert.match(css, /\.atlas-world-card\{display:grid;position:absolute;[\s\S]*?transition:opacity \.12s ease \.12s,transform \.16s ease \.08s,visibility 0s linear \.08s/, 'the card appears after the full details fade away');
   assert.match(css, /width:min\(320px,max\(270px,calc\(34vw - 12px\)\)\)/, 'the clipped rail content matches the rail minimum width and does not reflow at its boundary');
@@ -134,7 +137,11 @@ test('fading Lift panels become inert and focus returns to the scene before they
 });
 
 test('New exploration toggles a blank focused prompt without resetting the saved Atlas graph', () => {
-  assert.match(app, /function openNewExploration\(\) \{\s*const opening = !document\.body\.classList\.contains\('invitation-open'\);\s*if \(opening\) \$\('prompt'\)\.value = '';\s*setInvitationOpen\(opening\);\s*if \(opening\) \$\('prompt'\)\.focus\(\{ preventScroll:true \}\);\s*\}/);
+  const openDraft = app.slice(app.indexOf('function openNewExploration()'), app.indexOf('\nfunction setView('));
+  assert.match(openDraft, /\$\('prompt'\)\.value = ''/);
+  assert.match(openDraft, /setInvitationOpen\(opening\)/);
+  assert.match(openDraft, /\$\('prompt'\)\.focus\(\{ preventScroll:true \}\)/);
+  assert.doesNotMatch(openDraft, /\breset\(|\.setGraph\(/, 'opening a draft preserves the saved Atlas graph');
   assert.match(app, /\$\('show-invitation'\)\.addEventListener\('click', openNewExploration\)/);
   assert.match(app, /onEnter:\(world, detail\) => handleAtlasWorldEnter\(world, detail\)/);
   assert.match(app, /source === 'present-day-question'/);

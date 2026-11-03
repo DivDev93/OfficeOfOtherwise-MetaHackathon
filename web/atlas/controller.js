@@ -509,6 +509,8 @@ export async function createAtlasController({
         window: snapshot.window,
         suggestions: snapshot.suggestions,
         }),
+        selectedEventId: snapshot.selectedEventId == null ? '' : String(snapshot.selectedEventId),
+        selectedEventHistoryId: String(snapshot.selectedEventHistoryId ?? snapshot.historyId ?? snapshot.history?.id ?? ''),
         surfaceMode: snapshot.surfaceMode === 'present' ? 'present' : 'scenario',
         activeQuestionId,
         questions:spineQuestions,
@@ -598,7 +600,11 @@ export async function createAtlasController({
         const selected = [...historyProjection.pins, ...historyProjection.suggestions].find(item => item.id === String(id))
           || historyProjection.spineLayout?.nodes?.find(node => node.eventId === String(id))?.event;
         if (!selected) return false;
-        onHistoryEventSelect({ ...selected, historyId:selected.historyId || historyProjection.spineLayout?.nodes?.find(node => node.eventId === selected.id)?.historyId || historyProjection.historyId }, { questionId: historyProjection.questionId, historyId: selected.historyId || historyProjection.historyId,
+        const eventNode = historyProjection.spineLayout?.nodes?.find(node => node.eventId === String(selected.id));
+        const owner = questionRecords.get(String(historyProjection.activeQuestionId))?.histories?.find(history =>
+          history.events?.some(event => String(event.id) === String(selected.id)));
+        const selectedHistoryId = String(selected.historyId || owner?.id || eventNode?.historyId || historyProjection.historyId);
+        onHistoryEventSelect({ ...selected, historyId:selectedHistoryId }, { questionId: historyProjection.questionId, historyId: selectedHistoryId,
           date: historyProjection.asOfYear, visualKind: selected.visualKind, source: 'controller-explicit-entry', anchor: null });
         return true;
       }

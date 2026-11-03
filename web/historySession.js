@@ -35,10 +35,16 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     };
     for (const entry of previous?.suggestionWindows || []) add(entry);
     for (const entry of incoming?.suggestionWindows || []) add(entry);
-    for (const item of [...(previous?.suggestions || []), ...(incoming?.suggestions || [])]) if (item.window) {
+    const suggestionsByWindow = new Map();
+    for (const item of [...(previous?.suggestions || []), ...(incoming?.suggestions || [])]) if (item?.id != null && item.window) {
       const key = `${item.window.fromYear}:${item.window.toYear}`;
-      const existing = byWindow.get(key);
-      add({ window: item.window, status: 'ready', batches: 1, suggestionCount: (existing?.suggestionCount || 0) + 1 });
+      const ids = suggestionsByWindow.get(key) || new Set();
+      ids.add(String(item.id)); suggestionsByWindow.set(key, ids);
+    }
+    for (const [key, ids] of suggestionsByWindow) {
+      const separator = key.indexOf(':');
+      const window = { fromYear:Number(key.slice(0, separator)), toYear:Number(key.slice(separator + 1)) };
+      add({ window, status: 'ready', batches: 1, suggestionCount: ids.size });
     }
     if (activeWindow && activeStatus) {
       const key = `${activeWindow.fromYear}:${activeWindow.toYear}`;
@@ -253,9 +259,70 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     if (!Array.isArray(questions)) return;
     state.questions = questions; emit();
   }
+  function updateMediaReference(identity, field, reference) {
+    if (!context || identity?.questionId !== state.questionId || identity?.historyId !== state.historyId
+        || !['sceneRef','heroRef','cutoutRef','modelRef'].includes(field) || !reference
+        || (typeof reference !== 'object' && typeof reference !== 'string')) return false;
+    const mediaReference = typeof reference === 'string' ? { status:'complete', url:reference } : reference;
+    let found = false;
+    const updateRecords = records => (records || []).map(record => {
+      if (String(record.id) !== String(identity.eventId)) return record;
+      found = true; return { ...record, [field]:mediaReference };
+    });
+    const events = updateRecords(state.history?.events), suggestions = updateRecords(state.history?.suggestions);
+    if (!found) return false;
+    state.history = { ...state.history, events, suggestions };
+    state.histories = state.histories.map(item => item.id === state.history.id ? state.history : item);
+    if (state.question) {
+      state.question = { ...state.question, histories:state.histories };
+      state.questions = state.questions.map(item => item.id === state.question.id ? state.question : item);
+    }
+    state.suggestions = (state.history.suggestions || []).filter(item => item.window?.fromYear === state.window?.fromYear && item.window?.toYear === state.window?.toYear);
+    emit();
+    return true;
+  }
   function selectEvent(eventId) {
     if (!state.questionId || !state.historyId || !Number.isSafeInteger(state.date)) return;
     setContext({ questionId: state.questionId, historyId: state.historyId, eventId, date: state.date });
+  }
+  function selectRecord({ questionId = state.questionId, historyId = state.historyId, eventId, date = state.date, readOnly = true } = {}) {
+    if (!questionId || !historyId || !eventId || !Number.isSafeInteger(date)) return false;
+    const question = state.questions.find(item => String(item.id) === String(questionId))
+      || (String(state.questionId) === String(questionId) ? state.question : null);
+    const history = (question?.histories || state.histories || []).find(item => String(item.id) === String(historyId))
+      || (String(state.historyId) === String(historyId) ? state.history : null);
+    const isEvent = history?.events?.some(item => String(item.id) === String(eventId));
+    const isSuggestion = history?.suggestions?.some(item => String(item.id) === String(eventId))
+      || (String(state.historyId) === String(historyId) && state.suggestions.some(item => String(item.id) === String(eventId)));
+    if (!isEvent && !isSuggestion) return false;
+    setContext({ questionId, historyId, eventId, date, readOnly });
+    return true;
+  }
+  function selectSuggestion(suggestionId) { return selectRecord({ eventId:suggestionId }); }
+  function selectSuggestionWindow(window) {
+    const fromYear = Number(window?.fromYear), toYear = Number(window?.toYear);
+    if (!context || !state.history || !Number.isSafeInteger(fromYear) || !Number.isSafeInteger(toYear) || fromYear === 0 || toYear === 0 || fromYear > toYear) return false;
+    const exactWindow = { fromYear, toYear };
+    const entry = (state.history.suggestionWindows || []).find(item => item.window?.fromYear === fromYear && item.window?.toYear === toYear)
+      || ((state.history.suggestions || []).some(item => item.window?.fromYear === fromYear && item.window?.toYear === toYear) ? { window:exactWindow, status:'ready' } : null);
+    if (!entry) return false;
+    if (state.window?.fromYear === fromYear && state.window?.toYear === toYear) return false;
+    if (state.busyIds.size) return false;
+    let date = Math.trunc((fromYear + toYear) / 2);
+    if (date === 0) date = fromYear === 0 ? toYear : fromYear;
+    if (date < fromYear || date > toYear) date = fromYear;
+    if (date === 0) date = toYear;
+    generation++;
+    if (timer !== null) { clearTimer(timer); timer = null; }
+    context = { ...context, date, window:exactWindow, readOnly:true };
+    state.date = date; state.window = exactWindow; state.loading = false;
+    state.suggestions = (state.history.suggestions || []).filter(item => item.window?.fromYear === fromYear && item.window?.toYear === toYear);
+    state.windowStatus = entry.status || 'ready';
+    state.windowCached = ['ready','unknown','pending'].includes(state.windowStatus);
+    state.status = state.windowStatus === 'pending' ? 'Suggestions for this saved window are still being prepared.'
+      : state.suggestions.length ? '' : 'No saved suggestions in this window.';
+    emit();
+    return true;
   }
   function setDate(date) {
     if (!state.questionId || !state.historyId || !Number.isSafeInteger(date) || date === 0) return;
@@ -270,10 +337,13 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   readPreferences();
   return { getState: () => ({ ...state, suggestions: [...state.suggestions], busyIds: new Set(state.busyIds) }),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    setContext, selectHistory, selectQuestion, openQuestion, setQuestions, selectEvent, setDate, clear, hover, setAutoSuggest: persistPreference,
+     setContext, selectHistory, selectQuestion, openQuestion, setQuestions, updateMediaReference, selectEvent, selectSuggestion, selectRecord, selectSuggestionWindow, setDate, clear, hover, setAutoSuggest: persistPreference,
     suggest: () => requestSuggestions(false), more: () => requestSuggestions(true),
     weave: suggestionId => mutate('/api/history/weave', { suggestionId }, `suggestion:${suggestionId}`),
-    forkSuggestion: suggestionId => mutate('/api/history/fork', { eventId: state.suggestions.find(item => item.id === suggestionId)?.conflictsWith, suggestionId }, `suggestion:${suggestionId}`),
+    forkSuggestion: suggestionId => {
+      const suggestion = [...(state.history?.suggestions || []),...(state.suggestions || [])].find(item => String(item.id) === String(suggestionId));
+      return mutate('/api/history/fork', { eventId:suggestion?.conflictsWith, suggestionId }, `suggestion:${suggestionId}`);
+    },
     forkEvent: eventId => mutate('/api/history/fork', { eventId }, `event:${eventId}`),
     keep: (eventId, wovenEventId) => mutate('/api/history/keep', { eventId, wovenEventId }, `event:${eventId}:${wovenEventId || ''}`),
     regenerate: (eventId, wovenEventId) => mutate('/api/history/regenerate', { eventId, wovenEventId }, `event:${eventId}`),

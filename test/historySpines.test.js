@@ -114,6 +114,7 @@ test('scene records stay independent and preserve event media while separating a
   const source = question();
   const atlas = projectHistoryAtlas(source, { historyId:'h-fork', asOfYear:-2500,
     window:{ fromYear:-3000, toYear:-2001 }, suggestions:source.histories[1].suggestions });
+  atlas.selectedEventId = 'alt-1'; atlas.selectedEventHistoryId = 'h-fork';
   atlas.spineLayout = buildHistorySpineLayout({ questions:[source], activeQuestionId:source.id, activeHistoryId:'h-fork',
     asOfYear:-2500, window:{ fromYear:-3000, toYear:-2001 } });
   atlas.siblingEarths = atlas.spineLayout.siblingEarths;
@@ -127,6 +128,11 @@ test('scene records stay independent and preserve event media while separating a
   assert.ok(records.eventWorlds.some(item => item.historySurfacePin && item.id === 'shared-1'), 'only active as-of records become surface pins');
   assert.equal(records.eventWorlds.find(item => item.id === 'shared-1').historyId, 'h-fork',
     'materialized shared event retains active-history identity');
+  assert.equal(records.eventWorlds.find(item => item.id === 'alt-1').selected, true,
+    'selected event identity survives projection into the Atlas spine');
+  assert.equal(records.eventWorlds.find(item => item.id === 'main-future').selectable, true,
+    'sibling spine events remain explicitly selectable with their owner history');
+  assert.equal(records.eventWorlds.find(item => item.id === 'main-future').historyId, 'h-main');
   assert.ok(records.suggestionWorlds.every(item => item.historySurfacePin && item.historyId === 'h-fork'));
 });
 

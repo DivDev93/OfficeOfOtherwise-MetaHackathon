@@ -90,6 +90,31 @@ test('off preference exposes explicit Suggest and More is a separate metered req
   assert.equal(calls.length, 2); assert.equal(calls[0].more, undefined); assert.equal(calls[1].more, true);
 });
 
+test('media reconciliation updates the active suggestion without changing its date or selection and dedupes window counts', async () => {
+  const window = { fromYear:1,toYear:1000 };
+  const items = [suggestion('s1',window),suggestion('s2',window),suggestion('s3',window)];
+  const saved = { ...history('h',items), suggestionWindows:[{window,status:'ready',batches:1,suggestionCount:3}] };
+  const question = {id:'q',title:'A question',histories:[saved]};
+  const session = createHistorySession({ fetchImpl:async (url,init={}) => {
+    if (url === '/api/history/preferences') return response({autoSuggest:false});
+    if (url.startsWith('/api/histories')) return response({questions:[question]});
+    if (url === '/api/history/suggest') return response({question,history:saved,suggestions:items});
+    throw new Error(url);
+  }});
+  session.setContext({questionId:'q',historyId:'h',eventId:'s2',date:250}); await tick();
+  await session.more();
+  const before = session.getState();
+  const updated = session.updateMediaReference({questionId:'q',historyId:'h',eventId:'s2'},'sceneRef',{status:'complete',url:'/history-media/'+'a'.repeat(64)+'.png'});
+  const state = session.getState();
+  assert.equal(updated,true);
+  assert.equal(state.date,before.date);
+  assert.equal(state.selectedEventId,before.selectedEventId);
+  assert.equal(state.suggestions.find(item=>item.id==='s2').sceneRef.url,'/history-media/'+'a'.repeat(64)+'.png');
+  assert.equal(state.history.suggestions.find(item=>item.id==='s2').sceneRef.url,'/history-media/'+'a'.repeat(64)+'.png');
+  assert.equal(state.questions[0].histories[0].suggestions.find(item=>item.id==='s2').sceneRef.url,'/history-media/'+'a'.repeat(64)+'.png');
+  assert.equal(state.history.suggestionWindows[0].suggestionCount,3,'previous and incoming copies of the same three suggestions count once');
+});
+
 test('stale response from a prior history is ignored and session cap pauses auto-suggest', async () => {
   const clock = timers(); let releaseOld;
   const session = createHistorySession({ setTimer: clock.setTimer, clearTimer: clock.clearTimer, fetchImpl: async (url, init = {}) => {
@@ -185,6 +210,26 @@ test('last-suggestion weave preserves its cached window and never auto-generates
   assert.equal(clock.size,0);
   session.setContext({ questionId:'q',historyId:'h',eventId:'only-one',date:1978 });
   assert.deepEqual(session.getState().window,cachedWindow); assert.equal(clock.size,0);
+});
+
+test('forking a conflicting suggestion outside the current window uses its canonical conflict target', async () => {
+  const clock=timers(), currentWindow={fromYear:1503,toYear:2503}, otherWindow={fromYear:2504,toYear:3504};
+  const current=suggestion('current-window-suggestion',currentWindow);
+  const conflict={...suggestion('inactive-window-conflict',otherWindow),verdict:'conflicts',conflictsWith:'event-1'};
+  const original={...history('h',[current,conflict]),suggestionWindows:[
+    {window:currentWindow,status:'ready',suggestionCount:1},{window:otherWindow,status:'ready',suggestionCount:1},
+  ]};
+  const calls=[];
+  const session=createHistorySession({setTimer:clock.setTimer,clearTimer:clock.clearTimer,fetchImpl:async(url,init={})=>{
+    if(url==='/api/history/preferences')return response({autoSuggest:false});
+    if(url.startsWith('/api/histories'))return response({questions:[{id:'q',histories:[original]}]});
+    if(url==='/api/history/fork'){calls.push([url,JSON.parse(init.body)]);return response({history:{id:'h-fork',events:original.events}});}
+    throw new Error(url);
+  }});
+  session.setContext({questionId:'q',historyId:'h',eventId:'event-1',date:1978});await tick();
+  assert.deepEqual(session.getState().suggestions.map(item=>item.id),[current.id],'only the active window is in the request scope');
+  await session.forkSuggestion(conflict.id);
+  assert.deepEqual(calls,[['/api/history/fork',{questionId:'q',historyId:'h',eventId:'event-1',suggestionId:conflict.id}]],'the inactive gallery card still sends its canonical conflict target');
 });
 
 test('Keep and Regenerate retain the selected cached window; a fork selects its new history and may auto-suggest', async () => {

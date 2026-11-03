@@ -30,10 +30,24 @@ export function historyZoomPresentation(value, orbitEnabled = false) {
     return { rawZoom:zoom, opacity:1, state:{ ...raw, surface:1 - raw.lift, atlas:progress,
       orbit:raw.lift * (1 - progress), earthScale:1 - 0.66 * raw.lift, earthX:-1.9 * raw.lift } };
   }
-  const amount = Math.min(1, Math.max(0, (zoom - 0.22) / 0.78));
+  const amount = Math.min(1, Math.max(0, (zoom - 0.22) / (0.68 - 0.22)));
   const progress = amount * amount * (3 - 2 * amount);
   return { rawZoom:zoom, opacity:1, state:{ ...raw, surface:1 - progress, lift:progress, orbit:0, atlas:progress,
     earthScale:1 - 0.66 * progress, earthX:-1.9 * progress } };
+}
+
+/** Keep the no-Orbit direct transition in Surface until Atlas is actually unfolded. */
+export function historyZoomStage(value, orbitEnabled = false) {
+  const zoom = Math.min(1, Math.max(0, Number(value) || 0));
+  if (!orbitEnabled) return zoom < 0.68 ? 'surface' : 'atlas';
+  return zoom < 0.22 ? 'surface' : zoom < 0.57 ? 'lift' : zoom < 0.84 ? 'orbit' : 'atlas';
+}
+
+/** History labels follow the visible representation at Surface, Orbit and Atlas. */
+export function shouldLabelHistoryWorld(world = {}, state = {}) {
+  if ((Number(state.atlas) || 0) > 0.1) return Boolean(world.historySpineNodeId || world.visualKind === 'history-suggestion');
+  if ((Number(state.orbit) || 0) > 0.15) return world.visualKind === 'history-sibling';
+  return world.historySurfacePin === true;
 }
 
 /** Match the history session's year window when a caller has not supplied its cached window. */

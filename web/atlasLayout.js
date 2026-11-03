@@ -156,6 +156,14 @@ export function worldRadiusForScreenPixels(distance, fovDegrees, viewportHeight,
   return visibleHeight * size / (2 * height);
 }
 
+/** Instance scale for a tangent Surface ring with a stable CSS-pixel outer diameter. */
+export function surfacePinScaleForPixels(distance, fovDegrees, viewportHeight, outerRadius, selected = false) {
+  const radius = Number(outerRadius);
+  if (!Number.isFinite(radius) || radius <= 0) return 0;
+  const diameter = selected ? 18 : 14;
+  return worldRadiusForScreenPixels(distance, fovDegrees, viewportHeight, diameter) / radius;
+}
+
 /** Resolve overlapping projected targets by anchor distance, then depth and stable ID. */
 export function nearestProjectedAnchorHit(hits = [], { excludeUnselectableClusters = false } = {}) {
   let best = null;

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createConfiguredDemoServer } from '../server/index.js';
 
-async function start(t, { localReplayHistoryAccess, localReviewAccess, host = '127.0.0.1' } = {}) {
+async function start(t, { localHistoryAccess, localReviewAccess, host = '127.0.0.1' } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'office-local-history-replay-'));
   const runsDir = join(root, 'runs'), runDir = join(runsDir, 'replay-root');
   await mkdir(runDir, { recursive: true });
@@ -16,9 +16,9 @@ async function start(t, { localReplayHistoryAccess, localReviewAccess, host = '1
       causeEventId: 'replay-root', geography: { version: 1, changes: [] } },
   ], hero: { branchId: 'visited' } }));
   const instance = createConfiguredDemoServer({ outputRoot: join(root, 'out'), runsDir, host,
-    ...(localReplayHistoryAccess === undefined ? {} : { localReplayHistoryAccess }),
+    ...(localHistoryAccess === undefined ? {} : { localHistoryAccess }),
     ...(localReviewAccess === undefined ? {} : { localReviewAccess }),
-    env: { PORT: '0', DEMO_REPLAY_ONLY: 'true' },
+    env: { PORT: '0' },
   });
   await new Promise(resolve => instance.server.listen(instance.port, instance.host, resolve));
   t.after(async () => {
@@ -26,18 +26,20 @@ async function start(t, { localReplayHistoryAccess, localReviewAccess, host = '1
     await rm(root, { recursive: true, force: true });
   });
   const url = `http://${host === '0.0.0.0' ? '127.0.0.1' : instance.host}:${instance.server.address().port}`;
-  const health = await fetch(`${url}/health`);
+  const health = await fetch(`${url}/health`, { headers: { origin: url, 'sec-fetch-site': 'same-origin' } });
   return { url, instance, cookie: health.headers.get('set-cookie')?.split(';', 1)[0] };
 }
 
-test('keyless loopback replay permits same-origin saved history reads and cached edits only', async t => {
+test('keyless loopback permits same-origin saved history reads and cached edits only', async t => {
   const { url, instance, cookie } = await start(t);
-  assert.equal(instance.replayOnly, true);
-  assert.equal(instance.localReplayHistoryAccess, true);
+  assert.equal(instance.hasMetaKey, false);
+  assert.equal(instance.localHistoryAccess, true);
   assert.equal(instance.localReviewAccess, false, 'the broader local preview capability stays off');
   const headers = { cookie, origin: url, 'sec-fetch-site': 'same-origin' };
   const health = await (await fetch(`${url}/health`, { headers })).json();
-  assert.equal(health.localReplayHistoryAccess, true, 'the narrow history capability has its own UI health flag');
+  assert.equal(health.localHistoryAccess, true, 'the narrow history capability has its own UI health flag');
+  assert.equal(health.metaKeyConfigured, false);
+  assert.equal('replayOnly' in health, false);
   assert.equal(health.localReviewAccess, false, 'the health flag does not turn on live or voice access');
   const read = await fetch(`${url}/api/histories`, { headers });
   assert.equal(read.status, 200);
@@ -59,13 +61,13 @@ test('keyless loopback replay permits same-origin saved history reads and cached
 
 test('explicit access settings can disable keyless replay history access', async t => {
   const disabled = await start(t, { localReviewAccess: false });
-  assert.equal(disabled.instance.localReplayHistoryAccess, false);
+  assert.equal(disabled.instance.localHistoryAccess, false);
   assert.equal((await fetch(`${disabled.url}/api/histories`, { headers: {
     cookie: disabled.cookie, origin: disabled.url, 'sec-fetch-site': 'same-origin',
   } })).status, 403);
 
-  const explicitlyDisabled = await start(t, { localReplayHistoryAccess: false });
-  assert.equal(explicitlyDisabled.instance.localReplayHistoryAccess, false);
+  const explicitlyDisabled = await start(t, { localHistoryAccess: false });
+  assert.equal(explicitlyDisabled.instance.localHistoryAccess, false);
   assert.equal((await fetch(`${explicitlyDisabled.url}/api/histories`, { headers: {
     cookie: explicitlyDisabled.cookie, origin: explicitlyDisabled.url, 'sec-fetch-site': 'same-origin',
   } })).status, 403);
@@ -73,7 +75,7 @@ test('explicit access settings can disable keyless replay history access', async
 
 test('keyless replay history access is never enabled on a non-loopback bind', async t => {
   const publicBind = await start(t, { host: '0.0.0.0' });
-  assert.equal(publicBind.instance.localReplayHistoryAccess, false);
+  assert.equal(publicBind.instance.localHistoryAccess, false);
   assert.equal((await fetch(`${publicBind.url}/api/histories`, { headers: {
     cookie: publicBind.cookie, origin: publicBind.url, 'sec-fetch-site': 'same-origin',
   } })).status, 403);

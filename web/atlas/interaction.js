@@ -4,6 +4,12 @@ const WHEEL_ZOOM_PER_PIXEL = 0.08;
 const WHEEL_STEP_LIMIT = 16;
 const ZOOM_INTERFACE_SELECTOR = '[data-atlas-zoom-ignore], #atlas-toolbar, #atlas-other-questions, #exploration-rail, #chronicle, .geography-panel, .hero-panel, .atlas-view-options, .atlas-screen-label, input, select, textarea, button, [role="slider"], [role="menu"], [role="dialog"]';
 
+/** Hover follows the rendered marker; only explicit activation gets a larger target. */
+export function atlasMarkerHitRadius(renderedRadius, activationRadius, activation = false) {
+  const visible = Math.max(0, Number(renderedRadius) || 0);
+  return activation ? Math.max(visible, Number(activationRadius) || 0) : visible;
+}
+
 /** Prevent canvas zoom gestures from consuming pointer/wheel input over page controls. */
 export function atlasZoomGestureBlocked(event, canvas, documentObject) {
   const matchesControl = target => target && target !== canvas

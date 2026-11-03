@@ -12,7 +12,7 @@ async function start(t, { localReviewAccess = true, bind = '127.0.0.1' } = {}) {
   await Promise.all([mkdir(runsDir), mkdir(liveRunsDir), mkdir(webDir)]);
   const runner = async ({ runId }) => ({ runId, branch: { status: 'ok', branches: [], hero: null } });
   runner.enforcesDailyCap = true;
-  const server = createDemoServer({ runsDir, liveRunsDir, webDir, env: { DEMO_ACCESS_CODE: 'secret-code', DEMO_VOICE_ENABLED: 'true' }, runPipeline: runner, localReviewAccess });
+  const server = createDemoServer({ runsDir, liveRunsDir, webDir, env: { META_API_KEY: 'fixture-local-review-key', DEMO_ACCESS_CODE: 'secret-code', DEMO_VOICE_ENABLED: 'true' }, runPipeline: runner, localReviewAccess });
   await new Promise(resolve => server.listen(0, bind, resolve));
   t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(dir, { recursive: true, force: true }); });
   return `http://127.0.0.1:${server.address().port}`;

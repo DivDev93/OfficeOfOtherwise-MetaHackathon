@@ -49,7 +49,7 @@ test('event cutouts use the selected event image, persist by event identity, and
   assert.deepEqual(Buffer.from(await (await fetch(f.url + generated.url)).arrayBuffer()), png);
   assert.equal((await (await postCutout(f.url, 'hero')).json()).reused, true);
   assert.equal(f.cutoutCalls(), 1);
-  await f.stop(); const url = await f.start({ DEMO_ACCESS_CODE: 'code', DEMO_REPLAY_ONLY: 'true' });
+  await f.stop(); const url = await f.start({ DEMO_ACCESS_CODE: 'code' });
   assert.equal((await (await getCutout(url, 'hero')).json()).url, generated.url);
   assert.equal((await (await postCutout(url, 'hero')).json()).reused, true);
   assert.equal(f.cutoutCalls(), 1);
@@ -96,7 +96,7 @@ test('event scenes use exact event, cache durably, and reuse the hero', async t 
   assert.match(f.prompts[0], /A farm/); assert.doesNotMatch(f.prompts[0], /A lake/);
   assert.deepEqual(Buffer.from(await (await fetch(f.url + generated.url)).arrayBuffer()), png);
   assert.equal((await (await post(f.url)).json()).reused, true); assert.equal(f.calls(), 1);
-  await f.stop(); const url = await f.start({ DEMO_ACCESS_CODE: 'code', DEMO_REPLAY_ONLY: 'true' });
+  await f.stop(); const url = await f.start({ DEMO_ACCESS_CODE: 'code' });
   assert.equal((await (await get(url)).json()).url, generated.url);
   assert.equal((await (await post(url)).json()).reused, true); assert.equal(f.calls(), 1);
   assert.equal((await post(url, 'none')).status, 404);
@@ -130,10 +130,12 @@ test('scene activity does not make a stale cutout reservation appear in progress
 
 test('three independent live jobs can overlap while the shared cap rejects a fourth and releases slots', async t => {
   let release; const pending = new Promise(resolve => { release = resolve; });
+  const rootRunner = async () => { throw new Error('the root job should be rejected by the active-job limit'); };
+  rootRunner.enforcesDailyCap = true;
   const f = await setup(t, async () => {
     if (f.calls() <= 2) await pending;
     return { buffer: png, mime: 'image/png' };
-  }, async () => { await pending; return { buffer: png, mime: 'image/png' }; }, { maxConcurrentJobs: 3 });
+  }, async () => { await pending; return { buffer: png, mime: 'image/png' }; }, { maxConcurrentJobs: 3, runPipeline: rootRunner });
   const firstScene = post(f.url, 'other');
   const secondScene = post(f.url, 'third');
   while (f.calls() < 2) await new Promise(resolve => setTimeout(resolve, 5));

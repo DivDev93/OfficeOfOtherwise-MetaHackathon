@@ -35,44 +35,50 @@ test('configuredSpendCap uses META_SPEND_CAP_USD directly, initializes a missing
   }
 });
 
-test('configuredRateLimit documents loopback live and other-mode defaults and accepts an explicit positive integer', () => {
-  assert.equal(configuredRateLimit({ env: {}, isLoopback: true, replayOnly: false }), 60);
-  assert.equal(configuredRateLimit({ env: {}, isLoopback: true, replayOnly: true }), 5);
-  assert.equal(configuredRateLimit({ env: {}, isLoopback: false, replayOnly: false }), 5);
-  assert.equal(configuredRateLimit({ env: { DEMO_RATE_LIMIT: '25' }, isLoopback: false, replayOnly: true }), 25);
-  assert.equal(configuredRateLimit({ env: { DEMO_RATE_LIMIT: '' }, isLoopback: true, replayOnly: false }), 60);
+test('configuredRateLimit uses key availability for loopback defaults and accepts an explicit positive integer', () => {
+  assert.equal(configuredRateLimit({ env: {}, isLoopback: true, hasMetaKey: true }), 60);
+  assert.equal(configuredRateLimit({ env: {}, isLoopback: true, hasMetaKey: false }), 5);
+  assert.equal(configuredRateLimit({ env: {}, isLoopback: false, hasMetaKey: true }), 5);
+  assert.equal(configuredRateLimit({ env: { DEMO_RATE_LIMIT: '25' }, isLoopback: false, hasMetaKey: false }), 25);
+  assert.equal(configuredRateLimit({ env: { DEMO_RATE_LIMIT: '' }, isLoopback: true, hasMetaKey: true }), 60);
   for (const invalid of ['0', '-1', '2.5', 'Infinity', 'not-a-number']) {
     assert.throws(() => configuredRateLimit({ env: { DEMO_RATE_LIMIT: invalid } }), /Invalid DEMO_RATE_LIMIT/);
   }
 });
 
-test('validateStartupConfig and createConfiguredDemoServer support replay-only without a key and loopback live mode with META_API_KEY', async t => {
+test('validateStartupConfig and createConfiguredDemoServer support saved histories without a key and local generation with META_API_KEY', async t => {
   const root = mkdtempSync(join(tmpdir(), 'demo-startup-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
 
-  const replayConfig = validateStartupConfig({ outputRoot: root, env: {} });
-  assert.equal(replayConfig.replayOnly, true);
-  assert.equal(replayConfig.hasMetaKey, false);
+  const savedConfig = validateStartupConfig({ outputRoot: root, env: {} });
+  assert.equal(savedConfig.hasMetaKey, false);
   assert.throws(() => createConfiguredDemoServer({ outputRoot: root, env: { DEMO_RATE_LIMIT: 'invalid' } }), /Invalid DEMO_RATE_LIMIT/);
 
-  const replayInstance = createConfiguredDemoServer({ outputRoot: root, env: { PORT: '0' } });
-  await new Promise(resolve => replayInstance.server.listen(0, replayInstance.host, resolve));
-  t.after(() => new Promise(resolve => replayInstance.server.close(resolve)));
-  const replayUrl = `http://${replayInstance.host}:${replayInstance.server.address().port}`;
-  assert.deepEqual(await (await fetch(`${replayUrl}/health`)).json(), { status: 'ok', setupAvailable: false, metaKeyConfigured: false, metaKeyOverrideActive: false, replayOnly: true, localReviewAccess: false, localReplayHistoryAccess: false, voiceEnabled: false, expansionLimit:20, expansionUsed:0 });
+  const savedInstance = createConfiguredDemoServer({ outputRoot: root, env: { PORT: '0' } });
+  await new Promise(resolve => savedInstance.server.listen(0, savedInstance.host, resolve));
+  t.after(() => new Promise(resolve => savedInstance.server.close(resolve)));
+  const savedUrl = `http://${savedInstance.host}:${savedInstance.server.address().port}`;
+  const savedHealth = await (await fetch(`${savedUrl}/health`, { headers: { origin: savedUrl, 'sec-fetch-site': 'same-origin' } })).json();
+  assert.equal(savedHealth.setupAvailable, true);
+  assert.equal(savedHealth.metaKeyConfigured, false);
+  assert.equal(savedHealth.localReviewAccess, false);
+  assert.equal(savedHealth.localHistoryAccess, true, 'same-origin keyless browser sessions can access saved history');
+  assert.equal('replayOnly' in savedHealth, false);
 
   const liveInstance = createConfiguredDemoServer({
     outputRoot: root,
-    env: { META_API_KEY: 'fixture-key', META_SPEND_CAP_USD: '143.30', PORT: '0' },
+    env: { META_API_KEY: 'fixture-key', META_SPEND_CAP_USD: '143.30', DEMO_REPLAY_ONLY: 'true', PORT: '0' },
   });
   await new Promise(resolve => liveInstance.server.listen(0, liveInstance.host, resolve));
   t.after(() => new Promise(resolve => liveInstance.server.close(resolve)));
   const liveUrl = `http://${liveInstance.host}:${liveInstance.server.address().port}`;
   const health = await (await fetch(`${liveUrl}/health`, { headers: { origin: liveUrl, 'sec-fetch-site': 'same-origin' } })).json();
-  assert.deepEqual(health, { status: 'ok', setupAvailable: true, metaKeyConfigured: true, metaKeyOverrideActive: false, replayOnly: false, voiceEnabled: true, localReviewAccess: true, localReplayHistoryAccess:false, expansionLimit:20, expansionUsed:0 });
+  assert.deepEqual(health, { status: 'ok', setupAvailable: true, metaKeyConfigured: true, metaKeyOverrideActive: false, voiceEnabled: true, localReviewAccess: true, localHistoryAccess: false, expansionLimit:20, expansionUsed:0 });
   assert.doesNotMatch(JSON.stringify(health), /fixture-key/);
 
-  assert.throws(() => validateStartupConfig({ outputRoot: root, env: { DEMO_ACCESS_CODE: 'code-only', DEMO_REPLAY_ONLY: 'false' } }), /META_API_KEY is required/);
+  const legacyFlag = validateStartupConfig({ outputRoot: root, env: { DEMO_REPLAY_ONLY: 'true', META_API_KEY: 'k' } });
+  assert.equal(legacyFlag.hasMetaKey, true, 'a stale legacy environment flag cannot disable a configured key');
+  assert.equal('replayOnly' in legacyFlag, false);
   assert.throws(() => validateStartupConfig({ outputRoot: root, env: { META_API_KEY: 'k', META_API_BASE_URL: 'http://example.com' } }), /Invalid META_API_BASE_URL/);
   assert.throws(() => validateStartupConfig({ outputRoot: root, env: { META_API_KEY: 'k', DEMO_3D_ENABLED: 'true' } }), /Confirmed Chronos TRELLIS/);
 });

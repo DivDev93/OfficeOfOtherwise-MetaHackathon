@@ -12,7 +12,7 @@ import { createHistoryStore } from '../src/demo/historyStore.js';
 import { createHistoryAgent } from '../src/agents/historyAgent.js';
 import { createHistoryService } from '../src/demo/historyService.js';
 import { createHistoryQuestionAgent, HistoryQuestionError, dateWindowFor } from '../src/demo/historyQuestion.js';
-import { createHistoryMediaStore, historyEventRevision } from '../src/demo/historyMediaStore.js';
+import { createHistoryMediaStore, historyEventRevision, legacyHistoryEventRevision } from '../src/demo/historyMediaStore.js';
 import { createMetaClient } from '../src/lib/metaClient.js';
 import { fileLedger } from '../src/lib/spendLedger.js';
 import { composeGeography } from '../web/historyModel.js';
@@ -31,6 +31,10 @@ import { selectFreshEvidence } from '../src/evidence/fresh.js';
 const assets = new Set(['branch.json', 'trace.json', 'hero.png', 'mask.png', 'cutout.png', 'model.glb', 'model.meshopt.glb']);
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.glb': 'model/gltf-binary', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
 const safeId = s => typeof s === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(s);
+// History identities are opaque store keys, not run-directory names. Migrated
+// events contain ':' and migrated history IDs contain encoded path components.
+const validHistoryId = s => typeof s === 'string' && s.length > 0 && s.length <= 240
+  && s === s.trim() && !/[\u0000-\u001f\u007f]/.test(s);
 const expansionCookieId = req => /(?:^|;\s*)otherwise_session=([a-f0-9-]{36})(?:;|$)/i.exec(req.headers.cookie ?? '')?.[1] ?? null;
 const TWO_D_ONLY_REASON = 'SAM 3.1 returned no mask; cutout and 3D model were not generated';
 
@@ -66,27 +70,25 @@ function canonicalJson(value) {
   return value;
 }
 
-export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), evidencePath = resolve('demo/evidence/v1.json'), runPipeline, renderEventScene, segmentEventCutout, renderHistoryScene, segmentHistoryCutout, historyQuestionGenerator, transcribeAudio, runnerFactories = {}, historyService: injectedHistoryService, voiceTimeoutMs = 45_000, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now, importRunIds = [], maxContinuationDepth = MAX_CONTINUATION_DEPTH, maxConcurrentJobs = Number(env.DEMO_MAX_CONCURRENT_JOBS ?? 3), localReviewAccess = false, localReplayHistoryAccess = false, packagedReplayRoot = resolve(fileURLToPath(new URL('../demo/replay-history/', import.meta.url))) } = {}) {
+export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir = resolve('out'), webDir = resolve('web'), evidencePath = resolve('demo/evidence/v1.json'), runPipeline, renderEventScene, segmentEventCutout, renderHistoryScene, segmentHistoryCutout, historyQuestionGenerator, transcribeAudio, runnerFactories = {}, historyService: injectedHistoryService, voiceTimeoutMs = 45_000, env = process.env, rateLimit = 5, rateWindowMs = 60_000, now = Date.now, importRunIds = [], maxContinuationDepth = MAX_CONTINUATION_DEPTH, maxConcurrentJobs = Number(env.DEMO_MAX_CONCURRENT_JOBS ?? 3), localReviewAccess = false, localHistoryAccess = false, packagedReplayRoot = resolve(fileURLToPath(new URL('../demo/replay-history/', import.meta.url))) } = {}) {
   if (!Number.isInteger(maxConcurrentJobs) || maxConcurrentJobs < 1 || maxConcurrentJobs > 8) throw new RangeError('maxConcurrentJobs must be an integer from 1 to 8');
   // Keep browser-entered Meta credentials in this server instance only. Never
   // mutate process.env or the caller's configuration object.
   const runtimeEnv = { ...env };
   const bootMetaApiKey = runtimeEnv.META_API_KEY;
   const bootModelApiKey = runtimeEnv.MODEL_API_KEY;
-  const bootReplayOnly = runtimeEnv.DEMO_REPLAY_ONLY;
   const bootVoiceEnabled = runtimeEnv.DEMO_VOICE_ENABLED;
   const bootLocalReviewAccess = localReviewAccess;
-  const bootLocalReplayHistoryAccess = localReplayHistoryAccess;
+  const bootLocalHistoryAccess = localHistoryAccess;
   let localMetaKeyOverrideActive = false;
   let localReviewAccessEnabled = localReviewAccess;
-  let localReplayHistoryAccessEnabled = localReplayHistoryAccess;
+  let localHistoryAccessEnabled = localHistoryAccess;
   let activeJobs = 0;
   const acquireJob = () => { if (activeJobs >= maxConcurrentJobs) return false; activeJobs++; return true; };
   const releaseJob = () => { activeJobs = Math.max(0, activeJobs - 1); };
   const activeContinuationAttempts = new Set();
   let voiceBusy = false, voiceRequests = [];
   const hasMetaKey = () => ['META_API_KEY', 'MODEL_API_KEY'].some(name => typeof runtimeEnv[name] === 'string' && !!runtimeEnv[name].trim());
-  const replayOnly = () => runtimeEnv.DEMO_REPLAY_ONLY === 'true' || !hasMetaKey();
   const voiceEnabled = () => runtimeEnv.DEMO_VOICE_ENABLED === 'true'
     && (localReviewAccessEnabled || (typeof runtimeEnv.DEMO_ACCESS_CODE === 'string' && runtimeEnv.DEMO_ACCESS_CODE.length > 0));
   const requests = new Map();
@@ -123,6 +125,36 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
   const store = createContinuationStore(liveRoot, now);
   const historyStore = createHistoryStore(liveRoot, now);
   const historyMedia = createHistoryMediaStore(liveRoot, { now });
+  function cachedHistorySuggestion(questionId, history, suggestionId) {
+    const suggestion = history.suggestions?.find(item => item.id === suggestionId);
+    const window = suggestion?.window;
+    if (!suggestion || !Number.isSafeInteger(window?.fromYear) || !Number.isSafeInteger(window?.toYear)) return null;
+    const batch = historyStore.getWindow({ questionId, historyId: history.id, window });
+    const cached = batch.suggestions?.find(item => item.id === suggestionId);
+    return batch.status === 'ready' && cached && historyEventRevision(cached) === historyEventRevision(suggestion) ? suggestion : null;
+  }
+  function mediaSubjectWithReferences(questionId, history, subject, allowLegacyRevision = false) {
+    const references = {};
+    const revision = historyEventRevision(subject);
+    for (const kind of ['scene', 'cutout']) {
+      const identity = { questionId, historyId: history.id, eventId: subject.id, revision, kind };
+      const record = historyMedia.get(identity) ?? (allowLegacyRevision
+        ? historyMedia.get({ ...identity, revision: legacyHistoryEventRevision(subject) }) : null);
+      if (!record) continue;
+      const field = kind === 'scene' ? 'sceneRef' : 'cutoutRef';
+      if (record.status === 'complete') references[field] = { status: 'complete', url: `/history-media/${record.key}.png` };
+      else if (subject[field]?.status !== 'complete') references[field] = { status: record.status,
+        ...(record.revision === revision && ['empty', 'unknown'].includes(record.status)
+          ? { retryAvailable: true, retryOf: record.key } : {}) };
+    }
+    return Object.keys(references).length ? { ...subject, ...references } : subject;
+  }
+  function historyWithMediaReferences(question) {
+    return { ...question, histories: question.histories.map(history => ({ ...history,
+      events: history.events.map(event => mediaSubjectWithReferences(question.id, history, event, true)),
+      ...(history.suggestions ? { suggestions: history.suggestions.map(suggestion => mediaSubjectWithReferences(question.id, history, suggestion)) } : {}),
+    })) };
+  }
   let activeHistoryService = injectedHistoryService ?? null;
   let historyServicePromise = null;
   let historyServiceLiveMode = injectedHistoryService ? null : null;
@@ -269,10 +301,10 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       && (req.method === 'GET' || req.method === 'HEAD' ? (!browserOrigin || browserOrigin === `http://${host}`) : browserOrigin === `http://${host}`);
   }
   function localBrowserAccess(req) { return localReviewAccessEnabled === true && localBrowserRequest(req); }
-  function hasLocalReplayHistoryBrowserAccess(req) {
-    return localReplayHistoryAccessEnabled === true && replayOnly() && localBrowserRequest(req);
+  function hasLocalHistoryBrowserAccess(req) {
+    return localHistoryAccessEnabled === true && localBrowserRequest(req);
   }
-  function historyAuthorized(req) { return authorized(req) || hasLocalReplayHistoryBrowserAccess(req); }
+  function historyAuthorized(req) { return authorized(req) || hasLocalHistoryBrowserAccess(req); }
   function localMetaSetupAccess(req, { allowMissingOrigin = false } = {}) {
     const address = server.address();
     const bindHost = address?.address === '::1' ? '[::1]' : address?.address === '127.0.0.1' ? '127.0.0.1' : '';
@@ -301,7 +333,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
     secrets = [runtimeEnv.DEMO_ACCESS_CODE, runtimeEnv.META_API_KEY, runtimeEnv.MODEL_API_KEY, runtimeEnv.CHRONOS_API_TOKEN, runtimeEnv.CHRONOS_API_BASE, runtimeEnv.CHRONOS_3D_ENDPOINT].filter(x => typeof x === 'string' && x.length > 0);
   }
   function localMetaSetupState(req) {
-    return { setupAvailable: localMetaSetupAccess(req, { allowMissingOrigin: req.method === 'GET' || req.method === 'HEAD' }), metaKeyConfigured: hasMetaKey(), metaKeyOverrideActive: localMetaKeyOverrideActive, replayOnly: replayOnly(), localReviewAccess: localBrowserAccess(req), localReplayHistoryAccess: hasLocalReplayHistoryBrowserAccess(req) };
+    return { setupAvailable: localMetaSetupAccess(req, { allowMissingOrigin: req.method === 'GET' || req.method === 'HEAD' }), metaKeyConfigured: hasMetaKey(), metaKeyOverrideActive: localMetaKeyOverrideActive, localReviewAccess: localBrowserAccess(req), localHistoryAccess: hasLocalHistoryBrowserAccess(req) };
   }
   function restoreEnvValue(name, value) {
     if (value === undefined) delete runtimeEnv[name]; else runtimeEnv[name] = value;
@@ -342,14 +374,14 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
   }
   async function getHistoryService() {
     if (injectedHistoryService) return injectedHistoryService;
-    const liveMode = !replayOnly();
+    const liveMode = hasMetaKey();
     if (activeHistoryService && historyServiceLiveMode === liveMode) return activeHistoryService;
     if (!historyServicePromise) historyServicePromise = Promise.resolve().then(() => {
       let agent;
       if (!liveMode) {
-        agent = { async suggest() { throw new Error('Live history generation is disabled. Use replay mode.'); },
-          async checkRipple() { throw new Error('Live history checks are disabled. Use replay mode.'); },
-          async checkSuggestion() { const error = new Error('Live history compatibility checks are disabled in replay mode.'); error.code = 'suggestion_recheck_unavailable'; throw error; } };
+        agent = { async suggest() { const error = new Error('Configure a Meta API key to generate history suggestions.'); error.code = 'meta_key_required'; throw error; },
+          async checkRipple() { const error = new Error('Configure a Meta API key to run history checks.'); error.code = 'meta_key_required'; throw error; },
+          async checkSuggestion() { const error = new Error('Configure a Meta API key to check history suggestions.'); error.code = 'meta_key_required'; throw error; } };
       } else {
         const { client, policy } = getHistoryModelContext();
         agent = createHistoryAgent({ client, policy, model: runtimeEnv.META_TEXT_MODEL_PLANNER || 'muse-wonder-1.0',
@@ -388,6 +420,10 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           if (history) result.history = history;
           if (forkedHistory) result.forkedHistory = forkedHistory;
           if (event) result.event = event;
+          const decoratedHistory = history ?? forkedHistory;
+          if (result.suggestion && decoratedHistory) result.suggestion = decoratedHistory.suggestions?.find(item => item.id === result.suggestion.id) ?? result.suggestion;
+          if (Array.isArray(result.suggestions) && decoratedHistory) result.suggestions = result.suggestions.map(item =>
+            decoratedHistory.suggestions?.find(saved => saved.id === item.id) ?? item);
         }
       }
       return json(res, 200, result);
@@ -435,6 +471,26 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       const image = await readFile(actualPath);
       return image.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) ? image : null;
     } catch { return null; }
+  }
+  async function historyHeroSubject(event) {
+    const reference = event?.heroRef;
+    const url = typeof reference === 'string' ? reference : reference?.url;
+    const match = typeof url === 'string' && /^\/runs\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/hero\.png$/.exec(url);
+    const runId = reference?.runId ?? match?.[1], branchId = reference?.branchId;
+    if (!match || !safeId(runId) || !safeId(branchId) || match[1] !== runId || event.id !== `${runId}:${branchId}`) return null;
+    const run = await manifest(runId);
+    if (!run || run.branch?.status !== 'ok' || run.branch.hero?.branchId !== branchId || !run.assets.includes('hero.png')) return null;
+    const branch = run.branch.branches?.find(item => item.id === branchId);
+    if (!branch || !['year', 'title', 'summary', 'place', 'geography'].every(key =>
+      JSON.stringify(canonicalJson(event[key])) === JSON.stringify(canonicalJson(branch[key])))) return null;
+    const subject = run.branch.hero.subject ?? branch.subject;
+    if (typeof subject !== 'string' || !subject.trim() || subject.trim().length > 160 || /[\u0000-\u001f\u007f]/.test(subject)) return null;
+    return subject.trim();
+  }
+  function validatedHistorySubject(event) {
+    const subject = event?.subject;
+    return typeof subject === 'string' && /^[\p{L}\p{N}][\p{L}\p{N}\s'-]{0,159}$/u.test(subject.trim())
+      ? subject.trim() : null;
   }
   function clean(value) {
     if (typeof value === 'string') return secrets.reduce((s, secret) => s.split(secret).join('[redacted]'), value);
@@ -556,7 +612,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       }),
     })) });
     const mediaSnapshot = { ...snapshot, questions: snapshot.questions.map(withVerifiedLegacyMedia) };
-    const withWindowState = question => ({ ...question, histories: question.histories.map(history => {
+    const withWindowState = question => historyWithMediaReferences({ ...question, histories: question.histories.map(history => {
       const byWindow = new Map();
       for (const suggestion of history.suggestions ?? []) {
         const window = suggestion.window;
@@ -698,14 +754,13 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           if (!input || Object.keys(input).some(key => key !== 'apiKey') || !apiKey || apiKey.length > 4096
               || /[\u0000-\u001f\u007f]/.test(apiKey)) return json(res, 400, { error: 'Enter a valid Meta key.' });
           if (activeJobs > 0 || voiceBusy) return json(res, 409, { error: 'Wait for active generation to finish before changing the Meta key.' });
-          const candidateEnv = { ...runtimeEnv, META_API_KEY: apiKey, DEMO_REPLAY_ONLY: 'false' };
+          const candidateEnv = { ...runtimeEnv, META_API_KEY: apiKey };
           delete candidateEnv.MODEL_API_KEY;
           if (candidateEnv.DEMO_VOICE_ENABLED === undefined || !String(candidateEnv.DEMO_VOICE_ENABLED).trim()) candidateEnv.DEMO_VOICE_ENABLED = 'true';
           try { validateStartupConfig({ env: candidateEnv, outputRoot: liveRoot }); }
           catch { return json(res, 400, { error: 'Meta key configuration could not be applied.' }); }
           restoreEnvValue('META_API_KEY', apiKey);
           delete runtimeEnv.MODEL_API_KEY;
-          runtimeEnv.DEMO_REPLAY_ONLY = 'false';
           if (candidateEnv.DEMO_VOICE_ENABLED !== runtimeEnv.DEMO_VOICE_ENABLED) runtimeEnv.DEMO_VOICE_ENABLED = candidateEnv.DEMO_VOICE_ENABLED;
           localMetaKeyOverrideActive = true;
           localReviewAccessEnabled = true;
@@ -714,11 +769,10 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         } else {
           restoreEnvValue('META_API_KEY', bootMetaApiKey);
           restoreEnvValue('MODEL_API_KEY', bootModelApiKey);
-          restoreEnvValue('DEMO_REPLAY_ONLY', bootReplayOnly);
           restoreEnvValue('DEMO_VOICE_ENABLED', bootVoiceEnabled);
           localMetaKeyOverrideActive = false;
           localReviewAccessEnabled = bootLocalReviewAccess;
-          localReplayHistoryAccessEnabled = bootLocalReplayHistoryAccess;
+          localHistoryAccessEnabled = bootLocalHistoryAccess;
           invalidateHistoryModels();
           refreshSecrets();
         }
@@ -754,14 +808,14 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         const input = await historyRequestBody(req, res);
         if (!input) return;
         const [method] = historyActionRoute.slice(1), actor = { userId: 'demo', sessionId };
-        if (method === 'suggest' && replayOnly() && !injectedHistoryService) {
+        if (method === 'suggest' && !hasMetaKey() && !injectedHistoryService) {
           const history = historyStore.get(input.questionId)?.histories?.find(item => item.id === input.historyId);
           const cached = history?.suggestions?.some(item => item.window?.fromYear === input.window?.fromYear && item.window?.toYear === input.window?.toYear)
             || historyStore.getWindow({ questionId: input.questionId, historyId: input.historyId, window: input.window }).status === 'ready';
-          if (!cached || input.more === true) return json(res, 503, { error: 'Live history generation is disabled. Use replay mode.', code: 'replay_only' });
+          if (!cached || input.more === true) return json(res, 503, { error: 'Configure a Meta API key to generate new history suggestions.', code: 'meta_key_required' });
         }
-        if ((method === 'rippleCheck' || method === 'regenerateEvent') && replayOnly() && !injectedHistoryService) {
-          return json(res, 503, { error: 'Live history checks are disabled. Use replay mode.', code: 'replay_only' });
+        if ((method === 'rippleCheck' || method === 'regenerateEvent') && !hasMetaKey() && !injectedHistoryService) {
+          return json(res, 503, { error: 'Configure a Meta API key to run new history checks.', code: 'meta_key_required' });
         }
         const service = await getHistoryService();
         return await historyAction(res, service, method, input, actor);
@@ -772,7 +826,9 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         if (req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') return json(res, 415, { error: 'Use a JSON request body.', code: 'unsupported_media_type' });
         const sessionId = expansionCookieId(req);
         if (!expansionBudget.known(sessionId)) return json(res, 403, { error: 'A valid browser session is required.', code: 'invalid_history_session' });
-        if (replayOnly()) return json(res, 503, { error: 'Live question creation is disabled. Use saved replay histories.', code: 'replay_only' });
+        if (!hasMetaKey() && typeof runnerFactories.historyQuestionGenerator !== 'function' && typeof historyQuestionGenerator !== 'function') {
+          return json(res, 503, { error: 'Configure a Meta API key to create a new history.', code: 'meta_key_required' });
+        }
         const input = await historyRequestBody(req, res);
         if (!input) return;
         if (Object.keys(input).some(key => !['question', 'divergenceYear', 'place', 'attachment'].includes(key))) return json(res, 400, { error: 'Unsupported question fields.', code: 'invalid_question' });
@@ -781,7 +837,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         if (attachment !== undefined) {
           if (!attachment || typeof attachment !== 'object' || Array.isArray(attachment) || attachment.mode !== 'history-event'
               || Object.keys(attachment).some(key => !['mode', 'questionId', 'historyId', 'eventId'].includes(key))
-              || !safeId(attachment.questionId) || !safeId(attachment.historyId) || !safeId(attachment.eventId)) {
+              || !validHistoryId(attachment.questionId) || !validHistoryId(attachment.historyId) || !validHistoryId(attachment.eventId)) {
             return json(res, 400, { error: 'Choose a valid history event to attach this question to.', code: 'invalid_attachment' });
           }
           let parent = historyStore.get(attachment.questionId);
@@ -825,9 +881,6 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
             divergenceYear: parentEvent.year, divergencePlace: parentEvent.place,
             parentContext };
         }
-        if (typeof runnerFactories.historyQuestionGenerator !== 'function' && typeof historyQuestionGenerator !== 'function' && !hasMetaKey()) {
-          return json(res, 503, { error: 'Live question creation requires a Meta key.', code: 'meta_key_required' });
-        }
         if (!acquireJob()) return json(res, 429, { error: 'Another generation is in progress.', code: 'busy' });
         try {
           let generator = historyQuestionGenerator;
@@ -866,7 +919,9 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           const budgetExhausted = error instanceof SpendCapError;
           const status = Number.isInteger(error?.status) ? error.status : budgetExhausted ? 429 : 503;
           const code = budgetExhausted ? 'budget_exhausted' : typeof error?.code === 'string' ? error.code : 'question_creation_failed';
-          if (!res.destroyed) json(res, status, { error: budgetExhausted ? budgetAllowanceMessage(error) : status >= 500 ? 'Question could not be created. No history was saved.' : error.message, code,
+          const safeError = error instanceof HistoryQuestionError ? error.message
+            : status >= 500 ? 'Question could not be created. No history was saved.' : error.message;
+          if (!res.destroyed) json(res, status, { error: budgetExhausted ? budgetAllowanceMessage(error) : safeError, code,
             ...(error?.category ? { category: error.category } : {}) });
         } finally { releaseJob(); }
         return;
@@ -901,45 +956,76 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         if (req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') return json(res, 415, { error: 'Use a JSON request body.', code: 'unsupported_media_type' });
         const sessionId = expansionCookieId(req);
         if (!expansionBudget.known(sessionId)) return json(res, 403, { error: 'A valid browser session is required.', code: 'invalid_history_session' });
-        if (replayOnly()) return json(res, 503, { error: 'Live history media generation is disabled. Saved replay media remains available.', code: 'replay_only' });
         const input = await historyRequestBody(req, res);
         if (!input) return;
-        if (Object.keys(input).some(key => !['questionId', 'historyId', 'eventId'].includes(key))
-            || !safeId(input.questionId) || !safeId(input.historyId) || !safeId(input.eventId)) {
+        if (Object.keys(input).some(key => !['questionId', 'historyId', 'eventId', 'retryOf'].includes(key))
+            || !validHistoryId(input.questionId) || !validHistoryId(input.historyId) || !validHistoryId(input.eventId)) {
           return json(res, 400, { error: 'Choose a valid history event.', code: 'invalid_history_event' });
+        }
+        if (input.retryOf !== undefined && (typeof input.retryOf !== 'string' || !/^[a-f0-9]{64}$/i.test(input.retryOf))) {
+          return json(res, 400, { error: 'Choose a valid prior media attempt.', code: 'invalid_retry' });
         }
         const question = historyStore.get(input.questionId);
         const history = question?.histories?.find(item => item.id === input.historyId);
-        const event = history?.events?.find(item => item.id === input.eventId);
-        if (!event) return json(res, 404, { error: 'History event not found.', code: 'not_found' });
+        const savedEvent = history?.events?.find(item => item.id === input.eventId);
+        const event = savedEvent ?? (history ? cachedHistorySuggestion(question.id, history, input.eventId) : null);
+        if (!event) return json(res, 404, { error: 'Saved history subject not found.', code: 'not_found' });
         const kind = path.endsWith('/scene') ? 'scene' : 'cutout';
         const field = kind === 'scene' ? 'sceneRef' : 'cutoutRef';
         const revision = historyEventRevision(event);
         const identity = { questionId: question.id, historyId: history.id, eventId: event.id, revision, kind };
-        const existing = historyMedia.get(identity);
+        const existing = historyMedia.get(identity) ?? (savedEvent
+          ? historyMedia.get({ ...identity, revision: legacyHistoryEventRevision(event) }) : null);
+        const retryRequested = input.retryOf !== undefined;
+        const retryRecord = retryRequested ? historyMedia.byKey(input.retryOf) : null;
+        if (retryRequested) {
+          const matchesIdentity = retryRecord && retryRecord.questionId === identity.questionId
+            && retryRecord.historyId === identity.historyId && retryRecord.eventId === identity.eventId
+            && retryRecord.revision === identity.revision && retryRecord.kind === identity.kind;
+          if (!matchesIdentity || !['unknown', 'empty'].includes(retryRecord.status)
+              || !(existing?.key === input.retryOf || existing?.retryOf === input.retryOf)) {
+            return json(res, 409, { status: 'retry_rejected', error: 'This saved media attempt cannot be retried for the current event.', code: 'retry_not_available' });
+          }
+        }
         if (existing?.status === 'complete') return json(res, 200, { status: 'complete', url: `/history-media/${existing.key}.png`, reused: true });
-        if (existing?.status === 'empty') return json(res, 200, { status: 'empty', reused: true });
+        if (existing?.status === 'empty' && !retryRequested) return json(res, 200, { status: 'empty', reused: true, retryAvailable: existing.revision === revision, retryOf: existing.revision === revision ? existing.key : undefined });
         if (existing?.status === 'pending') return json(res, 202, { status: 'pending' });
-        if (existing?.status === 'unknown') return json(res, 200, { status: 'unknown' });
+        if (existing?.status === 'unknown' && !retryRequested) return json(res, 200, { status: 'unknown', retryAvailable: existing.revision === revision, retryOf: existing.revision === revision ? existing.key : undefined });
         const priorReference = event[field];
         if (priorReference?.status === 'complete' && typeof priorReference.url === 'string') {
           const historyRef = /^\/history-media\/([a-f0-9]{64})\.png$/i.exec(priorReference.url);
           const legacyRef = /^\/(?:event-scenes|event-cutouts)\/[a-f0-9]{64}\.png$/i.test(priorReference.url);
           const record = historyRef && historyMedia.byKey(historyRef[1]);
-          if ((record?.status === 'complete' && record.revision === revision && record.kind === kind
+          if ((record?.status === 'complete' && [revision, legacyHistoryEventRevision(event)].includes(record.revision) && record.kind === kind
               && record.questionId === question.id && record.historyId === history.id && record.eventId === event.id) || legacyRef) {
             return json(res, 200, { status: 'complete', url: priorReference.url, reused: true });
           }
         }
-        let image;
+        if (!hasMetaKey() && !renderHistoryScene && !segmentHistoryCutout) return json(res, 503, { error: 'Configure a Meta API key to generate new history media.', code: 'meta_key_required' });
+        let image, promptEvent = event;
         if (kind === 'cutout') {
           image = await readHistoryMediaSource(event, identity);
-          if (!image) return json(res, 200, { status: 'missing-image' });
+          // Legacy runs expose a checked hero through the history migration
+          // projection, while the durable history event itself may still have
+          // no media refs. Resolve that projection by the complete saved
+          // identity and content before using its canonical local asset URL.
+          if (!image || !event.heroRef) {
+            const projected = await migratedHistories();
+            const projectedHistory = projected.questions.find(item => item.id === question.id)?.histories
+              ?.find(item => item.id === history.id);
+            const projectedSubject = projectedHistory?.events.find(item => item.id === event.id)
+              ?? projectedHistory?.suggestions?.find(item => item.id === event.id);
+            if (projectedSubject && historyEventRevision(projectedSubject) === revision) {
+              promptEvent = projectedSubject;
+              if (!image) image = await readHistoryMediaSource(projectedSubject, identity);
+            }
+          }
+          if (!image) return json(res, 200, { status: 'missing-image', code: 'scene_required', prerequisite: 'scene' });
         }
         const historyText = [question.question, question.title, ...history.events.map(item => `${item.year}: ${item.title}. ${item.summary}. ${geographyText(item.geography)}`)].filter(Boolean).join('\n');
         const prompt = kind === 'scene'
           ? `Create a realistic visual illustration of this alternate-history event, without text or labels. Event: ${event.title} (${event.year}), ${event.place?.name ?? ''}. ${event.summary}. Full history context:\n${historyText}`
-          : `${event.title} ${event.summary} ${event.place?.name ?? ''}`;
+          : validatedHistorySubject(promptEvent) ?? await historyHeroSubject(promptEvent) ?? event.title;
         const promptLimit = kind === 'scene' ? 12_000 : 1_000;
         if (Buffer.byteLength(prompt, 'utf8') > promptLimit) {
           return json(res, 413, { error: 'The full history context is too large to send safely for media generation.', code: 'media_context_too_large' });
@@ -957,17 +1043,24 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         const worldId = createHash('sha256').update(JSON.stringify([question.id, history.id, event.id])).digest('hex');
         const allowance = expansionBudget.reserve(sessionId, worldId);
         if (!allowance.allowed) return json(res, 429, { error: 'This browser session has reached its saved-world limit.', code: 'world_limit', used: allowance.used, limit: allowance.limit });
-        if (!acquireJob()) return json(res, 429, { error: 'Another generation is in progress.', code: 'busy' });
-        let reservation, dispatched = false;
+        let reservation, dispatched = false, acquired = false;
         try {
-          const reserved = historyMedia.reserve(identity);
+          const reserved = retryRequested ? historyMedia.reserveRetry(identity, input.retryOf) : historyMedia.reserve(identity);
           if (reserved.status !== 'reserved') {
             if (reserved.status === 'complete') return json(res, 200, { status: 'complete', url: `/history-media/${reserved.record.key}.png`, reused: true });
-            if (reserved.status === 'empty') return json(res, 200, { status: 'empty', reused: true });
+            if (reserved.status === 'empty') return json(res, 200, { status: 'empty', reused: true, retryAvailable: true, retryOf: reserved.record.key });
             if (reserved.status === 'pending') return json(res, 202, { status: 'pending' });
-            return json(res, 200, { status: 'unknown' });
+            if (reserved.status === 'not-retryable') return json(res, 409, { status: 'retry_rejected', code: 'retry_not_available' });
+            return json(res, 200, { status: 'unknown', retryAvailable: !!reserved.record && reserved.record.revision === revision,
+              retryOf: reserved.record?.revision === revision ? reserved.record.key : undefined });
           }
           reservation = reserved.record;
+          if (!acquireJob()) {
+            historyMedia.releaseUndispatched(reservation);
+            reservation = null;
+            return json(res, 429, { status: 'retryable', error: 'Another generation is in progress.', code: 'busy' });
+          }
+          acquired = true;
           const ip = req.socket.remoteAddress ?? 'unknown';
           const startedAt = now();
           const previous = (requests.get(ip) ?? []).filter(value => startedAt - value < rateWindowMs);
@@ -982,7 +1075,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           const result = kind === 'scene' ? await runner({ prompt }) : await runner({ image, prompt });
           if (kind === 'cutout' && result?.status === 'empty') {
             historyMedia.finish(reservation, 'empty');
-            return json(res, 200, { status: 'empty', reused: false });
+            return json(res, 200, { status: 'empty', reused: false, retryAvailable: true, retryOf: reservation.key });
           }
           if (!Buffer.isBuffer(result?.buffer) || result.mime !== 'image/png' || result.buffer.length < 8
               || !result.buffer.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) throw new Error('Invalid history media image');
@@ -990,12 +1083,18 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           const latestQuestion = historyStore.get(question.id);
           const latestHistory = latestQuestion?.histories?.find(item => item.id === history.id);
           const latestEvent = latestHistory?.events?.find(item => item.id === event.id);
+          const latestSuggestion = latestHistory ? cachedHistorySuggestion(question.id, latestHistory, event.id) : null;
+          const latestSubject = latestEvent ?? latestSuggestion;
           let attached = false;
-          if (latestEvent && historyEventRevision(latestEvent) === revision) {
+          if (latestSubject && historyEventRevision(latestSubject) === revision) {
             const url = `/history-media/${reservation.key}.png`;
             const ref = { status: 'complete', url };
             historyStore.save({ ...latestQuestion, histories: latestQuestion.histories.map(item => item.id === history.id
-              ? { ...item, events: item.events.map(saved => saved.id === event.id ? { ...saved, [field]: ref } : saved) } : item) });
+              ? {
+                ...item,
+                events: latestEvent ? item.events.map(saved => saved.id === event.id ? { ...saved, [field]: ref } : saved) : item.events,
+                suggestions: latestSuggestion ? item.suggestions.map(saved => saved.id === event.id ? { ...saved, [field]: ref } : saved) : item.suggestions,
+              } : item) });
             attached = true;
           }
           historyStore.recordWorldEntered({ userId: 'demo', sessionId, worldId });
@@ -1006,8 +1105,9 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           if (reservation && retryable) { try { historyMedia.releaseUndispatched(reservation); } catch { historyMedia.finish(reservation, 'unknown'); } }
           else if (reservation) historyMedia.finish(reservation, 'unknown');
           return json(res, 503, { status: retryable ? 'retryable' : 'unknown', code: budgetExhausted ? 'budget_exhausted' : 'media_generation_failed',
-            error: budgetExhausted ? budgetAllowanceMessage(error) : 'History media generation could not be confirmed.' });
-        } finally { releaseJob(); }
+            error: budgetExhausted ? budgetAllowanceMessage(error) : 'History media generation could not be confirmed.',
+            ...(!retryable && reservation?.revision === revision ? { retryAvailable: true, retryOf: reservation.key } : {}) });
+        } finally { if (acquired) releaseJob(); }
       }
       if ((req.method === 'GET' || req.method === 'HEAD') && path === '/health') {
         const cookieId = expansionCookieId(req);
@@ -1066,7 +1166,8 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         const hasHero = item.branch.hero?.branchId === input.branchId && item.assets.includes('hero.png');
         if (req.method === 'GET') return json(res, 200, { status: hasHero || sceneRecord?.status === 'complete' ? 'missing' : 'missing-image' });
         if (!hasHero && sceneRecord?.status !== 'complete') return json(res, 200, { status: 'missing-image' });
-        if (await writableRootSharesPackage() || runtimeEnv.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled.' });
+        if (await writableRootSharesPackage()) return json(res, 503, { error: 'Live generation is unavailable for packaged saved runs.' });
+        if (!hasMetaKey() && !segmentEventCutout) return json(res, 503, { error: 'Configure a Meta API key to generate a cutout.', code: 'meta_key_required' });
         let imagePath, imageRoot;
         if (hasHero) {
           for (const candidate of [runsRoot, liveRoot]) {
@@ -1144,7 +1245,8 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           return json(res, 200, { status: existing.status === 'in-progress' && !activeScenes.has(scenes.keyFor(input.runId, input.branchId)) ? 'uncertain' : existing.status });
         }
         if (req.method === 'GET') return json(res, 200, { status: 'missing' });
-        if (await writableRootSharesPackage() || runtimeEnv.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled.' });
+        if (await writableRootSharesPackage()) return json(res, 503, { error: 'Live generation is unavailable for packaged saved runs.' });
+        if (!hasMetaKey() && !renderEventScene) return json(res, 503, { error: 'Configure a Meta API key to generate a scene.', code: 'meta_key_required' });
         let context;
         try { context = continuationFor(item, input.branchId, await savedParentRecord(item, input.branchId), 100); }
         catch { return json(res, 400, { error: 'This saved event cannot be illustrated.' }); }
@@ -1221,6 +1323,9 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       if (req.method === 'POST' && path === '/api/transcribe') {
         if (!voiceEnabled()) return json(res, 503, { error: 'Voice input is unavailable.' });
         if (!authorized(req)) return json(res, 403, { error: 'Voice input needs an access code.' });
+        if (!hasMetaKey() && !transcribeAudio && typeof runnerFactories.createDemoTranscriber !== 'function') {
+          return json(res, 503, { error: 'Configure a Meta API key to use voice input.', code: 'meta_key_required' });
+        }
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}` && req.headers.origin !== `https://${req.headers.host}`) return json(res, 403, { error: 'Voice input is unavailable.' });
         const t = now();
         voiceRequests = voiceRequests.filter(n => t - n < rateWindowMs);
@@ -1266,11 +1371,10 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       }
       if (req.method === 'POST' && (path === '/api/run' || path === '/api/continue')) {
         const continuing = path === '/api/continue';
-        if (!continuing && runtimeEnv.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled. Use replay mode.' });
-        if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'Live generation is unavailable. Use replay mode.' });
+        if (!authorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'Live generation requires local authorization or an access code.' });
         const ip = req.socket.remoteAddress ?? 'unknown';
         let t = now(), previous = (requests.get(ip) ?? []).filter(n => t - n < rateWindowMs);
-        if (previous.length >= rateLimit) return json(res, 429, { status: 'retryable', error: 'Rate limit reached. Try replay mode.' });
+        if (previous.length >= rateLimit) return json(res, 429, { status: 'retryable', error: 'Rate limit reached. Try again shortly.' });
         let body = '';
         for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > 8192) return json(res, 413, { error: 'Request too large' }); }
         let input;
@@ -1323,15 +1427,16 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
             } catch (error) { return json(res, 400, { error: error.message }); }
           }
         }
-        if (await writableRootSharesPackage() || runtimeEnv.DEMO_REPLAY_ONLY === 'true') return json(res, 503, { error: 'Live generation is disabled. Use replay mode.' });
+        if (await writableRootSharesPackage()) return json(res, 503, { error: 'Live generation is unavailable for packaged saved runs.' });
+        if (!hasMetaKey() && !runPipeline) return json(res, 503, { error: 'Configure a Meta API key to generate a new run.', code: 'meta_key_required' });
         if (continuing && !keywordCheck(divergence).allowed) return json(res, 400, { error: 'The saved branch cannot pass the topic policy.' });
         let dailyCapUsd;
         try { dailyCapUsd = configuredDailyCap({ env: runtimeEnv }); } catch { dailyCapUsd = NaN; }
-        if (!Number.isFinite(dailyCapUsd) || dailyCapUsd <= 0) return json(res, 503, { error: 'Live generation is unavailable. Use replay mode.' });
+        if (!Number.isFinite(dailyCapUsd) || dailyCapUsd <= 0) return json(res, 503, { error: 'Live generation is unavailable. Check the configured spending limits.' });
         let runner;
         try { runner = runPipeline ?? await createRunner('createDemoRunner', { dailyCapUsd, outputRoot: liveRoot }); }
-        catch { return json(res, 503, { error: 'Live generation is unavailable. Use replay mode.' }); }
-        if (typeof runner !== 'function' || runner.enforcesDailyCap !== true) return json(res, 503, { error: 'Live generation is unavailable. Use replay mode.' });
+        catch { return json(res, 503, { error: 'Live generation is unavailable. Check the Meta API configuration.' }); }
+        if (typeof runner !== 'function' || runner.enforcesDailyCap !== true) return json(res, 503, { error: 'Live generation is unavailable. Check the Meta API configuration.' });
         if (continuing) {
           edge = store.edge(input.runId, input.branchId);
           if (edge) {
@@ -1350,8 +1455,8 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           }
         }
         t = now(); previous = (requests.get(ip) ?? []).filter(n => t - n < rateWindowMs);
-        if (previous.length >= rateLimit) return json(res, 429, { status: 'retryable', error: 'Rate limit reached. Try replay mode.' });
-        if (!acquireJob()) return json(res, 429, { status: 'retryable', error: 'A live run is already in progress. Try replay mode.' });
+        if (previous.length >= rateLimit) return json(res, 429, { status: 'retryable', error: 'Rate limit reached. Try again shortly.' });
+        if (!acquireJob()) return json(res, 429, { status: 'retryable', error: 'A live run is already in progress. Try again shortly.' });
         let expansionUsed = null;
         try {
           if (continuing) {
@@ -1437,7 +1542,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
                 ? `${budgetAllowanceMessage(error)} This continuation may contain partial work. Automatic retry is disabled to avoid duplicate charges.`
                 : continuing
                   ? 'Exploration stopped. Enter this event to try again.'
-                  : 'Live generation failed. Check server logs and use replay mode.';
+                  : 'Live generation failed. Check server logs before trying again.';
             emit('error', { step: 'error', status: retryable ? 'retryable' : controller.signal.aborted ? 'uncertain' : 'failed', ...(budgetFailure ? { code: 'budget_exhausted' } : {}), error: message });
           }
           res.end();
@@ -1467,26 +1572,19 @@ export function createConfiguredDemoServer({ env = process.env, outputRoot, host
   const isLoopback = normalizedHost === '127.0.0.1';
   const effectiveEnv = { ...env };
   let localReviewAccess = options.localReviewAccess ?? false;
-  let localReplayHistoryAccess = options.localReplayHistoryAccess ?? false;
-  if (status.replayOnly) {
-    effectiveEnv.DEMO_REPLAY_ONLY = 'true';
-    if (options.localReplayHistoryAccess === undefined && options.localReviewAccess !== false
-        && isLoopback && !effectiveEnv.DEMO_ACCESS_CODE?.trim()) {
-      localReplayHistoryAccess = true;
-    }
-  } else if (isLoopback) {
+  let localHistoryAccess = options.localHistoryAccess ?? false;
+  if (isLoopback) {
     if (!effectiveEnv.DEMO_ACCESS_CODE?.trim()) {
-      effectiveEnv.DEMO_ACCESS_CODE = randomUUID();
+      if (status.hasMetaKey) effectiveEnv.DEMO_ACCESS_CODE = randomUUID();
     }
-    if (effectiveEnv.DEMO_VOICE_ENABLED === undefined || String(effectiveEnv.DEMO_VOICE_ENABLED).trim() === '') {
+    if (status.hasMetaKey && (effectiveEnv.DEMO_VOICE_ENABLED === undefined || String(effectiveEnv.DEMO_VOICE_ENABLED).trim() === '')) {
       effectiveEnv.DEMO_VOICE_ENABLED = 'true';
     }
-    if (options.localReviewAccess === undefined) {
-      localReviewAccess = true;
-    }
+    if (options.localReviewAccess === undefined && status.hasMetaKey) localReviewAccess = true;
+    if (options.localHistoryAccess === undefined && options.localReviewAccess !== false && !effectiveEnv.DEMO_ACCESS_CODE?.trim()) localHistoryAccess = true;
   }
   const importRunIds = options.importRunIds ?? (env.DEMO_IMPORT_RUN_IDS ?? '').split(',').map(s => s.trim()).filter(Boolean);
-  const rateLimit = options.rateLimit ?? configuredRateLimit({ env, isLoopback, replayOnly: status.replayOnly });
+  const rateLimit = options.rateLimit ?? configuredRateLimit({ env, isLoopback, hasMetaKey: status.hasMetaKey });
   const server = createDemoServer({
     liveRunsDir: resolve(selectedOutputRoot),
     ...options,
@@ -1494,22 +1592,22 @@ export function createConfiguredDemoServer({ env = process.env, outputRoot, host
     rateLimit,
     env: effectiveEnv,
     localReviewAccess,
-    localReplayHistoryAccess,
+    localHistoryAccess,
   });
   const port = Number(env.PORT ?? 3000);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid PORT: must be an integer from 0 to 65535');
-  return { server, host: normalizedHost, port, ...status, localReviewAccess, localReplayHistoryAccess };
+  return { server, host: normalizedHost, port, ...status, localReviewAccess, localHistoryAccess };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
-    const { server, host, port, replayOnly, spendCapUsd, enable3d } = createConfiguredDemoServer();
+    const { server, host, port, hasMetaKey, spendCapUsd, enable3d } = createConfiguredDemoServer();
     server.listen(port, host, () => {
       const boundPort = server.address()?.port ?? port;
-      const mode = replayOnly
-        ? 'replay-only mode (set META_API_KEY in .env to enable live Meta generation)'
-        : `live Meta mode (spend ceiling $${spendCapUsd.toFixed(2)}, 3D generation ${enable3d ? 'enabled' : 'disabled'})`;
-      console.log(`Demo server listening on http://${host}:${boundPort} — ${mode}`);
+      const status = hasMetaKey
+        ? `Meta generation ready (spend ceiling $${spendCapUsd.toFixed(2)}, 3D generation ${enable3d ? 'enabled' : 'disabled'})`
+        : 'saved histories ready; configure META_API_KEY in .env to generate new content';
+      console.log(`Demo server listening on http://${host}:${boundPort} — ${status}`);
     });
   } catch (error) {
     console.error(error.message);

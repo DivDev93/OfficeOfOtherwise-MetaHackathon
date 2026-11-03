@@ -184,8 +184,8 @@ export function replayLabel(run) {
 }
 
 export function liveAccessMode(health) {
-  if (!health || health.status !== 'ok' || typeof health.replayOnly !== 'boolean') return 'unknown';
-  return health.replayOnly ? 'replay-only' : 'live-enabled';
+  if (!health || health.status !== 'ok' || typeof health.metaKeyConfigured !== 'boolean') return 'unknown';
+  return health.metaKeyConfigured ? 'live-enabled' : 'setup-required';
 }
 
 // Saved descendants are navigation: opening one never needs a generation call.
@@ -200,7 +200,7 @@ export function continuationAction({ runId, branchId, children = [], path = [], 
   if (child) return { type: 'unavailable', message: child.status === 'in-progress' ? 'This future is still being saved. Reopen the previous world after it finishes.' : 'This path has an incomplete saved attempt. Choose another path; automatic retries are disabled to prevent duplicate spend.' };
   if (path.length >= MAX_CONTINUATION_DEPTH) return { type: 'limit', message: depthLimitMessage };
   if (!runId) return { type: 'unavailable', message: 'Wait for this world to finish saving before expanding a path.' };
-  if (mode === 'replay-only') return { type: 'unavailable', message: 'Fresh exploration needs the demo running locally with your own Meta API key. Saved descendants remain available.' };
+  if (mode === 'setup-required') return { type: 'unavailable', message: 'Configure a Meta API key to generate a new path. Saved descendants remain available.' };
   if (mode !== 'live-enabled' || !access) return { type: 'unavailable', message: 'Path selected. Expanding a new path needs an access code for live generation. Saved descendants remain available.' };
   return { type: 'generate', runId, branchId };
 }

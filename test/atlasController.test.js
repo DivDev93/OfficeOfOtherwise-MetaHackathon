@@ -348,7 +348,8 @@ test('history projection is independent of legacy graph/geography sync and selec
   assert.equal(projection.surface.geography, null, 'present mode always renders the basemap');
   const previewInput = Object.freeze({ version:2, seaLevelMeters:175, continentalTransforms:[], changes:[] });
   projection = controller.setHistoryView({ question, historyId:'history-a', date:-2500,
-    window:{ fromYear:-3000, toYear:-2001 }, suggestions:[suggestion], surfaceMode:'scenario', surfaceGeography:previewInput });
+    window:{ fromYear:-3000, toYear:-2001 }, suggestions:[suggestion], selectedEventId:'event-a',
+    surfaceMode:'scenario', surfaceGeography:previewInput });
   assert.deepEqual(projection.surfaceGeography, previewInput, 'scenario preview is copied into the display projection');
   assert.notEqual(projection.surfaceGeography, previewInput, 'preview projection does not alias mutable UI state');
   assert.deepEqual(projection.surface.geography, previewInput, 'scene surface receives the local preview');
@@ -360,6 +361,8 @@ test('history projection is independent of legacy graph/geography sync and selec
   controller.setGraph({ worlds:[{ id:'legacy', title:'Legacy graph node' }], questions:[], currentWorldId:'legacy' });
   assert.equal(scene.geography, undefined, 'legacy selected-event geography cannot replace the composed history surface');
   assert.equal(scene.setWorldsCalls.length, legacyWorldSyncs, 'legacy graph refreshes do not replace the active history projection');
+  assert.equal(controller.getHistoryView().selectedEventId, 'event-a', 'graph refresh keeps the clicked history event selection');
+  assert.equal(scene.history.selectedEventId, 'event-a', 'the scene receives the persistent clicked event identity');
   assert.equal(controller.enterWorld('event-a'), true);
   assert.equal(selected.value.id, 'event-a');
   assert.equal(selected.value.sceneRef, event.sceneRef);
@@ -382,11 +385,13 @@ test('history spine projection enables sibling selection and count-chip question
   const other = { id:'q-other', question:'Another question', histories:[{ id:'other-history', events:[] }] };
   const scene = { setWorlds(value) { this.graph = value; }, setHistoryView(value) { this.history = value; },
     setSurfaceLabelLevel() {}, setOrbitLevel() {}, setTravelMode() {}, getZoom() { return 0; }, getSurfaceDetailZoom() { return 0; } };
-  let selectedHistory = null, selectedQuestion = null;
+  let selectedHistory = null, selectedQuestion = null, selectedSpineEvent = null, previewWorld = undefined;
   const controller = await createAtlasController({ container:host, toolbarContainer:toolbar, document:doc, questions:[active,other],
     rendererFactory:async (_container, callbacks) => { scene.callbacks = callbacks; return scene; },
     onHistorySelect(id, meta) { selectedHistory = { id, meta }; },
     onQuestionSelect(id, meta) { selectedQuestion = { id, meta }; },
+    onHistoryEventSelect(event, meta) { selectedSpineEvent = { event, meta }; },
+    onPreview(world) { previewWorld = world; },
   });
   const projection = controller.setHistoryView({ questions:[active,other], question:active, activeQuestionId:active.id,
     historyId:'history-a', asOfYear:-1900, window:{ fromYear:-3000, toYear:-1001 }, showOrbit:true });
@@ -400,6 +405,17 @@ test('history spine projection enables sibling selection and count-chip question
   assert.equal(scene.callbacks.onHistorySelect(siblingId, { source:'pointer' }), true);
   assert.equal(selectedHistory.id, siblingId);
   assert.equal(selectedHistory.meta.date, -1900, 'sibling selection preserves the active as-of date');
+  scene.callbacks.onPreview({ id:'sibling-event', visualKind:'history-spine-sibling' }, { source:'pointer' });
+  scene.callbacks.onPreview(null, { source:'pointer' });
+  assert.equal(previewWorld, null, 'pointer exit clears only transient hover preview');
+  assert.equal(selectedSpineEvent, null, 'hover and hover exit never emit explicit event selection');
+  assert.equal(controller.getHistoryView().historyId, 'history-a', 'hover leaves active history unchanged');
+  assert.equal(controller.getHistoryView().asOfYear, -1900, 'hover leaves the as-of date unchanged');
+  assert.equal(controller.enterWorld('sibling-event'), true, 'an explicit Atlas click can select an event on a sibling spine');
+  assert.equal(selectedSpineEvent.event.id, 'sibling-event');
+  assert.equal(selectedSpineEvent.meta.historyId, 'history-b', 'the callback carries the clicked event owner');
+  assert.equal(selectedSpineEvent.meta.date, -1900, 'event selection retains the as-of date');
+  assert.equal(controller.getHistoryView().historyId, 'history-a', 'a sibling spine event click is a selection, not an implicit history switch');
   assert.equal(scene.callbacks.onQuestionSelect(other.id, { source:'pointer' }), true);
   assert.equal(selectedQuestion.id, other.id);
   assert.equal(selectedQuestion.meta.question, other);

@@ -4,6 +4,8 @@
 
 Office of Otherwise is a counterfactual worldbuilding workbench for writers and worldbuilders. It turns one “what if?” premise into a navigable path of possible events: choose a turning point, follow its consequences with matching illustrative scenes, return to an earlier choice to explore another branch, and compare scenario geography with the present-day globe. The goal is to help writers develop and communicate a complex alternate-world idea while keeping its choices and visuals together. Scenario geography is illustrative, not a scientific simulation or historical claim.
 
+Each question has one or more histories: timelines of events ordered by date. Suggestions can be woven into a history when they fit; a deliberate alternative or a conflicting suggestion creates another timeline. The globe shows the selected history as of a date, with composed geography, a timebar, an event sheet, and a gallery for comparing saved suggestions.
+
 Built for the **Meta Global AI Developer Hackathon** (October 26–November 4, 2026), **Startups Track**, theme **Build for Your World**. Divakar Dev is the sole contributor and startup representative.
 
 ## Judge access
@@ -35,25 +37,25 @@ To inspect the current local replay package, start `npm run demo` without `META_
 | Supply the four curated root 3D objects | **Meta SAM 3D Objects**, generated separately through the preexisting private Tattva runner | Attached with `scripts/attach-glb.js`; provenance recorded in each replay trace |
 | Explore the results | Hackathon-built exploration tree, spatial starmap, scenario geography globe, and 3D viewer | `web/` and `server/` |
 
-The four curated root runs (`alexandria`, `beringia`, `green-sahara`, `mechanisms`) retain their actual recorded **Muse Wonder** policy attribution rather than relabeling older traces as Spark runs. Hover or keyboard focus previews saved data only. Clicking or pressing Enter opens that event and requests its direct consequences once, when fresh access is enabled; saved and in-flight consequences are reused. Leaving cancels unfinished work. Browsing never recursively expands grandchildren or generates preview images. Replay-only mode shows saved children or “Not explored yet.” `DEMO_MAX_EXPANSIONS_PER_SESSION` defaults to 20 unique node expansions per browser session, in addition to the configured spend limits.
+The four curated root runs (`alexandria`, `beringia`, `green-sahara`, `mechanisms`) retain their actual recorded **Muse Wonder** policy attribution rather than relabeling older traces as Spark runs. Hover previews only read saved data. In the history view, clicking or pressing Enter selects an event; weaving and forking are separate actions. With a configured key, auto-suggest prepares an uncached date window after scrubbing stops, and missing scenes are prepared for that active window and the committed selected event through the metered client. Cached suggestions and media are reused; opening the comparison gallery does not generate every saved window. The legacy saved-event view also reuses saved and in-flight continuations rather than recursively expanding descendants. Without a Meta key, saved navigation remains available and fresh requests open local key setup. Spend and session limits remain enforced.
 
-The four SAM 3D Objects replays (`alexandria`, `beringia`, `green-sahara`, `mechanisms`) contain genuine attached `.glb` and `.meshopt.glb` meshes with recorded generation durations and unknown generation costs left `null`; they do not claim an automated public prompt-to-SAM-3D service. Non-hero events and newly generated continuations explain clearly in the UI when a 3D object is not available.
+The four SAM 3D Objects replays (`alexandria`, `beringia`, `green-sahara`, `mechanisms`) contain genuine attached `.glb` and `.meshopt.glb` meshes with recorded generation durations and unknown generation costs left `null`; they do not claim an automated public prompt-to-SAM-3D service. The history event sheet offers 3D playback when a saved object is available.
 
 Divergence points stay in science, technology, culture, and geography. Political and war topics are out of scope by design (`src/guardrails/`).
 
 ## Run it locally
 
-### 1. Credential-free replay and offline test suite
+### 1. Saved histories and offline test suite
 
-Replay mode and the offline test suite require no API keys or private services. Use Node **22.9.0 or newer** (CI runs on Node 22):
+Saved data browsing and the offline test suite require no API keys or private services. Use Node **22.9.0 or newer** (CI runs on Node 22):
 
 ```bash
 npm ci --ignore-scripts
 npm test
-npm run demo           # http://127.0.0.1:3000 (replay-only when META_API_KEY is unset)
+npm run demo           # http://127.0.0.1:3000
 ```
 
-Without `META_API_KEY`, `npm run demo` starts cleanly in replay-only mode (`Showing saved runs · live generation disabled`). You can explore the saved stories, switch between **Scene**, **SAM cutout**, and **3D object** across all four curated worlds, inspect the exploration tree and spatial map, and compare present-day vs. scenario geography.
+Without `META_API_KEY`, `npm run demo` serves saved stories and histories without making model calls. Fresh generation asks you to configure a Meta API key locally. You can explore the saved stories, switch between **Scene**, **SAM cutout**, and **3D object** across all four curated worlds, inspect the exploration tree and spatial map, and compare present-day vs. scenario geography.
 
 ### 2. Local live exploration with a Meta Model API key
 
@@ -89,7 +91,7 @@ npm run harness -- --from out/branch-<timestamp>.json --subject book --no-3d
 - **Works with `META_API_KEY` alone (`DEMO_3D_ENABLED=false` or `--no-3d`):** Prompt/branch topic checks (**Muse Spark 1.3**), counterfactual branch generation, consistency review, persistent multi-step event continuations, and structured scenario geography (**Muse Wonder**), hero and event scene generation (**Muse Image**), hero and event subject cutouts (**SAM 3.1**), and push-to-talk prompt transcription (**Muse Voice Transcribe**).
 - **Requires separate private 3D infrastructure:** A Meta Model API key does not supply credentials for the preexisting private Tattva/Chronos 3D service. The public live adapter (`src/providers/chronos3d.js`) supports **TRELLIS only** when `CHRONOS_3D_ENDPOINT` and `CHRONOS_API_TOKEN` are configured, while the four saved **SAM 3D Objects** assets were generated separately through the private Tattva runner and attached with `npm run attach-glb`. See [judge access and 3D scope](docs/JUDGE_ACCESS_PLAN.md); fresh private SAM 3D generation is not part of the judge path.
 
-The release video [`office-of-otherwise-submission-1080p-v2.mp4`](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/releases/download/hackathon-submission-2026-10-31/office-of-otherwise-submission-1080p-v2.mp4) is 158.28 seconds, 1920×1080, 25 fps (SHA-256 `0C72D0DDE6E25AAF601ECAA80DFB313E55D59317B8B7773703B4EA95221D7F9E`). It is an edited saved-result walkthrough with six replay-only UI chapters and two locally authored title cards; chapter 05 shows the complete saved Beringia root sled cutout. No fresh model generation, transcription, or classification is filmed.
+The release video [`office-of-otherwise-submission-1080p-v2.mp4`](https://github.com/DivDev93/OfficeOfOtherwise-MetaHackathon/releases/download/hackathon-submission-2026-10-31/office-of-otherwise-submission-1080p-v2.mp4) is 158.28 seconds, 1920×1080, 25 fps (SHA-256 `0C72D0DDE6E25AAF601ECAA80DFB313E55D59317B8B7773703B4EA95221D7F9E`). It is an edited saved-result walkthrough with six saved-result UI chapters and two locally authored title cards; chapter 05 shows the complete saved Beringia root sled cutout. No fresh model generation, transcription, or classification is filmed.
 
 ## Metering, provenance, and third-party notices
 

@@ -18,7 +18,7 @@ function setup(fetchImpl, refreshServiceMode = async () => {}) {
   ui.api = createLocalMetaKeySetup({ ...ui, fetchImpl, refreshServiceMode });
   return ui;
 }
-const available = extra => ({ status: 'ok', setupAvailable: true, metaKeyConfigured: false, metaKeyOverrideActive: false, replayOnly: true, localReviewAccess: false, ...extra });
+const available = extra => ({ status: 'ok', setupAvailable: true, metaKeyConfigured: false, metaKeyOverrideActive: false, localReviewAccess: false, localHistoryAccess: true, ...extra });
 
 test('apply posts the masked value, clears it immediately, refreshes mode and never persists it', async () => {
   const requests = []; let mode = 'replay-only', stored = 0;
@@ -60,10 +60,10 @@ test('Enter applies once, prevents prompt form submission, and ignores duplicate
 test('Clear override is enabled only for this-session overrides and uses DELETE', async () => {
   const requests = []; let refreshed = 0;
   const ui = setup(async (url, options) => { requests.push({ url, ...options }); return { ok: true }; }, async () => { refreshed++; });
-  ui.api.setHealth(available({ metaKeyConfigured: true, metaKeyOverrideActive: false, replayOnly: false }));
+  ui.api.setHealth(available({ metaKeyConfigured: true, metaKeyOverrideActive: false }));
   assert.match(ui.configStatus.textContent, /startup Meta API key/i);
   assert.equal(ui.clearButton.disabled, true, 'startup env config is not a local override');
-  ui.api.setHealth(available({ metaKeyConfigured: true, metaKeyOverrideActive: true, replayOnly: false }));
+  ui.api.setHealth(available({ metaKeyConfigured: true, metaKeyOverrideActive: true }));
   assert.match(ui.configStatus.textContent, /local-session override is active/i);
   assert.equal(ui.clearButton.disabled, false);
   ui.input.value = 'discard-this'; ui.clearButton.click();

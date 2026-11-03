@@ -225,8 +225,8 @@ test('Orbit direct-child labels use accessible scroll lanes only outside the pla
     'full child names are available to assistive technology and labels open by click or keyboard activation');
   assert.match(scene, /button\.addEventListener\('keydown',[\s\S]*neighborForKey\(event\.key\)[\s\S]*event\.key === 'Escape'/,
     'focused child labels retain directional keyboard navigation and Escape');
-  assert.match(scene, /pointerleave',[\s\S]*document\.activeElement !== button/,
-    'pointer exit does not cancel the preview while its child label remains keyboard-focused');
+  assert.match(scene, /button\.addEventListener\('pointerleave',[\s\S]*?setFocusedWorld\(null, \{ source:'pointer' \}\)/,
+    'pointer exit clears the preview even if the label retains focus; keyboard navigation remains independently available');
   assert.match(scene, /const generalCandidates = candidates\.filter\(candidate => !orbitChildIds\.has\(candidate\.id\)\)/,
     'direct children do not get duplicate opportunistic labels while their dedicated lane is active');
   assert.match(scene, /const resize = \(\) => \{[\s\S]*camera\.aspect = width \/ height; camera\.updateProjectionMatrix\(\);\s*updateLayout\(\);\s*applyZoom\(zoom, false\);[\s\S]*new ResizeObserver\(resize\)[\s\S]*observer\?\.observe\(container\)/,
