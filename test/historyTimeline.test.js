@@ -526,8 +526,16 @@ test('deck portal keeps review shortcuts available, folds the compact rail, and 
   await tray.listeners.click({target:{closest:()=>mode}});
   assert.equal(doc.body.classList.contains('history-phone-deck-active'),true,'compact deck mode folds the rail behind the globe');
   assert.equal(tray.queryAll('button').find(node=>node.dataset.action==='deck-keep-all-fits').hidden,true,'portal actions have no duplicate visible rail controls');
+  for (let index=0;index<sources.length;index++) {
+    const pass=portal.queryAll('button').find(node=>node.dataset.action==='deck-pass');
+    assert.ok(pass);
+    await portal.listeners.click({target:{closest:()=>pass}});
+  }
+  assert.equal(portal.queryAll('article').filter(node=>node.dataset.swipeCard==='true').length,0,'all fitting cards have been passed');
+  assert.equal(tray.queryAll('button').find(node=>node.dataset.action==='deck-keep-all-fits').disabled,false,'list shortcut can recover fits when every card is passed');
   const keepAll=portal.queryAll('button').find(node=>node.dataset.action==='deck-keep-all-fits');
   assert.ok(keepAll,'Keep all fits remains available directly in the deck portal');
+  assert.equal(keepAll.disabled,false,'portal shortcut can recover fits when every card is passed');
   await portal.listeners.click({target:{closest:()=>keepAll}});
   assert.deepEqual(checked,[['fit-one','fit-two']],'empty-deck transition previews only the newly kept IDs');
   assert.equal(panel.hidden,false);

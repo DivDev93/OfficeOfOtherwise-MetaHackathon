@@ -191,7 +191,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const review=deckState.review({ ...current.owner,suggestions:current.suggestions });
       syncHeldSuggestionIds(current.state,current.active,review.keptIds);
       batchNotice=result.skippedIds.length?`${result.skippedIds.length} fitting suggestions were not kept because the ${result.limit} item deck is full.`:'';
-      const emptied=result.keptIds.length>0&&review.unreviewedIds.length===0&&!deckEmptyPrompted.get(current.scope);
+      const emptied=result.keptIds.length>0&&review.unreviewedIds.length===0;
       if (emptied) deckEmptyPrompted.set(current.scope,true);
       render(getState?.() || {});
       if (emptied&&review.keptIds.length) openBatchPreview('',review.keptIds,'deck');
@@ -311,7 +311,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const review=deckState.review({ ...current.owner,suggestions:current.suggestions });
       syncHeldSuggestionIds(current.state,current.active,review.keptIds);
       batchNotice=result.skippedIds.length?`${result.skippedIds.length} fitting suggestions were not kept because the ${result.limit} item deck is full.`:'';
-      const emptied=result.keptIds.length>0&&review.unreviewedIds.length===0&&!deckEmptyPrompted.get(current.scope);
+      const emptied=result.keptIds.length>0&&review.unreviewedIds.length===0;
       if (emptied) deckEmptyPrompted.set(current.scope,true);
       render(getState?.() || {});
       if (emptied&&review.keptIds.length) openBatchPreview('',review.keptIds,'deck');
@@ -792,7 +792,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     controls.append(listMode,deckMode);
     const keepAllFits = button('Keep all fits','deck-keep-all-fits','keep-all');
     keepAllFits.hidden=deckView==='deck';
-    keepAllFits.disabled = !savedSuggestions.some(item=>deckReview.unreviewedIds.includes(String(item.id))&&item.verdict==='fits'&&!item.conflictsWith)
+    keepAllFits.disabled = !savedSuggestions.some(item=>!deckReview.keptIds.includes(String(item.id))&&item.verdict==='fits'&&!item.conflictsWith)
       || deckReview.keptIds.length>=deckState.maxKept;
     controls.append(keepAllFits);
     const reviewKept = button(`Review ${deckReview.keptIds.length} kept`,'deck-review-kept','review-kept');
@@ -967,7 +967,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       deckPortal.append(deckHeader);
       const portalActions=make(document,'div',null,'history-deck-shortcuts');
       const portalKeepAll=button('Keep all fits','deck-keep-all-fits','keep-all');
-      portalKeepAll.disabled=!savedSuggestions.some(item=>deckReview.unreviewedIds.includes(String(item.id))&&item.verdict==='fits'&&!item.conflictsWith)
+      portalKeepAll.disabled=!savedSuggestions.some(item=>!deckReview.keptIds.includes(String(item.id))&&item.verdict==='fits'&&!item.conflictsWith)
         ||deckReview.keptIds.length>=deckState.maxKept;
       const portalReview=button(`Review ${deckReview.keptIds.length} kept`,'deck-review-kept','review-kept');
       portalReview.disabled=!deckReview.keptIds.length||!!state.busyIds?.size;
@@ -978,7 +978,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const currentItem=savedSuggestions.find(item=>String(item.id)===currentId&&deckReview.unreviewedIds.includes(String(item.id)))
         || savedSuggestions.find(item=>deckReview.unreviewedIds.includes(String(item.id)));
       if (!currentItem) {
-        deckPortal.append(make(document,'p',deckReview.keptIds.length?'No unreviewed suggestions remain. Kept suggestions stay available for batch review.':'No unwoven suggestions remain in this window.','history-deck-empty'));
+        deckPortal.append(make(document,'p',deckReview.keptIds.length?'No unreviewed suggestions remain. Kept suggestions stay available for batch review.':deckReview.passedIds.length?'All suggestions reviewed. Passed suggestions remain available below.':'No unwoven suggestions remain in this window.','history-deck-empty'));
       } else {
         deckCurrentIds.set(batchScope,String(currentItem.id));
         const card=make(document,'article',null,'history-deck-card'); card.dataset.swipeCard='true'; card.dataset.suggestionId=String(currentItem.id); card.tabIndex=0;

@@ -10,10 +10,11 @@ The saved result retains all six scenes: [1440px](woven-six-1440.png) · [375px]
 
 ## Suggestion deck
 
-The six list checkboxes are independent of the review deck. Native desktop keyboard and 375px pointer-drag checks covered Keep, Pass, Undo, Keep all fits including passed items, reduced motion without a flight, and Cancel without reopening auto-suggestions. These are pointer/keyboard results; native touch was not verified. The in-app browser rejected touch-input dispatch, and Chrome’s extension lacked its Windows native-host registry entry. The user was notified.
+The six list checkboxes are independent of the review deck. Native desktop keyboard and 375px pointer-drag checks covered Keep, Pass, Undo, Keep all fits including passed items, reduced motion without a flight, and Cancel without reopening auto-suggestions. On November 4, the repaired Chrome connection also enabled the native browser touch-input checks described below.
 
 - [1440px keyboard deck](deck-keys-1440.png)
 - [375px pointer-drag deck](deck-drag-375.png)
+- [375px touch deck](deck-touch-375.jpg) · [Passed state](deck-touch-passed-375.jpg) · [Touch-triggered preview](deck-touch-preview-375.jpg)
 - [Desktop tray](tray-1440.png) · [375px tray](tray-375.png)
 
 ## Fresh auto-weave and pending events
@@ -28,4 +29,12 @@ Removing middle Aden (44 BCE) left two events pending and eight canonical. It re
 
 Navigating to 1 CE finalized the two remaining pending events. Returning to the cached −1 BCE window showed zero pending events and no removal tags, while the source suggestion remained available. At verification, Auto-weave was off and Auto-suggest was on. Keep all for pending events is covered by API and unit checks only; it was not clicked in the native session.
 
-The 375px drawer sits at z-index 16 above the time bar at z-index 12. Native touch remains unverified: Chrome is running with its extension enabled, but the diagnostic found its Windows native-host registry entry missing. The plugin troubleshooting guide requires reinstalling through the UI rather than repairing that registration directly. No physical-touch result is claimed.
+The 375px drawer sits at z-index 16 above the time bar at z-index 12.
+
+## Touch verification — November 4
+
+Chrome accepted native `Input.dispatchTouchEvent` at a 375×812 mobile viewport with touch emulation enabled. Touch taps opened the timeline and deck; right swipe kept Aden and opened its checked preview; left swipe moved it to Passed; Undo restored it. Short, cancelled and vertical gestures left the card unreviewed. Keep all fits recovered the passed-only set and opened the same preview; explicit Review reused it, and Cancel did not reopen it. Returning to List preserved its independent checkbox selection. These are browser-emulated touch results, not a physical phone test.
+
+This uncovered and corrected a UI gate that disabled Keep all fits when all fitting cards had been passed. Both List and Deck now allow that recovery, and an explicit Keep all request opens review even after an earlier empty deck. The passed-only message now correctly states that the suggestions remain available.
+
+One new Wonder batch-plan call checked the single restored Aden suggestion against the eight saved events: **$0.012156**. Reopening and recovering the same selection reused the plan. No suggestion generation, images, Spark ripple or weave commit was requested. The saved history remains eight permanent events and one unwoven suggestion; the ledger is $44.590384302083535. The full Node 22 suite passed 835/835; focused deck/timeline checks cover the passed-only regression.

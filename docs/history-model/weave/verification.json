@@ -5,7 +5,7 @@
   "nativeChecks": {
     "desktopKeyboard1440x900": true,
     "phonePointerDrag375x812": true,
-    "touch": "unverified: in-app touch input unsupported; Chrome native-host registry entry missing",
+    "touch": "passed: Chrome native touch input at 375x812, November 4; browser emulation, not a physical device",
     "reducedMotionSkipsFlight": true,
     "listSelectionIndependentOfDeck": true,
     "passedSuggestionsRecoverable": true,
@@ -38,5 +38,22 @@
     "modelCallsForRemovalAndFinalization": 0
   },
   "finalPreferences": { "autoSuggest": true, "autoWeave": false },
-  "spendLedgerTotalUsd": 44.57822830208354
+  "touchVerification": {
+    "date": "2026-11-04",
+    "browser": "Chrome",
+    "viewport": { "width": 375, "height": 812, "mobile": true },
+    "input": "Input.dispatchTouchEvent with touch emulation enabled",
+    "rightKeepOpensPreview": true,
+    "leftPassAndUndo": true,
+    "shortCancelledAndVerticalGesturesDoNotDecide": true,
+    "passedOnlyKeepAllFitsEnabledAndOpensPreview": true,
+    "explicitReviewReusesPlan": true,
+    "cancelDoesNotReopenPreview": true,
+    "listCheckboxSelectionPreserved": true,
+    "wonderBatchPlanCalls": 1,
+    "costUsd": 0.012156,
+    "weaveCommits": 0,
+    "physicalDeviceTest": false
+  },
+  "spendLedgerTotalUsd": 44.590384302083535
 }
