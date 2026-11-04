@@ -1263,7 +1263,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   }
   const unsubscribe = subscribe?.(render);
   render();
-  return { element: host, render, destroy() { unsubscribe?.(); document.defaultView?.removeEventListener?.('resize',positionDeckPortal); updatePhoneDeckClass('list'); deckSwipe?.destroy?.(); deckPortal.remove?.(); portalBatchPreview(false); root.replaceChildren(); } };
+  return { element: host, deckElement:deckPortal, render, destroy() { unsubscribe?.(); document.defaultView?.removeEventListener?.('resize',positionDeckPortal); updatePhoneDeckClass('list'); deckSwipe?.destroy?.(); deckPortal.remove?.(); portalBatchPreview(false); root.replaceChildren(); } };
 }
 
 export { erasFor as groupHistoryEras, historyForkYear, isEmptyHistoryBoilerplateReason };

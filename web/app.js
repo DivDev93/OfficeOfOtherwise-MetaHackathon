@@ -313,7 +313,7 @@ function historyEventFromAtlasWorld(world) {
 }
 const historyTimelineHost = $('history-timeline-host');
 function previewHistoryTimelineControl(button, focus = false) {
-  if (!button || !historyTimelineHost.contains(button)) return;
+  if (!button || !(historyTimelineHost.contains(button) || historyTimeline.deckElement.contains(button))) return;
   const state = historySession.getState();
   const recordId = button.dataset.id || button.dataset.suggestionId;
   const record = state.history?.events?.find(item => item.id === recordId);
@@ -322,10 +322,11 @@ function previewHistoryTimelineControl(button, focus = false) {
     .find(item => item.id === recordId && (item.historyId == null || item.historyId === state.historyId));
   if (suggestion) previewHistoryEvent(suggestion, state.historyId, { suggestion:true, focus });
 }
-historyTimelineHost.addEventListener('pointerover', event => {
+for (const previewSurface of [historyTimelineHost,historyTimeline.deckElement]) {
+previewSurface.addEventListener('pointerover', event => {
   previewHistoryTimelineControl(event.target.closest?.('button[data-id]') || event.target.closest?.('article.history-timeline-suggestion'));
 });
-historyTimelineHost.addEventListener('pointerout', event => {
+previewSurface.addEventListener('pointerout', event => {
   const button = event.target.closest?.('button[data-id]') || event.target.closest?.('article.history-timeline-suggestion');
   if (!button) return;
   const sourceCard = button.matches?.('article.history-timeline-suggestion') ? button : button.closest?.('article.history-timeline-suggestion');
@@ -333,14 +334,15 @@ historyTimelineHost.addEventListener('pointerout', event => {
   if (sourceCard && sourceCard === relatedCard || event.relatedTarget?.closest?.('button[data-id]') === button) return;
   if (!historyFocusPreviewActive) finishHistoryEventPreview();
 });
-historyTimelineHost.addEventListener('focusin', event => {
-  previewHistoryTimelineControl(event.target.closest?.('button[data-id]'), true);
+previewSurface.addEventListener('focusin', event => {
+  previewHistoryTimelineControl(event.target.closest?.('button[data-id]') || event.target.closest?.('article.history-timeline-suggestion'), true);
 });
-historyTimelineHost.addEventListener('focusout', event => {
+previewSurface.addEventListener('focusout', event => {
   if (event.relatedTarget?.closest?.('#chronicle')) return;
   historyFocusPreviewActive = false;
   scheduleHistoryEventPreviewEnd();
 });
+}
 $('chronicle').addEventListener('pointerenter', cancelHistoryHoverTimer);
 $('chronicle').addEventListener('pointerleave', () => { if (!historyFocusPreviewActive) finishHistoryEventPreview(); });
 $('chronicle').addEventListener('focusin', () => { historyFocusPreviewActive = true; cancelHistoryHoverTimer(); });

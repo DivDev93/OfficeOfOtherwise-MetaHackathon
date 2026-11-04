@@ -53,3 +53,7 @@ Native Chrome verification used a disposable copy of the user's current ten-even
 After resetting only the disposable copy to its ten-event baseline, one click on **Weave all fits (2)** checked and committed both Tayma and Aden: HTTP 200 for each endpoint, twelve canonical events, 1542 CE selected, review closed. No extra confirmation was needed.
 
 All **854/854 Node 22 tests passed**, including direct weaving, advance/final return, conflict/merge review and empty-plan blocking. Screenshots: [direct deck at 1440×900](direct-weave-deck-1440.png), [phone after swipe](direct-weave-swipe-375.png).
+
+## Follow-up: portaled List hover
+
+The List lives outside the timeline host, so its pointer/focus events no longer reached the original preview handlers. Both surfaces now share the existing right-sheet preview handlers. Native thumbnail hover showed Jeddah Tidal Almanac and its saved scene; moving to Taif Terrace Seed Register changed the image and title, and leaving restored the selected Aden Coral Reef Pilot Survey immediately. Date and selection URL remained unchanged. Keyboard focus also previews saved media. All 854 Node 22 tests passed, including portaled List focus/hover restoration. [Native hover screenshot](list-hover-preview.png).
