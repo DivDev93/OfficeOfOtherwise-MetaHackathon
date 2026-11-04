@@ -57,3 +57,11 @@ All **854/854 Node 22 tests passed**, including direct weaving, advance/final re
 ## Follow-up: portaled List hover
 
 The List lives outside the timeline host, so its pointer/focus events no longer reached the original preview handlers. Both surfaces now share the existing right-sheet preview handlers. Native thumbnail hover showed Jeddah Tidal Almanac and its saved scene; moving to Taif Terrace Seed Register changed the image and title, and leaving restored the selected Aden Coral Reef Pilot Survey immediately. Date and selection URL remained unchanged. Keyboard focus also previews saved media. All 854 Node 22 tests passed, including portaled List focus/hover restoration. [Native hover screenshot](list-hover-preview.png).
+
+## Follow-up: checking without leaving exploration
+
+Checking and safe automatic weaving now use one compact inline status in the current Timeline, Deck or List. There is no loading dialog or focus takeover. The List retains its view, scroll and focus while checking and stays open after a successful weave. Deck continuation respects the user's current view/card. Errors offer inline Retry; conflicts, merge proposals and empty plans retain explicit review.
+
+Native Chrome verification at 985×822 used a disposable copy of the current seventeen-event Arabia history. One check/commit added Jeddah Tidal Almanac and left the List open. Two subsequent checks were cancelled before commit; their successful late responses did not add events. The verification copy finished with eighteen events, while the original remains at seventeen. The final compact progress row and Cancel button measured 26px; hovering Hegra's photographic survey still showed its saved scene while the check was pending. A temporary network latency override held the cached check response for the screenshot and was cleared afterward. [Checking inside the List](background-check-list-985.png).
+
+The full pinned Node 22 suite passed **855/855**, including deferred check cancellation, List scroll continuity, inline receipt retry and explicit unsafe-plan review.

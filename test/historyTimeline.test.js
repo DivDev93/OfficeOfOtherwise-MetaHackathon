@@ -284,6 +284,48 @@ test('batch preview resolves selected rows, reuses unchanged checks, toggles mer
   assert.deepEqual(checks().filter(input=>input.checked).map(input=>input.dataset.batchSuggestion),['fit-a','fit-b'],'each history starts with its own default selection');
 });
 
+test('List stays open during a checked weave, cancellation blocks a late commit, and safe retry preserves scroll', async () => {
+  const window={fromYear:100,toYear:199}, source=event('inline-fit',120,'Inline fit',{verdict:'fits',window});
+  const history={id:'inline-history',events:[event('inline-anchor',50,'Anchor')],suggestions:[source],suggestionWindows:[{window,status:'ready'}]};
+  const state={questionId:'inline-question',question:{id:'inline-question',histories:[history]},history,histories:[history],historyId:history.id,
+    date:150,window,suggestions:[source]};
+  const plan={id:'inline-plan',questionId:state.questionId,historyId:history.id,suggestionIds:[source.id],existingEventIds:['inline-anchor'],
+    existingEvents:[{id:'inline-anchor',year:50}],chain:[{...source,causeEventId:'inline-anchor'}],merges:[],conflicts:[]};
+  let checks=0, commits=0, resolveFirst;
+  const session={
+    checkWeaveBatch:async()=>{checks++;return checks===1?new Promise(resolve=>{resolveFirst=resolve;}):plan;},
+    commitWeaveBatch:async()=>{commits++;history.events=[...history.events,event('inline-woven',120,source.title,{causeEventId:'inline-anchor'})];
+      history.suggestions=[];state.suggestions=[];return {history};},getState:()=>({status:''})
+  };
+  const root=new Element('main',document),mounted=mountHistoryTimeline(root,{getState:()=>state,session,document});
+  const timeline=mounted.element.children[1],portal=root.children.find(node=>node.className==='history-suggestion-deck-portal');
+  const possibility=timeline.queryAll('button').find(node=>node.dataset.action==='open-window-deck');
+  await timeline.listeners.click({target:{closest:()=>possibility}});
+  await portal.listeners.click({target:{closest:()=>portal.queryAll('button').find(node=>node.dataset.action==='deck-list')}});
+  const list=portal.queryAll('section').find(node=>node.className==='history-timeline-suggestions');
+  list.scrollTop=173;
+  const weave=list.queryAll('button').find(node=>node.dataset.action==='batch-preview');
+  const pending=list.listeners.click({target:{closest:()=>weave}});
+  const status=portal.queryAll('div').find(node=>node.className==='history-weave-inline-status');
+  assert.ok(status,'checking is reported in the active List surface');
+  assert.equal(status.getAttribute('role'),'status');
+  assert.match(status.textContent,/Checking possibilities/);
+  assert.equal(mounted.element.children[3].hidden,true,'the safe check does not open the large preview dialog');
+  assert.equal(list.parentNode,portal);assert.equal(list.scrollTop,173);
+  await status.queryAll('button').find(node=>node.dataset.action==='background-weave-cancel').click();
+  assert.equal(portal.queryAll('div').some(node=>node.className==='history-weave-inline-status'),false);
+  assert.equal(list.parentNode,portal);assert.equal(list.scrollTop,173);
+  resolveFirst(plan); await pending;
+  assert.equal(commits,0,'the canceled result cannot commit after it arrives');
+  const retryWeave=list.queryAll('button').find(node=>node.dataset.action==='batch-preview');
+  await list.listeners.click({target:{closest:()=>retryWeave}});
+  assert.equal(checks,2);assert.equal(commits,1,'a fresh safe check commits once');
+  assert.equal(mounted.element.children[3].hidden,true);
+  assert.equal(portal.hidden,false);assert.equal(list.parentNode,portal,'successful List weaving keeps the List open');
+  assert.equal(list.scrollTop,173,'background checking and safe completion preserve List scroll');
+  assert.ok(history.events.some(item=>item.id==='inline-woven'));
+});
+
 test('batch preview blocks unresolved conflicts and commits only after an affected suggestion is excluded', async () => {
   const candidate=event('conf-a',120,'Conflicting possibility',{verdict:'fits'});
   const unaffected=event('conf-b',125,'Unaffected possibility',{verdict:'fits'});
@@ -314,25 +356,25 @@ test('batch preview blocks unresolved conflicts and commits only after an affect
   assert.deepEqual(commitBody,{suggestionIds:[candidate.id,unaffected.id],planId:'conf-plan',acceptedMergeIds:[],excludedSuggestionIds:[candidate.id]});
 });
 
-test('uncertain preview offers an explicit receipt retry and explains possible charge', async () => {
-  const candidate=event('uncertain-fit',120,'Possibility',{verdict:'fits'}), history={id:'uncertain-history',events:[],suggestions:[candidate]};
+test('uncertain check exposes inline receipt retry then routes an unsafe plan to review', async () => {
+  const candidate=event('uncertain-fit',120,'Possibility',{verdict:'fits'}), anchor=event('uncertain-anchor',50,'Anchor'), history={id:'uncertain-history',events:[anchor],suggestions:[candidate]};
   const state={questionId:'q-uncertain',question:{id:'q-uncertain',histories:[history]},history,histories:[history],historyId:history.id,date:150,window:{fromYear:100,toYear:199},suggestions:[candidate]};
-  const plan={id:'receipt-plan',questionId:state.questionId,historyId:history.id,suggestionIds:[candidate.id],existingEventIds:[state.questionId],existingEvents:[],chain:[{...candidate,causeEventId:state.questionId}],merges:[],conflicts:[]};
+  const plan={id:'receipt-plan',questionId:state.questionId,historyId:history.id,suggestionIds:[candidate.id],existingEventIds:[anchor.id],existingEvents:[{id:anchor.id,year:anchor.year}],
+    chain:[{...candidate,causeEventId:anchor.id}],merges:[],conflicts:[{suggestionId:candidate.id,conflictsWith:anchor.id,reason:'This possibility contradicts the supplied anchor event.'}]};
   const calls=[]; let uncertain={retryOf:'receipt-opaque',possibleCharge:true}, status='The prior check outcome is uncertain.';
   const session={checkWeaveBatch:async(ids,options={})=>{calls.push([ids,options]);if(options.retryOf){uncertain=null;return plan;}return null;},
     getState:()=>({status,batchCheckUncertain:uncertain})};
   const mounted=mountHistoryTimeline(new Element('main',document),{getState:()=>state,session,document});
   const suggestions=mounted.element.children[2], preview=suggestions.querySelectorAll('button[data-action]').find(item=>item.dataset.action==='batch-preview');
   await preview.click();
-  let panel=mounted.element.children[3];
-  assert.match(panel.textContent,/may have incurred a charge/);
-  let retry=panel.querySelectorAll('button[data-action]').find(item=>item.dataset.action==='batch-retry');
-  assert.equal(retry.textContent,'Retry batch check');
-  await panel.listeners.click({target:{closest:()=>retry}});
-  panel=mounted.element.children[3];
-  assert.match(panel.textContent,/Weave 1 possibility/);
-  assert.match(panel.textContent,/because ← Starting question/);
-  assert.doesNotMatch(panel.textContent,/q-uncertain/,'internal question IDs are not shown as cause labels');
+  const timeline=mounted.element.children[1], inline=timeline.queryAll('div').find(node=>node.className==='history-weave-inline-status');
+  assert.ok(inline);assert.equal(inline.getAttribute('role'),'alert');assert.match(inline.textContent,/may have incurred a charge/);
+  const retry=inline.queryAll('button').find(node=>node.dataset.action==='background-weave-retry');
+  assert.equal(retry.textContent,'Retry');assert.equal(mounted.element.children[3].hidden,true,'a failed check stays inline until its outcome is known');
+  await timeline.listeners.click({target:{closest:()=>retry}});
+  const panel=mounted.element.children[3];
+  assert.match(panel.textContent,/1 unresolved conflict/,'an unsafe retried plan opens the existing conflict review');
+  assert.equal(panel.hidden,false);
   assert.deepEqual(calls,[[['uncertain-fit'],{}],[['uncertain-fit'],{retryOf:'receipt-opaque'}]]);
 });
 
@@ -418,9 +460,10 @@ test('empty histories show starting points without verdict badges or empty-histo
 test('preview portals above filtered rails and restores to the timeline on close or destroy', async () => {
   const portalDocument={createElement(tag){return new Element(tag,portalDocument);},createTextNode(text){return {textContent:String(text),queryAll:()=>[]};}};
   portalDocument.body=new Element('body',portalDocument);
-  const candidate=event('portal-fit',120,'Portal possibility',{verdict:'fits'}), history={id:'portal-history',events:[],suggestions:[candidate]};
+  const candidate=event('portal-fit',120,'Portal possibility',{verdict:'fits'}), anchor=event('portal-anchor',50,'Portal anchor'), history={id:'portal-history',events:[anchor],suggestions:[candidate]};
   const state={questionId:'q-portal',question:{id:'q-portal',title:'Portal question',histories:[history]},history,histories:[history],historyId:history.id,date:150,window:{fromYear:100,toYear:199},suggestions:[candidate]};
-  const plan={id:'portal-plan',questionId:state.questionId,historyId:history.id,suggestionIds:[candidate.id],existingEventIds:[state.questionId],existingEvents:[],chain:[{...candidate,causeEventId:state.questionId}],merges:[],conflicts:[]};
+  const plan={id:'portal-plan',questionId:state.questionId,historyId:history.id,suggestionIds:[candidate.id],existingEventIds:[anchor.id],existingEvents:[{id:anchor.id,year:anchor.year}],
+    chain:[{...candidate,causeEventId:anchor.id}],merges:[],conflicts:[{suggestionId:candidate.id,conflictsWith:anchor.id,reason:'This possibility contradicts the portal anchor event.'}]};
   let checks=0, cachedPlan=null, pendingPlan=null, resolvePlan;
   const session={checkWeaveBatch:()=>{if(cachedPlan)return Promise.resolve(cachedPlan);if(pendingPlan)return pendingPlan;checks++;
       pendingPlan=new Promise(resolve=>{resolvePlan=()=>{cachedPlan=plan;resolve(plan);};});return pendingPlan;},getState:()=>({status:''})};
@@ -428,18 +471,22 @@ test('preview portals above filtered rails and restores to the timeline on close
   const panel=mounted.element.children[3], suggestions=mounted.element.children[2];
   const open=()=>{const button=suggestions.querySelectorAll('button[data-action]').find(item=>item.dataset.action==='batch-preview');return suggestions.listeners.click({target:{closest:()=>button}});};
   const firstOpen=open();
-  assert.equal(panel.parentNode,portalDocument.body,'portal escapes filtered containing blocks');
-  const cancel=panel.querySelectorAll('button[data-action]').find(item=>item.dataset.action==='batch-cancel');
-  await panel.listeners.click({target:{closest:()=>cancel}});
-  assert.equal(panel.parentNode,mounted.element,'Cancel restores the preview to its original timeline position');
+  const timeline=mounted.element.children[1], inline=timeline.queryAll('div').find(node=>node.className==='history-weave-inline-status');
+  assert.ok(inline,'a pending check remains inline before the conflict plan is known');
+  assert.equal(panel.parentNode,mounted.element,'a safe-or-unsafe plan is not portaled before the check returns');
+  const backgroundCancel=inline.queryAll('button').find(node=>node.dataset.action==='background-weave-cancel');
+  await backgroundCancel.click();
+  assert.equal(panel.parentNode,mounted.element,'Cancel leaves the unopened review in its timeline position');
   const reopened=open();
   assert.equal(checks,1,'reopening the same scoped selection uses its cached plan');
-  assert.equal(panel.parentNode,portalDocument.body);
   resolvePlan(); await Promise.all([firstOpen,reopened]);
-  assert.match(panel.textContent,/because ← Portal question/,'the reopened preview receives the original in-flight plan');
-  const closeAgain=panel.querySelectorAll('button[data-action]').find(item=>item.dataset.action==='batch-cancel');
-  await panel.listeners.click({target:{closest:()=>closeAgain}});
-  await open(); assert.equal(checks,1,'a completed preview remains cached after cancel/reopen');
+  assert.equal(panel.parentNode,portalDocument.body,'the unsafe plan portals review above filtered containing blocks');
+  assert.match(panel.textContent,/because ← Portal anchor/,'the reopened preview receives the in-flight conflict plan');
+  const cancel=panel.querySelectorAll('button[data-action]').find(item=>item.dataset.action==='batch-cancel');
+  await panel.listeners.click({target:{closest:()=>cancel}});
+  assert.equal(panel.parentNode,mounted.element,'Cancel restores the review to its original timeline position');
+  const completedReopen=open(); assert.equal(checks,1,'a completed checked unsafe plan remains cached after cancel/reopen');
+  await completedReopen; assert.equal(panel.parentNode,portalDocument.body);
   mounted.destroy();
   assert.equal(panel.parentNode,mounted.element,'destroy restores the preview before removing the timeline root');
 });

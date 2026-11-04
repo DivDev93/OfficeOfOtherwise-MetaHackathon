@@ -106,7 +106,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   }
   document.defaultView?.addEventListener?.('resize',positionDeckPortal);
   let batchScope = '', batchNotice = '';
-  const batchPreviewState = { open:false, loading:false, error:'', plan:null, scope:'', source:'list', selectionKey:'', contextKey:'', selectedIds:[], acceptedMergeIds:new Set(), excludedSuggestionIds:new Set(), focusAction:'batch-cancel', focusId:'', requestId:0 };
+  const batchPreviewState = { open:false, background:false, loading:false, error:'', plan:null, scope:'', source:'list', selectionKey:'', contextKey:'', deckViewAtCheck:'timeline', currentIdAtCheck:'', selectedIds:[], acceptedMergeIds:new Set(), excludedSuggestionIds:new Set(), focusAction:'batch-cancel', focusId:'', requestId:0 };
   let galleryExpanded = false, lastRenderedHistoryId = '', lastRenderedSelectionId = '', lastSuggestionActionHistoryId = '', pendingSuggestionActionHistoryId = '';
   const suggestionDetailKey = (historyId,suggestionId) => `${String(historyId || '')}:${String(suggestionId || '')}`;
   let comparisonOpen = false, comparisonHasFocus = false, comparisonFocusAction = 'back-to-timeline', comparisonFocusHistoryId = '', comparisonCards = null, comparisonPreviousRail = null, comparisonPreviousScrollTop = null;
@@ -171,7 +171,38 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   }
   function weaveContextKey() {
     const state=getState?.()||{}, window=state.window||{};
-    return `${batchScope}\u0000${state.date??state.asOfYear??''}\u0000${window.fromYear??''}:${window.toYear??''}\u0000${deckWindowKeys.get(batchScope)||''}`;
+    return `${batchScope}\u0000${state.date??state.asOfYear??''}\u0000${window.fromYear??''}:${window.toYear??''}\u0000${deckWindowKeys.get(batchScope)||''}\u0000${deckCurrentIds.get(batchScope)||''}`;
+  }
+  function renderBackgroundWeaveStatus(container) {
+    if (!batchPreviewState.background || !container) return;
+    const status=make(document,'div',null,'history-weave-inline-status');
+    status.style.display='flex'; status.style.alignItems='center'; status.style.justifyContent='space-between';
+    status.style.gap='6px'; status.style.minHeight='26px'; status.style.fontSize='10px'; status.style.lineHeight='1.2';
+    if (batchPreviewState.error) {
+      status.setAttribute('role','alert');
+      status.append(make(document,'span',batchPreviewState.error));
+      const retry=button('Retry','background-weave-retry','retry');
+      retry.style.minHeight='26px'; retry.style.padding='2px 7px'; retry.style.fontSize='9px'; status.append(retry);
+    } else {
+      status.setAttribute('role','status'); status.setAttribute('aria-live','polite');
+      status.append(make(document,'span',batchPreviewState.operation==='commit'?'Weaving checked possibilities…':'Checking possibilities…'));
+      if (batchPreviewState.operation==='check') {
+        const cancel=button('Cancel','background-weave-cancel','cancel');
+        cancel.style.minHeight='26px'; cancel.style.padding='2px 7px'; cancel.style.fontSize='9px'; status.append(cancel);
+      }
+    }
+    container.append(status);
+  }
+  function cancelBackgroundWeave() {
+    if (!batchPreviewState.background || batchPreviewState.operation!=='check') return;
+    batchPreviewState.requestId++; batchPreviewState.background=false; batchPreviewState.loading=false;
+    batchPreviewState.operation=''; batchPreviewState.error=''; batchPreviewState.plan=null; batchPreviewState.contextKey='';
+    render(getState?.()||{});
+  }
+  async function retryBackgroundWeave() {
+    const source=batchPreviewState.source, selectedIds=source!=='list'?batchPreviewState.selectedIds:null;
+    const retryOf=batchPreviewState.retryOf||session?.getState?.().batchCheckUncertain?.retryOf||'';
+    await checkAndWeave(selectedIds,source,retryOf);
   }
   function decideDeckSuggestion(suggestionId,disposition,source='button') {
     const context = deckContext;
@@ -189,8 +220,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       && !deckEmptyPrompted.get(scope);
     if (emptied) deckEmptyPrompted.set(scope,true);
     render(getState?.() || {});
-    if (emptied && after.keptIds.length) openBatchPreview('',after.keptIds,'deck');
-    else if (context.deckView === 'deck') focusDeckCard();
+    if (context.deckView === 'deck') focusDeckCard();
   }
   let deckSwipe = null;
   if (deckPortal.addEventListener && deckPortal.removeEventListener) {
@@ -202,6 +232,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   }
   deckPortal.addEventListener('click',async event=>{
     const node=event.target.closest?.('button[data-action]'); if (!node) return;
+    if (node.dataset.action==='background-weave-cancel') { cancelBackgroundWeave(); return; }
+    if (node.dataset.action==='background-weave-retry') { await retryBackgroundWeave(); return; }
     deckScope=batchScope;
     if (node.dataset.action==='deck-keep' || node.dataset.action==='deck-pass') {
       const card=node.closest?.('[data-swipe-card]'), keep=node.dataset.action==='deck-keep';
@@ -302,6 +334,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   });
   timeline.addEventListener('click', async event => {
     const node = event.target.closest?.('button[data-action]'); if (!node) return;
+    if (node.dataset.action==='background-weave-cancel') { cancelBackgroundWeave(); return; }
+    if (node.dataset.action==='background-weave-retry') { await retryBackgroundWeave(); return; }
     if (node.dataset.action === 'jump-suggestions') { setGalleryExpanded(true); return; }
     if (node.dataset.action === 'open-window-deck') {
       deckAnchorRect=node.getBoundingClientRect?.() || null;
@@ -344,6 +378,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       if (card?.dataset.suggestionId) inspectSuggestion(card.dataset.suggestionId);
       return;
     }
+    if (node.dataset.action==='background-weave-cancel') { cancelBackgroundWeave(); return; }
+    if (node.dataset.action==='background-weave-retry') { await retryBackgroundWeave(); return; }
     if (node.dataset.action === 'select-suggestion') inspectSuggestion(node.dataset.id);
     else if (node.dataset.action === 'toggle-suggestion-details') {
       const card = node.closest?.('article.history-timeline-suggestion');
@@ -473,21 +509,23 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const selectedIds = selectedIdsOverride ? sortIds(selectedIdsOverride) : [...(batchSelections.get(batchScope) || [])].sort();
     if (!selectedIds.length || selectedIds.length > 32 || batchPreviewState.loading) return;
     const requestId = ++batchPreviewState.requestId, scope = batchScope, contextKey=weaveContextKey();
-    batchPreviewState.open = true; batchPreviewState.loading = true; batchPreviewState.operation = 'check'; batchPreviewState.error = '';
+    batchPreviewState.open = false; batchPreviewState.background = true; batchPreviewState.loading = true; batchPreviewState.operation = 'check'; batchPreviewState.error = '';
     batchPreviewState.plan = null; batchPreviewState.scope = scope; batchPreviewState.source = source; batchPreviewState.selectedIds = selectedIds;
+    batchPreviewState.deckViewAtCheck=deckViews.get(scope)||'timeline';
+    batchPreviewState.currentIdAtCheck=deckCurrentIds.get(scope)||'';
     batchPreviewState.retryOf = retryOf;
     batchPreviewState.selectionKey = `${scope}\u0000${source}\u0000${selectedIds.join('\u0000')}`;
     batchPreviewState.contextKey = contextKey;
     batchPreviewState.acceptedMergeIds = new Set(); batchPreviewState.excludedSuggestionIds = new Set();
-    batchPreviewState.focusAction = 'batch-cancel'; batchPreviewState.focusId = ''; batchPreviewState.focusPending = true;
-    portalBatchPreview(true);
+    batchPreviewState.focusPending = false;
+    portalBatchPreview(false);
     render(getState?.() || {});
     const plan = await session?.checkWeaveBatch?.(selectedIds,retryOf ? {retryOf} : {});
     const currentIds = source !== 'list' ? selectedIds : [...(batchSelections.get(batchScope) || [])].sort();
     const currentKey = `${batchScope}\u0000${source}\u0000${currentIds.join('\u0000')}`;
     if (requestId !== batchPreviewState.requestId) return;
     if (scope !== batchScope || currentKey !== batchPreviewState.selectionKey || contextKey !== weaveContextKey()) {
-      if (batchPreviewState.open) closeBatchPreview();
+      cancelBackgroundWeave();
       return;
     }
     batchPreviewState.loading = false; batchPreviewState.operation = '';
@@ -512,8 +550,10 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     if (projection.unresolvedConflicts?.length || plan.merges.length || projection.events.length === 0) {
       if (projection.events.length === 0 && !projection.unresolvedConflicts?.length && !plan.merges.length) {
         batchPreviewState.error = 'This check did not produce any events to weave.';
-        render(getState?.() || {});
       }
+      batchPreviewState.background=false; batchPreviewState.open=true; batchPreviewState.loading=false; batchPreviewState.operation='';
+      batchPreviewState.focusAction='batch-cancel'; batchPreviewState.focusId=''; batchPreviewState.focusPending=true;
+      portalBatchPreview(true); render(getState?.() || {});
       return false;
     }
     return commitBatchPreview();
@@ -537,7 +577,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   function closeBatchPreview() {
     if (!batchPreviewState.open) return;
     batchPreviewState.requestId++;
-    batchPreviewState.open = false; batchPreviewState.loading = false; batchPreviewState.operation = '';
+    batchPreviewState.open = false; batchPreviewState.background=false; batchPreviewState.loading = false; batchPreviewState.operation = '';
     batchPreviewState.plan = null; batchPreviewState.error = ''; batchPreviewState.contextKey = '';
     portalBatchPreview(false);
     render(getState?.() || {});
@@ -569,17 +609,24 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     if (result) {
       const scope = batchPreviewState.scope;
       const source=batchPreviewState.source, selectedIds=[...batchPreviewState.selectedIds];
-      const nextCardId=source==='deck-card'?nextDeckCard(scope,selectedIds):'';
+      const currentDeckView=deckViews.get(scope)||'timeline';
+      const viewChanged=currentDeckView!==batchPreviewState.deckViewAtCheck;
+      const stillOnCheckedCard=source==='deck-card'&&!viewChanged&&currentDeckView==='deck'
+        &&deckCurrentIds.get(scope)===batchPreviewState.currentIdAtCheck;
+      const nextCardId=stillOnCheckedCard?nextDeckCard(scope,selectedIds):'';
+      const preserveList=currentDeckView==='list'
+        &&(['list','single','deck-list'].includes(source)||viewChanged);
+      const preserveCurrentView=viewChanged||preserveList;
       if (nextCardId) deckCurrentIds.set(scope,nextCardId);
-      else {
+      else if (!preserveCurrentView) {
         onWeaveComplete({scope,source,selectedIds});
         deckViews.set(scope,'timeline'); deckAnchorRect=null;
       }
-      if (batchPreviewState.source==='list') for (const id of batchPreviewState.selectedIds) batchSelections.get(scope)?.delete(id);
-      batchPreviewState.open = false; batchPreviewState.loading = false; batchPreviewState.operation = ''; batchPreviewState.plan = null; batchPreviewState.contextKey = '';
+      if (source==='list') for (const id of selectedIds) batchSelections.get(scope)?.delete(id);
+      batchPreviewState.open = false; batchPreviewState.background=false; batchPreviewState.loading = false; batchPreviewState.operation = ''; batchPreviewState.plan = null; batchPreviewState.contextKey = '';
       portalBatchPreview(false);
       render(getState?.() || {});
-      if (nextCardId) focusDeckCard(); else suggestions.focus?.({preventScroll:true});
+      if (nextCardId && source==='deck-card') focusDeckCard();
       return true;
     } else {
       batchPreviewState.loading = false; batchPreviewState.operation = '';
@@ -713,6 +760,15 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       batchPreviewState.focusId = focusedPreviewNode.dataset?.previewExclude || focusedPreviewNode.dataset?.id || batchPreviewState.focusId;
       batchPreviewState.focusPending = true;
     }
+    const preserveReviewView=batchPreviewState.background || deckViews.get(batchScope)==='list';
+    const reviewScrollTop=deckPortal.scrollTop||0, listScrollTop=suggestions.scrollTop||0;
+    const activeReviewFocus=preserveReviewView && (deckPortal.contains?.(document.activeElement)||suggestions.contains?.(document.activeElement))
+      ? document.activeElement : null;
+    const focusWasInDeck=activeReviewFocus?!!deckPortal.contains?.(activeReviewFocus):false;
+    const reviewFocusData=activeReviewFocus?{
+      action:activeReviewFocus.dataset?.action||'', id:activeReviewFocus.dataset?.id||'',
+      suggestionId:activeReviewFocus.dataset?.suggestionId||'', batchSuggestion:activeReviewFocus.dataset?.batchSuggestion||'',
+    }:null;
     const question = state.question || null;
     const histories = state.histories || question?.histories || [];
     const active = state.history || state.activeHistory || histories.find(item => item.id === state.historyId) || histories[0] || null;
@@ -725,11 +781,16 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     }
     const nextBatchScope = `${String(state.questionId || question?.id || '')}\u0000${String(active?.id || '')}`;
     if (nextBatchScope !== batchScope) { batchScope = nextBatchScope; batchNotice = ''; deckAnchorRect=null; deckSwipe?.cancelGesture?.(); }
+    if (batchPreviewState.background && batchPreviewState.operation==='check' && batchPreviewState.contextKey
+        && batchPreviewState.contextKey!==weaveContextKey()) {
+      batchPreviewState.requestId++; batchPreviewState.background=false; batchPreviewState.loading=false;
+      batchPreviewState.operation=''; batchPreviewState.error=''; batchPreviewState.contextKey='';
+    }
     deckScope = batchScope;
     updatePhoneDeckClass(deckViews.get(batchScope)||'timeline');
-    if (batchPreviewState.open && batchPreviewState.scope !== nextBatchScope) {
-      batchPreviewState.requestId++; batchPreviewState.open = false; batchPreviewState.loading = false; batchPreviewState.operation = '';
-      batchPreviewState.plan = null; batchPreviewState.error = '';
+    if ((batchPreviewState.open || batchPreviewState.background) && batchPreviewState.scope !== nextBatchScope) {
+      batchPreviewState.requestId++; batchPreviewState.open = false; batchPreviewState.background=false; batchPreviewState.loading = false; batchPreviewState.operation = '';
+      batchPreviewState.plan = null; batchPreviewState.error = ''; batchPreviewState.contextKey='';
       portalBatchPreview(false);
     }
     const activeDate = state.date ?? state.asOfYear;
@@ -964,11 +1025,13 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     suggestions.setAttribute('aria-label', startingPoints ? `Starting points · ${savedSuggestions.length} in this timeline` : `All ${savedSuggestions.length} saved suggestions in this timeline`); suggestions.append(heading,subheading);
     const controls = make(document, 'div', null, 'history-suggestion-controls');
     const selectedCount = selectedSuggestionIds.size;
-    const batchBusy = (state.busyIds?.size || 0) > 0;
-    const weaveBatch = button(state.busyIds?.has?.('batch-check') ? 'Checking…' : state.busyIds?.has?.('weave-batch') ? 'Weaving…' : `Weave selected (${selectedCount})`,'batch-preview','batch-weave');
-    weaveBatch.setAttribute('aria-label',state.busyIds?.has?.('batch-check') ? 'Checking selected suggestions' : state.busyIds?.has?.('weave-batch') ? 'Weaving selected suggestions into history' : `Weave ${selectedCount} selected suggestions into history`);
+    const busyIds=[...(state.busyIds||[])].map(String);
+    const blockingBusy=busyIds.some(id=>!(batchPreviewState.background&&['batch-check','weave-batch'].includes(id)));
+    const batchBusy=blockingBusy;
+    const weaveBatch = button(!batchPreviewState.background&&state.busyIds?.has?.('batch-check') ? 'Checking…' : !batchPreviewState.background&&state.busyIds?.has?.('weave-batch') ? 'Weaving…' : `Weave selected (${selectedCount})`,'batch-preview','batch-weave');
+    weaveBatch.setAttribute('aria-label',!batchPreviewState.background&&state.busyIds?.has?.('batch-check') ? 'Checking selected suggestions' : !batchPreviewState.background&&state.busyIds?.has?.('weave-batch') ? 'Weaving selected suggestions into history' : `Weave ${selectedCount} selected suggestions into history`);
     weaveBatch.setAttribute('aria-controls',batchPreview.id); weaveBatch.setAttribute('aria-expanded',String(batchPreviewState.open));
-    weaveBatch.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size || selectedCount === 0;
+    weaveBatch.disabled = !!state.loading || !!state.paused || blockingBusy || batchPreviewState.loading || selectedCount === 0;
     controls.append(weaveBatch);
     const moreMenu = make(document,'details',null,'history-suggestion-more');
     moreMenu.open = suggestionMoreOpen;
@@ -988,13 +1051,16 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     moreActions.append(listView);
     const selectAll = button('Select all','batch-select-all','batch-all');
     const selectNone = button('Select none','batch-select-none','batch-none');
-    selectAll.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size || selectedCount >= 32;
-    selectNone.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size || selectedCount === 0;
+    selectAll.disabled = !!state.loading || !!state.paused || blockingBusy || selectedCount >= 32;
+    selectNone.disabled = !!state.loading || !!state.paused || blockingBusy || selectedCount === 0;
     controls.append(selectAll,selectNone);
     controls.append(moreMenu);
     const nativeControlButtons=controls.querySelectorAll?.('button');
     const controlButtons=nativeControlButtons?.length ? [...nativeControlButtons] : controls.queryAll?.('button') || [];
-    controlButtons.forEach(node => { node.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size; });
+    controlButtons.forEach(node => {
+      node.disabled=!!state.loading||!!state.paused||blockingBusy
+        ||(node===weaveBatch&&(batchPreviewState.loading||selectedCount===0));
+    });
     suggestions.append(controls);
     if (batchNotice) suggestions.append(make(document,'p',batchNotice,'history-weave-tray-notice'));
     const cachedWindows = new Map();
@@ -1037,9 +1103,14 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const suggestMore=button(`Suggest more around ${dateText}`,state.windowCached?'manual-more':'manual-suggest','suggest-more');
     suggestMore.disabled=!!state.loading||!!state.paused||!!state.busyIds?.size;
     footer.append(suggestMore,moreMenu); timeline.append(footer);
+    if (deckView==='timeline') renderBackgroundWeaveStatus(timeline);
     const visibleSuggestions = savedSuggestions;
-    if (!visibleSuggestions.length) suggestions.append(make(document, 'p', savedSuggestions.length ? 'No saved suggestions in this window.' : state.status || (state.autoSuggest ? 'No saved suggestions yet.' : `Use “Suggest events around ${dateText}” to explore this timeline.`), 'history-session-status'));
-    else if (state.status) suggestions.append(make(document, 'p', state.status, 'history-session-status'));
+    const ownWeaveStatus=batchPreviewState.background&&['check','commit'].includes(batchPreviewState.operation);
+    if (!visibleSuggestions.length) {
+      if (savedSuggestions.length) suggestions.append(make(document,'p','No saved suggestions in this window.','history-session-status'));
+      else if (!ownWeaveStatus) suggestions.append(make(document,'p',state.status || (state.autoSuggest ? 'No saved suggestions yet.' : `Use “Suggest events around ${dateText}” to explore this timeline.`),'history-session-status'));
+    }
+    else if (state.status&&!ownWeaveStatus) suggestions.append(make(document, 'p', state.status, 'history-session-status'));
     const groups = new Map();
     for (const item of cachedWindows.values()) groups.set(`${item.window.fromYear}:${item.window.toYear}`,{window:item.window,items:[]});
     for (const item of visibleSuggestions) {
@@ -1150,6 +1221,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       deckHeader.append(portalMore);
       deckHeader.append(button('List view','deck-list','list'));
       deckPortal.append(deckHeader);
+      renderBackgroundWeaveStatus(deckPortal);
       const feedback=state.weaveFeedback;
       if (feedback?.eventIds?.length && (feedback.expiresAt==null || Number(feedback.expiresAt)>Date.now())) {
         const addedIds=new Set(feedback.eventIds.map(String));
@@ -1211,7 +1283,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       suggestions.classList?.remove('history-deck-active'); deckPortal.replaceChildren(); deckPortal.hidden=false; positionDeckPortal();
       const listHeader=make(document,'div',null,'history-deck-header');
       listHeader.append(make(document,'strong',`Possibilities · ${savedSuggestions.length}`),button('Timeline','deck-close','timeline'),button('Deck','deck-mode-deck','deck'));
-      deckPortal.append(listHeader); suggestions.hidden=false; suggestions.classList?.add('history-deck-list'); deckPortal.append(suggestions);
+      deckPortal.append(listHeader); renderBackgroundWeaveStatus(deckPortal); suggestions.hidden=false; suggestions.classList?.add('history-deck-list'); deckPortal.append(suggestions);
     } else {
       suggestions.classList?.remove('history-deck-active'); deckPortal.replaceChildren();
     }
@@ -1238,7 +1310,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       lastRenderedHistoryId = String(active.id);
     }
     const actionHistoryId = String(active.id || '');
-    if (actionHistoryId && actionHistoryId !== lastSuggestionActionHistoryId && actionHistoryId !== pendingSuggestionActionHistoryId) {
+    if (!preserveReviewView && actionHistoryId && actionHistoryId !== lastSuggestionActionHistoryId && actionHistoryId !== pendingSuggestionActionHistoryId) {
       const firstSuggestionAction = (!suggestions.hidden && findAction(suggestions,'weave'))
         || (!deckPortal.hidden && findAction(deckPortal,'deck-weave'));
       if (firstSuggestionAction) {
@@ -1255,6 +1327,22 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
         };
         if (document.defaultView?.requestAnimationFrame) document.defaultView.requestAnimationFrame(revealAction);
         else revealAction();
+      }
+    }
+    if (preserveReviewView) {
+      deckPortal.scrollTop=reviewScrollTop; suggestions.scrollTop=listScrollTop;
+      if (reviewFocusData && (reviewFocusData.action||reviewFocusData.id||reviewFocusData.suggestionId||reviewFocusData.batchSuggestion)
+          && document.activeElement===document.body) {
+        const focusRoot=focusWasInDeck?deckPortal:suggestions;
+        const nativeCandidates=focusRoot.querySelectorAll?.('[data-action], [data-swipe-card], [data-batch-suggestion]');
+        const candidates=nativeCandidates?.length?[...nativeCandidates]:[
+          ...(focusRoot.queryAll?.('button')||[]),...(focusRoot.queryAll?.('input')||[]),...(focusRoot.queryAll?.('article')||[]),
+        ];
+        const replacement=candidates.find(node=>(!reviewFocusData.action||node.dataset?.action===reviewFocusData.action)
+          &&(!reviewFocusData.id||node.dataset?.id===reviewFocusData.id)
+          &&(!reviewFocusData.suggestionId||node.dataset?.suggestionId===reviewFocusData.suggestionId)
+          &&(!reviewFocusData.batchSuggestion||node.dataset?.batchSuggestion===reviewFocusData.batchSuggestion));
+        replacement?.focus?.({preventScroll:true});
       }
     }
     // Session setters emit synchronously. Run after the complete outer render so a nested
