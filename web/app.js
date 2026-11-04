@@ -438,8 +438,10 @@ function syncHistoryUi(state = historySession.getState()) {
   } else if (selectedRecordChanged) {
     if (selectedRecord) renderHistoryEvent(selectedRecord, { suggestion:!selected && !!selectedSuggestion });
     else if (enteringHistory || changedSelectionContext) {
-      const latest = [...state.history.events].filter(event => event.year <= state.date).sort((a,b) => a.year-b.year).at(-1);
-      if (latest) { historySession.selectEvent(latest.id); renderHistoryEvent(latest); }
+      const chronological = [...state.history.events].sort((a,b) => a.year-b.year || String(a.id).localeCompare(String(b.id)));
+      const latest = chronological.filter(event => event.year <= state.date).at(-1);
+      const initial = latest || chronological[0];
+      if (initial) { historySession.selectEvent(initial.id); renderHistoryEvent(initial); }
       else {
         selectedHistoryRecord = null; selectedHistoryId = state.historyId; selectedHistoryQuestionId = state.questionId;
         historyMedia = { sceneUrl:'',cutoutUrl:'',modelUrl:'' };
@@ -498,8 +500,8 @@ function parseHistoryLocation(hash = '') {
   const params = new URLSearchParams(hash.slice(1));
   const questionId = params.get('question') || '', historyId = params.get('history') || '';
   const date = Number(params.get('date'));
-  if (!questionId || !historyId || !Number.isSafeInteger(date) || date === 0) return null;
-  return { questionId, historyId, date, eventId:params.get('event') || '' };
+  if (!questionId || !historyId) return null;
+  return { questionId, historyId, date:Number.isSafeInteger(date) && date !== 0 ? date : null, eventId:params.get('event') || '' };
 }
 function updateHistoryLocation(state = historySession.getState()) {
   if (!state.questionId || !state.historyId || !Number.isSafeInteger(state.date) || state.date === 0) return;
@@ -3329,6 +3331,13 @@ $('geography-reset-adjustments').addEventListener('click', () => {
   surfaceMode = 'scenario';
   renderGeography();
 });
+$('geography-toggle')?.addEventListener('click', event => {
+  const toggle = event.currentTarget, content = $('geography-content');
+  if (!content) return;
+  const expanded = toggle.getAttribute('aria-expanded') !== 'true';
+  content.hidden = !expanded;
+  toggle.setAttribute('aria-expanded', String(expanded));
+});
 $('load-run').addEventListener('click', () => loadRun($('runs').value));
 $('history-question-picker').addEventListener('change', event => {
   if (!event.currentTarget.value) return;
@@ -3346,12 +3355,35 @@ function restoreLocationFromHash() {
   if (nativeHistory) {
     activeHistoryLocationKey = `${nativeHistory.questionId}:${nativeHistory.historyId}`;
     historyCreationRequested = false;
-    historySession.setContext({ ...nativeHistory, readOnly:true });
+    openHistoryLocation(nativeHistory);
     return;
   }
   const id = runIdFromHash(hash);
   if (id) { activeHistoryLocationKey = ''; historySession.clear(); loadRun(id, { animate: false, selectedBranchId: eventIdFromHash(hash) }); }
   else { activeHistoryLocationKey = ''; viewStatus(''); reset(); }
+}
+async function openHistoryLocation(route) {
+  if (route.date === null) {
+    if (historySession.openHistory(route.questionId, route.historyId)) return true;
+    await refreshHistoryQuestions();
+    if (historySession.openHistory(route.questionId, route.historyId)) return true;
+    status('This saved history link could not be opened. Check access to saved histories.');
+    return false;
+  }
+  let question = historySession.getState().questions.find(item => String(item.id) === String(route.questionId));
+  let record = question?.histories?.find(item => String(item.id) === String(route.historyId));
+  if (!record) {
+    const questions = await refreshHistoryQuestions();
+    question = questions.find(item => String(item.id) === String(route.questionId));
+    record = question?.histories?.find(item => String(item.id) === String(route.historyId));
+  }
+  const first = [...(record?.events || [])].filter(event => Number.isSafeInteger(event?.year) && event.year !== 0)
+    .sort((a,b) => a.year-b.year || String(a.id).localeCompare(String(b.id)))[0];
+  const context = first && route.date < first.year
+    ? { ...route, date:first.year, eventId:first.id }
+    : route;
+  historySession.setContext({ ...context, readOnly:true });
+  return true;
 }
 window.addEventListener('hashchange', restoreLocationFromHash);
 window.addEventListener('popstate', restoreLocationFromHash);
@@ -3486,7 +3518,7 @@ refreshHistory().catch(() => { $('runs').replaceChildren(new Option('Archive una
 const linkedHistory = parseHistoryLocation(location.hash);
 if (linkedHistory) {
   activeHistoryLocationKey = `${linkedHistory.questionId}:${linkedHistory.historyId}`;
-  serviceModeReady.then(() => historySession.setContext({ ...linkedHistory, readOnly:true }));
+  serviceModeReady.then(() => openHistoryLocation(linkedHistory));
 } else {
   const linkedRun = runIdFromHash(location.hash);
   if (linkedRun) loadRun(linkedRun, { animate: false, selectedBranchId: eventIdFromHash(location.hash) });

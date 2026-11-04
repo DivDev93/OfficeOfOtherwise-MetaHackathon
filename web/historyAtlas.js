@@ -97,6 +97,33 @@ export function historySurfaceVisibility(atlas) {
   return Math.max(0, Math.min(1, 1 - (Number(atlas) || 0)));
 }
 
+/** Unit vector at the spherical centroid of the canonical gold event pins. */
+export function historyPinCentroid(entries = [], fallback = { x:0, y:0, z:1 }) {
+  const points = entries.filter(entry => entry?.world?.visualKind === 'history-event').map(entry => entry.globe || entry);
+  let x = 0, y = 0, z = 0;
+  for (const point of points) {
+    const px = Number(point?.x), py = Number(point?.y), pz = Number(point?.z);
+    if (![px, py, pz].every(Number.isFinite)) continue;
+    x += px; y += py; z += pz;
+  }
+  const length = Math.hypot(x, y, z);
+  if (length < 1e-8) {
+    const fx = Number(fallback?.x), fy = Number(fallback?.y), fz = Number(fallback?.z);
+    const fallbackLength = Math.hypot(fx, fy, fz);
+    return fallbackLength < 1e-8 || !Number.isFinite(fallbackLength)
+      ? { x:0, y:0, z:1 }
+      : { x:fx / fallbackLength, y:fy / fallbackLength, z:fz / fallbackLength };
+  }
+  return { x:x / length, y:y / length, z:z / length };
+}
+
+/** Initial landing view when no saved question is active: face Afro-Eurasia. */
+export function afroEurasiaFacingVector() {
+  const latitude = 25 * Math.PI / 180, longitude = 45 * Math.PI / 180;
+  const phi = Math.PI / 2 - latitude, theta = longitude + Math.PI;
+  return { x:-Math.sin(phi) * Math.cos(theta), y:Math.cos(phi), z:Math.sin(phi) * Math.sin(theta) };
+}
+
 /** Keep the history count visible even when a narrow chip truncates its title. */
 export function formatHistoryQuestionChip({ title = '', historyCount = 0, year = null } = {}) {
   const count = Math.max(0, Math.trunc(Number(historyCount) || 0));
@@ -152,7 +179,7 @@ export function layoutHistoryPins(worlds = [], currentId = null) {
     const lon = Number(world.lon ?? world.place?.lon);
     const hasGeo = Number.isFinite(lat) && Number.isFinite(lon);
     const phi = (90 - (hasGeo ? lat : 0)) * Math.PI / 180;
-    const theta = (hasGeo ? lon : (index - (total - 1) / 2) * 12) * Math.PI / 180;
+    const theta = (hasGeo ? lon + 180 : (index - (total - 1) / 2) * 12) * Math.PI / 180;
     const globe = { x: -Math.sin(phi) * Math.cos(theta), y: Math.cos(phi), z: Math.sin(phi) * Math.sin(theta) };
     const isCurrent = id === currentId;
     const spread = (index - (total - 1) / 2) * 0.28;

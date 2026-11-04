@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHistoryTimeScale, mountHistoryTimebar, collectHistoryEraTicks, eventTickPositions } from '../web/historyTimebar.js';
+import { createHistoryTimeScale, mountHistoryTimebar, collectHistoryEraTicks, eventTickPositions, historyEraTickSegments } from '../web/historyTimebar.js';
 
 class Element {
   constructor(tag, document) { this.tagName = tag; this.ownerDocument = document; this.children = []; this.dataset = {}; this.listeners = {}; this.attributes = {}; this.style = {}; this.value = ''; this.hidden = false; }
@@ -43,6 +43,23 @@ test('dense event dates keep separate tick targets while preserving their chrono
   const positions = eventTickPositions(dense,scale,320);
   assert.ok(Math.abs(positions.get('1994') - positions.get('1978') - 32) < 1e-6);
   assert.ok(Math.abs(positions.get('2003') - positions.get('1994') - 32) < 1e-6);
+});
+
+test('canonical era labels each own a non-overlapping stretch across the date track', () => {
+  const eras = [
+    { id:'a', year:-3000, title:'A', era:'Era A' },
+    { id:'b', year:-2990, title:'B', era:'Era A' },
+    { id:'c', year:-1000, title:'C', era:'Era B' },
+    { id:'d', year:100, title:'D', era:'Era C' },
+  ];
+  const scale = createHistoryTimeScale(eras);
+  const segments = historyEraTickSegments(eras, scale);
+  assert.equal(segments.length, 3);
+  assert.equal(segments[0].left, 0);
+  assert.equal(segments.at(-1).left + segments.at(-1).width, 100);
+  for (let index = 1; index < segments.length; index++) {
+    assert.ok(segments[index - 1].left + segments[index - 1].width <= segments[index].left + 1e-9);
+  }
 });
 
 test('timebar date scrub, event ticks and arrows notify selected as-of date without generating on hover', () => {

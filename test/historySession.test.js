@@ -112,7 +112,7 @@ test('suggestion requests include inspiration only for a selected canonical even
   assert.equal(Object.hasOwn(bodies[1], 'inspiredByEventId'), false, 'suggestion selection is not treated as an event cause');
 });
 
-test('question and sibling-history selection preserve the global date and stay read-only', async () => {
+test('opening sibling histories and questions selects each latest canonical event', async () => {
   const clock = timers(), calls = [];
   const q1 = { id:'q1', histories:[history('h1'), history('h1-sibling', [{ id:'future', year:2003, title:'Future', window:{fromYear:1001,toYear:2000} }])] };
   const q2 = { id:'q2', histories:[{ id:'h2', events:[{ id:'older', year:100, title:'Older' }, { id:'latest', year:1500, title:'Latest' }] }] };
@@ -124,11 +124,12 @@ test('question and sibling-history selection preserve the global date and stay r
   }});
   session.setContext({ questionId:'q1', historyId:'h1', eventId:'event-1', date:1978 }); await tick();
   session.selectHistory('h1-sibling'); await tick();
-  assert.equal(session.getState().date,1978);
+  assert.equal(session.getState().date,-3000,'opening another history defaults to its latest canonical event');
+  assert.equal(session.getState().selectedEventId,'event-1');
   session.selectQuestion('q2'); await tick();
   assert.equal(session.getState().questionId,'q2');
-  assert.equal(session.getState().date,1978);
-  assert.equal(session.getState().selectedEventId,'latest', 'select the latest event at or before the retained date');
+  assert.equal(session.getState().date,1500);
+  assert.equal(session.getState().selectedEventId,'latest');
   assert.equal(session.getState().questions.length,2);
   assert.equal(clock.size,0);
   assert.equal(calls.some(([url,method]) => url === '/api/history/suggest' || method === 'POST'), false);
@@ -150,6 +151,55 @@ test('opening an archived question without an active date uses only its stored d
   assert.equal(session.openQuestion('event-dated'),true); assert.equal(session.getState().date,-900);
   session.clear(); session.setQuestions([{id:'undated',histories:[{id:'empty-h',events:[]}]}]);
   assert.equal(session.openQuestion('undated'),false,'the picker cannot invent a year for empty legacy data');
+});
+
+test('ordinary question opens default to its latest canonical event while explicit context dates remain exact', async () => {
+  const saved = { id:'h', events:[
+    {id:'old',year:-245,title:'Old event'}, {id:'latest',year:-22,title:'Latest event'},
+  ] };
+  const session = createHistorySession({fetchImpl:async url=> url==='/api/history/preferences' ? response({autoSuggest:false})
+    : response({questions:[{id:'q',divergenceYear:2026,histories:[saved]}]})});
+  session.setQuestions([{id:'q',divergenceYear:2026,histories:[saved]}]);
+  session.setContext({questionId:'q',historyId:'h',eventId:'old',date:1978,readOnly:true});
+  assert.equal(session.openQuestion('q'),true);
+  assert.equal(session.getState().date,-22,'opening a saved question ignores a retained date');
+  assert.equal(session.getState().selectedEventId,'latest');
+  session.setContext({questionId:'q',historyId:'h',eventId:'old',date:-245,readOnly:true});
+  assert.equal(session.getState().date,-245,'explicit URL context keeps its date');
+  assert.equal(session.getState().selectedEventId,'old','explicit URL context keeps its event');
+});
+
+test('opening a specific saved history without a date chooses that history latest event', async () => {
+  const question = {id:'q',histories:[
+    {id:'h1',events:[{id:'h1-latest',year:50,title:'First history'}]},
+    {id:'h2',events:[{id:'h2-old',year:-40,title:'Old'},{id:'h2-latest',year:-8,title:'Latest'}]},
+  ]};
+  const session = createHistorySession({fetchImpl:async url=> url==='/api/history/preferences' ? response({autoSuggest:false}) : response({questions:[question]})});
+  session.setQuestions([question]);
+  assert.equal(session.openHistory('q','h2'),true);
+  assert.equal(session.getState().historyId,'h2');
+  assert.equal(session.getState().date,-8);
+  assert.equal(session.getState().selectedEventId,'h2-latest');
+});
+
+test('date changes and history switches follow the nearest canonical event, falling back to the first', async () => {
+  const events = [{id:'first',year:-245,title:'First'}, {id:'middle',year:-100,title:'Middle'}, {id:'last',year:-22,title:'Last'}];
+  const q1 = {id:'q1',histories:[{id:'h1',events},{id:'h1b',events:[{id:'sibling-first',year:-180,title:'Sibling first'},{id:'sibling-last',year:-80,title:'Sibling last'}]}]};
+  const q2 = {id:'q2',histories:[{id:'h2',events:[{id:'q2-first',year:-300,title:'First'},{id:'q2-last',year:-50,title:'Last'}]}]};
+  const session = createHistorySession({fetchImpl:async url=> url==='/api/history/preferences' ? response({autoSuggest:false}) : response({questions:[q1,q2]})});
+  session.setQuestions([q1,q2]);
+  session.setContext({questionId:'q1',historyId:'h1',eventId:'last',date:-22,readOnly:true});
+  session.setDate(-90);
+  assert.equal(session.getState().selectedEventId,'middle');
+  session.setDate(-500);
+  assert.equal(session.getState().selectedEventId,'first','dates before the first event still select a canonical event');
+  session.setDate(-100);
+  session.selectHistory('h1b');
+  assert.equal(session.getState().date,-80,'opening the sibling history uses its latest event year');
+  assert.equal(session.getState().selectedEventId,'sibling-last');
+  session.selectQuestion('q2');
+  assert.equal(session.getState().date,-50);
+  assert.equal(session.getState().selectedEventId,'q2-last');
 });
 
 test('off preference exposes explicit Suggest and More is a separate metered request', async () => {
@@ -290,6 +340,31 @@ test('last-suggestion weave preserves its cached window and never auto-generates
   assert.equal(clock.size,0);
   session.setContext({ questionId:'q',historyId:'h',eventId:'only-one',date:1978 });
   assert.deepEqual(session.getState().window,cachedWindow); assert.equal(clock.size,0);
+});
+
+test('new future weave events advance the as-of date and window before emitting the updated history', async () => {
+  for (const path of ['/api/history/weave','/api/history/weave-batch']) {
+    const original=history('h'), woven={id:`woven-${path.endsWith('batch')?'batch':'single'}`,year:500,title:'Future observatory',checkFlags:[]};
+    const updated={...original,events:[...original.events,woven]}, emissions=[], calls=[];
+    const session=createHistorySession({fetchImpl:async(url,init={})=>{
+      calls.push(url);
+      if(url==='/api/history/preferences')return response({autoSuggest:false});
+      if(url.startsWith('/api/histories'))return response({questions:[{id:'q',histories:[original]}]});
+      if(url===path)return response({history:updated,event:woven,events:[woven],cached:false});
+      throw new Error(url);
+    },onChange:snapshot=>emissions.push(snapshot)});
+    session.setContext({questionId:'q',historyId:'h',eventId:'event-1',date:-250,readOnly:true}); await tick();
+    emissions.length=0;
+    if(path.endsWith('batch')) await session.commitWeaveBatch({suggestionIds:[woven.id],planId:'future-plan'});
+    else await session.weave(woven.id);
+    const state=session.getState(), emitted=emissions.at(-1);
+    assert.equal(state.date,500);
+    assert.equal(state.selectedEventId,woven.id);
+    assert.deepEqual(state.window,{fromYear:1,toYear:1000});
+    assert.equal(emitted.date,500,'render subscribers see the new date with the new event in one emission');
+    assert.equal(emitted.history.events.some(event=>event.id===woven.id),true);
+    assert.equal(calls.includes('/api/history/suggest'),false,'the date bump never triggers a new suggestion request');
+  }
 });
 
 test('an explicit batch check from a reopened read-only history is cached and commit applies its resolved plan', async () => {

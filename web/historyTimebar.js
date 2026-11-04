@@ -50,6 +50,17 @@ function eraTicks(events) {
   return groupHistoryEras(ordered(events)).map(group => ({ label:group.label, year:group.events[0].year }));
 }
 
+/** Give every canonical era one non-overlapping stretch of the date track. */
+export function historyEraTickSegments(events, scale) {
+  const eras = eraTicks(events);
+  return eras.map((era, index) => {
+    const start = scale.maxIndex ? scale.indexAt(era.year) / scale.maxIndex * 100 : 0;
+    const next = eras[index + 1];
+    const end = next && scale.maxIndex ? scale.indexAt(next.year) / scale.maxIndex * 100 : 100;
+    return { ...era, left:Math.max(0, Math.min(100, start)), width:Math.max(0, Math.min(100, end) - Math.max(0, start)) };
+  });
+}
+
 /** Bottom-of-globe as-of date control; hover is inert and keyboard steps by event. */
 export function mountHistoryTimebar(root, { getState, subscribe, onDateChange = () => {}, onEventSelect = () => {}, document = globalThis.document } = {}) {
   const host = make(document, 'section', null, 'history-timebar'); host.setAttribute('aria-label', 'History time bar'); root.replaceChildren(host);
@@ -109,9 +120,9 @@ export function mountHistoryTimebar(root, { getState, subscribe, onDateChange = 
     const selectedYear = scale.yearAt(Number(range.value));
     updateReadout(selectedYear);
     eraLayer.replaceChildren(); eventLayer.replaceChildren();
-    for (const era of eraTicks(events)) {
+    for (const era of historyEraTickSegments(events, scale)) {
       const tick = make(document, 'button', era.label, 'history-timebar-era-tick'); tick.type = 'button'; tick.dataset.year = String(era.year);
-      tick.style.left = `${scale.maxIndex ? scale.indexAt(era.year) / scale.maxIndex * 100 : 0}%`; tick.title = `${era.label} · ${labelYear(era.year)}`;
+      tick.style.left = `${era.left}%`; tick.style.width = `${era.width}%`; tick.title = `${era.label} · ${labelYear(era.year)}`;
       eraLayer.append(tick);
     }
     for (const event of events) {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { historyPinColorRole, isHeldHistorySuggestion, isPendingHistoryEvent, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../web/historyAtlas.js';
+import { afroEurasiaFacingVector, historyPinCentroid, historyPinColorRole, isHeldHistorySuggestion, isPendingHistoryEvent, layoutHistoryPins, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../web/historyAtlas.js';
 
 const scene = readFileSync(new URL('../web/atlas/scene.js', import.meta.url), 'utf8');
 
@@ -20,6 +20,23 @@ test('history marker colors keep event and suggestion roles stable through hover
   assert.equal(historyPinColorRole({ historySpineRole:'sibling' }, { hovered:true }), 'spine-sibling-hover');
   assert.match(scene, /historyPinColorRole\(world, \{ hovered: entry\.id === focusedId \}\)/,
     'renderer passes scene-local hover identity into the executable role helper');
+});
+
+test('surface history focus uses only canonical pin centroids and landing targets Afro-Eurasia', () => {
+  const centroid = historyPinCentroid([
+    { world:{ visualKind:'history-event' }, globe:{ x:1, y:0, z:0 } },
+    { world:{ visualKind:'history-event' }, globe:{ x:0, y:0, z:1 } },
+    { world:{ visualKind:'history-suggestion', historySurfacePin:true }, globe:{ x:-1, y:0, z:0 } },
+  ]);
+  assert.ok(Math.abs(centroid.x - Math.SQRT1_2) < 1e-9);
+  assert.ok(Math.abs(centroid.z - Math.SQRT1_2) < 1e-9);
+  assert.ok(afroEurasiaFacingVector().x > 0);
+  assert.ok(afroEurasiaFacingVector().y > 0);
+  assert.ok(afroEurasiaFacingVector().z < 0);
+  const arabia = layoutHistoryPins([{ id:'arabia', lat:22, lon:40, visualKind:'history-event' }])[0].globe;
+  assert.ok(arabia.x > 0 && arabia.z < 0, 'history longitude matches the renderer texture convention used by other Atlas worlds');
+  assert.match(scene, /const canonicalSurfacePins = entries\.map\(entry =>[\s\S]*?historyPinCentroid\(canonicalSurfacePins/);
+  assert.match(scene, /surfaceFacingOrientation\(afroEurasiaFacingVector\(\)\)/);
 });
 
 test('pending canonical events keep gold semantics and add a display-only dashed outline', () => {

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { defaultWorldImageUrl } from './imageRefs.js';
 import { createWorldTextureFactory } from './worldTextures.js';
-import { formatHistoryQuestionChip, historyAtlasFrameBounds, historyOrbitMarkerScale, historyOrbitPositions, historyPinColorRole, historySurfaceVisibility, historyYearToAtlasX, historyZoomPresentation, historyZoomStage, isHeldHistorySuggestion, isPendingHistoryEvent, layoutHistoryPins, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../historyAtlas.js';
+import { afroEurasiaFacingVector, formatHistoryQuestionChip, historyAtlasFrameBounds, historyOrbitMarkerScale, historyOrbitPositions, historyPinCentroid, historyPinColorRole, historySurfaceVisibility, historyYearToAtlasX, historyZoomPresentation, historyZoomStage, isHeldHistorySuggestion, isPendingHistoryEvent, layoutHistoryPins, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../historyAtlas.js';
 import { buildHistorySceneRecords, projectHistorySpineGeometry } from '../historySpines.js';
 import { projectGeographyLocation } from '../terrainRaster.js';
 import { clusterOpacityAtPresentation, orbitClusteredIdsForPresentation, planWorldClusters } from './clusters.js';
@@ -558,6 +558,8 @@ export function createAtlasScene(container, {
   const visibleKeyboardWorldIds = new Set();
   const expandedQuestionIds = new Set();
   let fanOffsets = new Map(), fanRegion = null;
+  let historyFocusVector = null;
+  let historyFocusPinSignature = '';
   let orbitQuestionParentPosition = null, orbitQuestionParentQuestion = null;
   let stageFrameLevel = '', stageFrameWindow = [];
   let drag = null, pinchGesture = null;
@@ -995,7 +997,10 @@ export function createAtlasScene(container, {
     orbitQuestionParent.userData.question = orbitQuestionParentQuestion;
     orbitQuestionParent.visible = !historyProjection && Boolean(orbitQuestionParentPosition && orbitQuestionParentQuestion);
     orbitQuestionHalo.visible = orbitQuestionParent.visible;
-    const currentFacing = current ? surfaceFacingOrientation(projectedGlobe(current)) : { yaw: 0, pitch: 0 };
+    const currentFacing = historyProjection && historyFocusVector
+      ? surfaceFacingOrientation(historyFocusVector)
+      : current ? surfaceFacingOrientation(projectedGlobe(current))
+        : surfaceFacingOrientation(afroEurasiaFacingVector());
     surfaceFacingAngle = currentFacing.yaw;
     surfaceFacingPitch = currentFacing.pitch;
     earthMesh.userData.worldId = current?.id ?? null;
@@ -2456,6 +2461,8 @@ export function createAtlasScene(container, {
       container.removeAttribute?.('data-history-spine-segment-count');
       container.removeAttribute?.('data-history-question-chip-count');
       historyGeometry = null; historyOrbitEnabled = false;
+      historyFocusVector = null;
+      historyFocusPinSignature = '';
       historySpineThreads.visible = false; historySpineThreads.material.opacity = 0;
       historySpineTubes.visible = false;
       for (const tube of historySpineTubes.children) tube.material.opacity = 0;
@@ -2475,12 +2482,17 @@ export function createAtlasScene(container, {
     const nextQuestionId = String(projection.questionId);
     const nextHistoryId = String(projection.historyId);
     const enteringHistory = !historyProjection;
-    if (enteringHistory || String(historyProjection.questionId) !== nextQuestionId
-      || String(historyProjection.historyId) !== nextHistoryId) clearSceneHover();
-    if (enteringHistory) {
-      legacySnapshot = { worlds, questions, currentId };
+    const changingHistory = enteringHistory || String(historyProjection.questionId) !== nextQuestionId
+      || String(historyProjection.historyId) !== nextHistoryId;
+    const nextFocusPinSignature = JSON.stringify((projection.activeHistory?.events || projection.pins).map(event => String(event.id)));
+    const refocusHistory = changingHistory || nextFocusPinSignature !== historyFocusPinSignature;
+    if (changingHistory) clearSceneHover();
+    if (refocusHistory) {
+      if (enteringHistory) legacySnapshot = { worlds, questions, currentId };
       zoom = 0; surfaceDetailZoom = 0; panOffset.set(0, 0);
       rotation = 0; rotationPitch = 0;
+      historyFocusVector = null;
+      historyFocusPinSignature = nextFocusPinSignature;
     }
     historyProjection = projection;
     const questionId = nextQuestionId;
@@ -2534,7 +2546,17 @@ export function createAtlasScene(container, {
     container.dataset.historySpineNodeCount = String(spineLayout.nodes?.length || 0);
     container.dataset.historySpineSegmentCount = String(spineLayout.segments?.length || 0);
     container.dataset.historyQuestionChipCount = String(spineLayout.chips?.length || 0);
-    updateLayout(); drawCurrentMarker(); applyZoom(zoom, false);
+    updateLayout();
+    if (refocusHistory) {
+      const canonicalSurfacePins = entries.map(entry => ({
+        world:entry.world,
+        globe:projectedGlobe(entry),
+      })).filter(entry => entry.world?.visualKind === 'history-event');
+      historyFocusVector = historyPinCentroid(canonicalSurfacePins, afroEurasiaFacingVector());
+      const facing = surfaceFacingOrientation(historyFocusVector);
+      surfaceFacingAngle = facing.yaw; surfaceFacingPitch = facing.pitch;
+    }
+    drawCurrentMarker(); applyZoom(zoom, false);
     return true;
   }
 

@@ -5,6 +5,13 @@ const windowFor = year => {
   return year < 0 ? { fromYear: -(era + 1) * 1000, toYear: -(era * 1000 + 1) }
     : { fromYear: era * 1000 + 1, toYear: (era + 1) * 1000 };
 };
+const canonicalEvents = history => (history?.events || [])
+  .filter(event => event?.id != null && Number.isSafeInteger(event.year) && event.year !== 0)
+  .slice().sort((a, b) => a.year - b.year);
+const eventAtOrBefore = (history, year) => {
+  const events = canonicalEvents(history);
+  return events.filter(event => event.year <= year).at(-1) || events[0] || null;
+};
 
 export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setTimeout, clearTimer = clearTimeout,
   onChange = () => {}, debounceMs = 800 } = {}) {
@@ -272,6 +279,19 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
         state.suggestions = (state.history.suggestions || []).filter(item => item.window?.fromYear === identity.window.fromYear && item.window?.toYear === identity.window.toYear);
         state.status = '';
       }
+      if (!forkedHistory && data.cached !== true && ['/api/history/weave', '/api/history/weave-batch'].includes(path)) {
+        const previousEventIds = new Set((priorHistory?.events || []).map(event => String(event.id)));
+        const newestWoven = canonicalEvents(state.history).filter(event => !previousEventIds.has(String(event.id))).at(-1);
+        if (newestWoven && newestWoven.year > state.date) {
+          state.date = newestWoven.year;
+          state.selectedEventId = newestWoven.id;
+          context.date = newestWoven.year;
+          context.eventId = newestWoven.id;
+          context.window = windowFor(newestWoven.year);
+          state.window = { ...context.window };
+          updateWindowSuggestions();
+        }
+      }
       if (forkedHistory && state.autoSuggest && !state.windowCached && !state.suggestions.length) scheduleSuggest();
       return data;
     } catch (error) { if (isCurrent(token, identity)) state.status = error.message || 'Could not update history.'; return null; }
@@ -437,35 +457,30 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     else { const token = generation; emit(); loadHistory(next, token); }
   }
   function selectHistory(historyId) {
-    if (!state.questionId || !historyId || !Number.isSafeInteger(state.date)) return;
-    const history = state.histories.find(item => item.id === historyId);
-    const selectedExists = history?.events?.some(item => item.id === state.selectedEventId);
-    const latest = [...(history?.events || [])].filter(item => item.year <= state.date).sort((a,b) => a.year-b.year).at(-1);
-    setContext({ questionId: state.questionId, historyId, eventId: selectedExists ? state.selectedEventId : latest?.id || '', date: state.date, readOnly:true });
+    if (!state.questionId || !historyId) return;
+    if (String(historyId) === String(state.historyId)) return;
+    openHistory(state.questionId, historyId);
   }
   function selectQuestion(questionId) {
-    if (!questionId || !Number.isSafeInteger(state.date) || questionId === state.questionId) return;
-    const question = state.questions.find(item => item.id === questionId);
-    const histories = question?.histories || [];
-    if (!question || !histories.length) return;
-    const history = histories.find(item => item.events?.some(event => event.id === state.selectedEventId)) || histories[0];
-    const sameEvent = history.events?.find(event => event.id === state.selectedEventId && event.year <= state.date);
-    const latest = [...(history.events || [])].filter(event => event.year <= state.date).sort((a,b) => a.year-b.year).at(-1);
-    setContext({ questionId, historyId:history.id, eventId:sameEvent?.id || latest?.id || '', date:state.date, readOnly:true });
+    if (!questionId || questionId === state.questionId) return;
+    openQuestion(questionId);
+  }
+  function openHistory(questionId, historyId) {
+    const question = state.questions.find(item => String(item.id) === String(questionId));
+    const history = question?.histories?.find(item => String(item.id) === String(historyId));
+    if (!question || !history) return false;
+    const events = canonicalEvents(history);
+    const date = events.at(-1)?.year
+      ?? (!history.events?.length && Number.isSafeInteger(question.divergenceYear) && question.divergenceYear !== 0 ? question.divergenceYear : null);
+    if (!Number.isSafeInteger(date) || date === 0) return false;
+    setContext({ questionId:question.id, historyId:history.id, eventId:events.at(-1)?.id || '', date, readOnly:true });
+    return true;
   }
   function openQuestion(questionId) {
     const question = state.questions.find(item => item.id === questionId);
     const histories = question?.histories || [];
     if (!question || !histories.length) return false;
-    const history = histories[0];
-    const availableYears = (history.events || []).map(event => event.year).filter(year => Number.isSafeInteger(year) && year !== 0).sort((a,b) => a-b);
-    const date = Number.isSafeInteger(state.date) ? state.date
-      : Number.isSafeInteger(question.divergenceYear) && question.divergenceYear !== 0 ? question.divergenceYear
-        : availableYears.at(-1);
-    if (!Number.isSafeInteger(date) || date === 0) return false;
-    const latest = [...(history.events || [])].filter(event => event.year <= date).sort((a,b) => a.year-b.year).at(-1);
-    setContext({ questionId, historyId:history.id, eventId:latest?.id || '', date, readOnly:true });
-    return true;
+    return openHistory(questionId, histories[0].id);
   }
   function setQuestions(questions) {
     if (!Array.isArray(questions)) return;
@@ -539,7 +554,8 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   }
   function setDate(date) {
     if (!state.questionId || !state.historyId || !Number.isSafeInteger(date) || date === 0) return;
-    setContext({ questionId: state.questionId, historyId: state.historyId, eventId: state.selectedEventId, date });
+    const event = eventAtOrBefore(state.history, date);
+    setContext({ questionId: state.questionId, historyId: state.historyId, eventId: event?.id || '', date });
   }
   function setHeldSuggestionIds(ids = []) {
     if (!Array.isArray(ids) && !(ids instanceof Set)) return false;
@@ -567,7 +583,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   readPreferences();
   return { getState: () => ({ ...state, suggestions: [...state.suggestions], heldSuggestionIds: [...state.heldSuggestionIds], busyIds: new Set(state.busyIds) }),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-     setContext, selectHistory, selectQuestion, openQuestion, setQuestions, updateMediaReference, selectEvent, selectSuggestion, selectRecord, selectSuggestionWindow, setDate, setHeldSuggestionIds, clear, hover,
+    setContext, selectHistory, selectQuestion, openHistory, openQuestion, setQuestions, updateMediaReference, selectEvent, selectSuggestion, selectRecord, selectSuggestionWindow, setDate, setHeldSuggestionIds, clear, hover,
     setAutoSuggest: persistPreference, setAutoWeave: persistAutoWeave, finalizePendingBatch, removePendingEvent,
     suggest: () => requestSuggestions(false), more: () => requestSuggestions(true),
     weave: suggestionId => mutate('/api/history/weave', { suggestionId }, `suggestion:${suggestionId}`),

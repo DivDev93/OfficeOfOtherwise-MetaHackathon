@@ -185,7 +185,7 @@ test('active history mode drives the real timeline, timebar and Atlas without se
   assert.equal(app.ui.state().historyAtlasView.surfaceGeography.seaLevelMeters, 0, 'reset restores the selected date’s composed baseline');
   app.ui.setHistoryDateForTest(-1200);
   assert.equal(app.ui.state().historyAtlasView.surfaceGeography.seaLevelMeters, 0);
-  assert.equal(app.get('hero-title').textContent, '900 CE · Rewritten coastal observatories', 'moving the date changes the history view but keeps the selected event sheet');
+  assert.equal(app.get('hero-title').textContent, '1200 BCE · Observatory traditions begin', 'moving the date selects the nearest canonical event sheet');
   assert.match(app.get('history-asof-header').textContent, /History as of 1200 BCE · 1 event/);
   const firstEventTick = findNode(app.get('history-timebar-host'), node => node?.dataset?.eventId === 'event-bce');
   assert.ok(firstEventTick);
@@ -620,7 +620,7 @@ test('automatic saved media completing during a temporary event preview updates 
   assert.equal(app.ui.state().history.selectedEventId,selected.id);
 });
 
-test('history spines switch questions and sibling histories at the retained date without generation', async () => {
+test('history spines open sibling histories and questions at their latest events without generation', async () => {
   const makeHistory = (id, events) => ({ id, events, suggestions:[], suggestionWindows:[] });
   const questions = [
     { id:'question-one', title:'Question one', divergenceYear:400, histories:[
@@ -649,12 +649,12 @@ test('history spines switch questions and sibling histories at the retained date
   assert.equal(app.ui.state().previewHidden,false,'Atlas hover opens a metadata preview');
   app.starMap.options.onHistorySelect('history-one-sibling',{date:650,questionId:'question-one',source:'pointer'});
   assert.equal(app.ui.state().history.historyId,'history-one-sibling');
-  assert.equal(app.ui.state().history.date,650);
+  assert.equal(app.ui.state().history.date,600,'opening the sibling history selects its latest canonical event');
   app.starMap.options.onQuestionSelect('question-two',{source:'pointer'});
   assert.equal(app.ui.state().history.questionId,'question-two');
   assert.equal(app.ui.state().previewHidden,true,'switching questions clears a preview owned by the previous spine');
-  assert.equal(app.ui.state().history.date,650);
-  assert.equal(app.ui.state().history.selectedEventId,'two-old');
+  assert.equal(app.ui.state().history.date,800);
+  assert.equal(app.ui.state().history.selectedEventId,'two-latest');
   assert.equal(app.ui.state().historyAtlasView.activeQuestionId,'question-two');
   assert.equal(app.ui.state().historyAtlasView.showOrbit,false,'Orbit remains opt-in');
   assert.equal(orbitToggle.hidden,true,'Orbit level is unavailable for a question with one history');
@@ -812,6 +812,48 @@ test('native history URL reopens the exact question, history, date and event wit
   assert.equal(app.location.hash,hash);
   assert.deepEqual(app.posts,[],'canonical reload only reads persisted history and event media refs');
   assert.equal(app.ui.state().historyMode,true);
+});
+
+test('native history URL without a date opens the saved history at its latest canonical event', async () => {
+  const older = {id:'event-older',year:700,title:'Canopy markers',place:{name:'Sahara',lat:20,lon:10},sceneRef:'/event-scenes/'+'a'.repeat(64)+'.png'};
+  const latest = {id:'event-latest',year:900,title:'Canopy observatories',place:{name:'Sahara',lat:20,lon:10},sceneRef:'/event-scenes/'+'b'.repeat(64)+'.png'};
+  const history = {id:'history-date-less',events:[older,latest],suggestions:[],suggestionWindows:[]};
+  const question = {id:'question-date-less',question:'What if observatories spread?',title:'Observatories',histories:[history]};
+  const app = harness({}, undefined, false, `#question=${question.id}&history=${history.id}`, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, undefined, async url => url === '/api/histories' ? Response.json({questions:[question]}) : null);
+  await tick();
+  for (let i=0;i<12 && !app.ui.state().history.questionId;i++) await tick();
+  assert.equal(app.ui.state().history.questionId,question.id);
+  assert.equal(app.ui.state().history.historyId,history.id);
+  assert.equal(app.ui.state().history.date,latest.year);
+  assert.equal(app.ui.state().history.selectedEventId,latest.id);
+  assert.deepEqual(app.posts,[],'opening a date-less history link only reads saved state');
+});
+
+test('native history URL before the first event opens at that first event instead of an empty date', async () => {
+  const first = {id:'first-event',year:-500,title:'Lake markers',place:{name:'Sahara',lat:20,lon:10}};
+  const history = {id:'history-early-url',events:[first],suggestions:[],suggestionWindows:[]};
+  const question = {id:'question-early-url',question:'What if the Sahara stayed green?',title:'Green Sahara',histories:[history]};
+  const hash = `#question=${question.id}&history=${history.id}&date=-1000&event=missing-event`;
+  const app = harness({}, undefined, false, hash, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, undefined, async url => url === '/api/histories' ? Response.json({questions:[question]}) : null);
+  await tick();
+  for (let i=0;i<12 && !app.ui.state().history.questionId;i++) await tick();
+  assert.equal(app.ui.state().history.date,first.year);
+  assert.equal(app.ui.state().history.selectedEventId,first.id);
+  assert.equal(app.ui.state().history.history.events.filter(event => event.year <= app.ui.state().history.date).length,1);
+});
+
+test('Earth surface card stays collapsed until its chip is activated', () => {
+  const app = harness({});
+  const content = app.get('geography-content'), toggle = app.get('geography-toggle');
+  content.hidden = true; toggle.setAttribute('aria-expanded','false');
+  toggle.click();
+  assert.equal(content.hidden,false);
+  assert.equal(toggle.getAttribute('aria-expanded'),'true');
+  toggle.click();
+  assert.equal(content.hidden,true);
+  assert.equal(toggle.getAttribute('aria-expanded'),'false');
 });
 
 test('canceling a new-history draft returns to the selected saved event without changing date, hash or media', async () => {

@@ -44,8 +44,9 @@ function erasFor(events) {
   for (const event of ordered(events)) {
     const namedEra = typeof event.era === 'string' && event.era.trim() && !/^Era(?: \d+ · |$)/.test(event.era.trim());
     const label = namedEra ? event.era.trim() : labels.get(event.id) || 'Era';
+    const identity = label.normalize('NFKC').toLowerCase().replace(/\s*(?:era|period)\s*$/i, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
     let group = groups.at(-1);
-    if (!group || group.label !== label) groups.push(group = { label, events: [] });
+    if (!group || group.identity !== identity) groups.push(group = { label, identity, events: [] });
     group.events.push(event);
   }
   return groups;
@@ -73,6 +74,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   const openEras = new Map();
   const suggestionDetailOpen = new Map();
   const batchSelections = new Map();
+  let suggestionMoreOpen = false;
   const seenBatchSuggestions = new Map();
   const deckState = createHistoryDeckState();
   const deckViews = new Map(), deckCurrentIds = new Map(), deckEmptyPrompted = new Map(), deckPassedExpanded = new Map();
@@ -114,7 +116,12 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     galleryExpanded = open;
     render(getState?.() || {});
     if (open) suggestions.scrollIntoView?.({block:'nearest'});
-    findAction(suggestions,'toggle-gallery')?.focus?.({preventScroll:true});
+    if (open) findAction(suggestions,'toggle-gallery')?.focus?.({preventScroll:true});
+    else {
+      const moreSummary=suggestions.querySelector?.('.history-suggestion-more > summary')
+        || suggestions.queryAll?.('summary').find(item=>item.parentNode?.className==='history-suggestion-more');
+      moreSummary?.focus?.({preventScroll:true});
+    }
   };
   const inspectSuggestion = id => {
     onEventSelect(id);
@@ -352,7 +359,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
         input.checked = node.dataset.action === 'batch-select-all' && index < 32;
         if (input.checked) selected.add(input.dataset.batchSuggestion); else selected.delete(input.dataset.batchSuggestion);
       }
-      batchSelections.set(batchScope, selected); batchNotice = node.dataset.action === 'batch-select-all' && eligible.length > 32 ? 'Select up to 32 suggestions to weave at once.' : '';
+      batchSelections.set(batchScope, selected);
+      batchNotice = node.dataset.action === 'batch-select-all' && eligible.length > 32 ? 'Select up to 32 suggestions to weave at once.' : '';
       render(getState?.() || {});
     }
     else if (node.dataset.action === 'batch-preview') await openBatchPreview();
@@ -439,7 +447,11 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     batchPreviewState.plan = null; batchPreviewState.error = '';
     portalBatchPreview(false);
     render(getState?.() || {});
-    if (batchPreviewState.source==='deck') findAction(suggestions,'deck-review-kept')?.focus?.({preventScroll:true});
+    if (batchPreviewState.source==='deck') {
+      const portalMenuSummary=deckPortal.querySelector?.('.history-suggestion-more > summary')
+        || deckPortal.queryAll?.('summary').find(item=>item.parentNode?.className==='history-suggestion-more');
+      portalMenuSummary?.focus?.({preventScroll:true});
+    }
     else findAction(suggestions,'batch-preview')?.focus?.({preventScroll:true});
   }
   async function commitBatchPreview() {
@@ -705,14 +717,17 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       timeline.append(keepAll);
     }
     for (const era of erasFor(active.events)) {
-      const eraKey = `${active.id}:${era.events[0]?.id || era.label}`;
-      const details = make(document, 'details', null, 'history-era');
-      if (selectionChanged && era.events.some(item => String(item.id) === String(selected))) openEras.set(eraKey,true);
-      details.open = openEras.has(eraKey) ? openEras.get(eraKey) : era.events.some(item => item.id === selected);
-      details.addEventListener('toggle', () => openEras.set(eraKey, details.open));
-      const summary = make(document, 'summary');
-      summary.append(make(document, 'strong', era.label), make(document, 'small', `${labelYear(era.events[0].year)}–${labelYear(era.events.at(-1).year)} · ${era.events.length} event${era.events.length === 1 ? '' : 's'}`));
-      details.append(summary);
+      const singleton = era.events.length === 1;
+      const eraNode = singleton ? null : make(document, 'details', null, 'history-era');
+      if (eraNode) {
+        const eraKey = `${active.id}:${era.events[0]?.id || era.label}`;
+        if (selectionChanged && era.events.some(item => String(item.id) === String(selected))) openEras.set(eraKey,true);
+        eraNode.open = openEras.has(eraKey) ? openEras.get(eraKey) : era.events.some(item => item.id === selected);
+        eraNode.addEventListener('toggle', () => openEras.set(eraKey, eraNode.open));
+        const summary = make(document, 'summary');
+        summary.append(make(document, 'strong', era.label), make(document, 'small', `${labelYear(era.events[0].year)}–${labelYear(era.events.at(-1).year)} · ${era.events.length} events`));
+        eraNode.append(summary);
+      }
       const list = make(document, 'ol', null, 'history-era-events');
       for (const item of era.events) {
         const row = make(document, 'li', null, 'history-event-row'); row.dataset.eventId = item.id;
@@ -754,7 +769,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
         }
         row.append(button('What if instead…', 'fork-event', item.id)); list.append(row);
       }
-      details.append(list); timeline.append(details);
+      if (eraNode) { eraNode.append(list); timeline.append(eraNode); }
+      else timeline.append(list);
     }
     const dateText = activeDate ? labelYear(activeDate) : 'this date';
     const wovenIds = new Set((active.events || []).map(item=>String(item.id)));
@@ -788,55 +804,56 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     suggestions.setAttribute('aria-label', startingPoints ? `Starting points · ${savedSuggestions.length} in this timeline` : `All ${savedSuggestions.length} saved suggestions in this timeline`); suggestions.append(heading,subheading);
     const controls = make(document, 'div', null, 'history-suggestion-controls');
     const listMode = button('List','deck-mode-list','list'); listMode.setAttribute('aria-pressed',String(deckView==='list'));
-    const deckMode = button(`Deck · ${deckReview.unreviewedIds.length}`,'deck-mode-deck','deck'); deckMode.setAttribute('aria-pressed',String(deckView==='deck'));
+    const deckMode = button('Deck','deck-mode-deck','deck'); deckMode.setAttribute('aria-pressed',String(deckView==='deck'));
+    deckMode.setAttribute('aria-label',`Review ${deckReview.unreviewedIds.length} unreviewed suggestions as a deck`);
     controls.append(listMode,deckMode);
+    const selectedCount = selectedSuggestionIds.size;
+    const batchBusy = (state.busyIds?.size || 0) > 0;
+    const weaveBatch = button(state.busyIds?.has?.('batch-check') ? 'Checking…' : state.busyIds?.has?.('weave-batch') ? 'Weaving…' : `Weave selected (${selectedCount})`,'batch-preview','batch-weave');
+    weaveBatch.setAttribute('aria-label',state.busyIds?.has?.('batch-check') ? 'Checking selected suggestions' : state.busyIds?.has?.('weave-batch') ? 'Weaving selected suggestions into history' : `Weave ${selectedCount} selected suggestions into history`);
+    weaveBatch.setAttribute('aria-controls',batchPreview.id); weaveBatch.setAttribute('aria-expanded',String(batchPreviewState.open));
+    weaveBatch.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size || selectedCount === 0;
+    controls.append(weaveBatch);
+    const moreDate = button(`More around ${dateText}`,state.windowCached ? 'manual-more' : 'manual-suggest','current-window');
+    moreDate.setAttribute('aria-label',`Find more suggestions around ${dateText}`);
+    moreDate.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size;
+    controls.append(moreDate);
+    const moreMenu = make(document,'details',null,'history-suggestion-more');
+    moreMenu.open = suggestionMoreOpen;
+    moreMenu.addEventListener('toggle',()=>{ suggestionMoreOpen=moreMenu.open; });
+    const moreSummary = make(document,'summary','⋯'); moreSummary.setAttribute('aria-label','More suggestion controls');
+    moreMenu.append(moreSummary);
+    const moreActions = make(document,'div',null,'history-suggestion-more-actions'); moreMenu.append(moreActions);
     const keepAllFits = button('Keep all fits','deck-keep-all-fits','keep-all');
     keepAllFits.hidden=deckView==='deck';
     keepAllFits.disabled = !savedSuggestions.some(item=>!deckReview.keptIds.includes(String(item.id))&&item.verdict==='fits'&&!item.conflictsWith)
       || deckReview.keptIds.length>=deckState.maxKept;
-    controls.append(keepAllFits);
+    moreActions.append(keepAllFits);
     const reviewKept = button(`Review ${deckReview.keptIds.length} kept`,'deck-review-kept','review-kept');
     reviewKept.hidden=deckView==='deck';
     reviewKept.disabled = !deckReview.keptIds.length || !!state.busyIds?.size;
-    controls.append(reviewKept);
+    moreActions.append(reviewKept);
     const undoDeck = button('Undo last','deck-undo','undo');
     undoDeck.hidden=deckView==='deck';
     undoDeck.disabled = !owner.questionId || !owner.historyId || !savedSuggestions.length || !deckState.canUndo(owner);
-    controls.append(undoDeck);
+    moreActions.append(undoDeck);
     const autoLabel = make(document, 'label', null, 'history-auto-label');
     const autoToggle = make(document, 'input'); autoToggle.type = 'checkbox'; autoToggle.checked = state.autoSuggest !== false; autoToggle.dataset.autoSuggest = 'true';
     autoToggle.setAttribute('aria-label', 'Automatically suggest events after changing date');
-    autoLabel.append(autoToggle, document.createTextNode(' Auto-suggest')); controls.append(autoLabel);
+    autoLabel.append(autoToggle, document.createTextNode(' Auto-suggest')); moreActions.append(autoLabel);
     const autoWeaveLabel = make(document,'label',null,'history-auto-label');
     const autoWeaveToggle = make(document,'input'); autoWeaveToggle.type = 'checkbox'; autoWeaveToggle.checked = state.autoWeave === true; autoWeaveToggle.dataset.autoWeave = 'true';
     autoWeaveToggle.setAttribute('aria-label','Automatically weave new fitting suggestions after they are checked');
-    autoWeaveLabel.append(autoWeaveToggle,document.createTextNode(' Auto-weave what fits')); controls.append(autoWeaveLabel);
-    if (!state.windowCached && !(state.suggestions || []).length) controls.append(button(state.autoSuggest === false ? `Suggest events around ${dateText}` : `Suggest events now around ${dateText}`, 'manual-suggest', 'current-window'));
-    controls.queryAll?.('button').forEach(node => { node.disabled = !!state.loading || !!state.paused; });
-    suggestions.append(controls);
-    const batchBusy = (state.busyIds?.size || 0) > 0;
-    const batchChecking = state.busyIds?.has?.('batch-check') || false;
-    const batchWeaving = state.busyIds?.has?.('weave-batch') || false;
-    const selectedCount = selectedSuggestionIds.size;
-    const tray = make(document,'div',null,'history-weave-tray');
+    autoWeaveLabel.append(autoWeaveToggle,document.createTextNode(' Auto-weave what fits')); moreActions.append(autoWeaveLabel);
     const selectAll = button('Select all','batch-select-all','batch-all');
     const selectNone = button('Select none','batch-select-none','batch-none');
-    selectAll.disabled = !!state.loading || !!state.paused || !!batchBusy || selectedCount >= 32;
-    selectNone.disabled = !!state.loading || !!state.paused || !!batchBusy || selectedCount === 0;
-    tray.append(selectAll,selectNone);
-    const weaveBatch = button(batchChecking ? 'Checking…' : batchWeaving ? 'Weaving…' : `Weave ${selectedCount}`,'batch-preview','batch-weave');
-    weaveBatch.setAttribute('aria-label',batchChecking ? 'Checking selected suggestions' : batchWeaving ? 'Weaving selected suggestions into history' : `Weave ${selectedCount} selected suggestions into history`);
-    weaveBatch.setAttribute('aria-controls',batchPreview.id); weaveBatch.setAttribute('aria-expanded',String(batchPreviewState.open));
-    weaveBatch.disabled = !!state.loading || !!state.paused || !!batchBusy || selectedCount === 0;
-    tray.append(weaveBatch);
-    if (state.windowCached) {
-      const more = button(`More · ${dateText}`,'manual-more','current-window');
-      more.setAttribute('aria-label',`Find more suggestions around ${dateText}`);
-      more.disabled = !!state.loading || !!state.paused || !!batchBusy;
-      tray.append(more);
-    }
-    if (batchNotice) tray.append(make(document,'span',batchNotice,'history-weave-tray-notice'));
-    suggestions.append(tray);
+    selectAll.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size || selectedCount >= 32;
+    selectNone.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size || selectedCount === 0;
+    moreActions.append(selectAll,selectNone);
+    controls.append(moreMenu);
+    controls.queryAll?.('button').forEach(node => { node.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size; });
+    suggestions.append(controls);
+    if (batchNotice) suggestions.append(make(document,'p',batchNotice,'history-weave-tray-notice'));
     const cachedWindows = new Map();
     for (const item of active.suggestionWindows || []) {
       const key = `${item.window.fromYear}:${item.window.toYear}`; cachedWindows.set(key, { ...item, count:item.suggestionCount || 0 });
@@ -862,16 +879,18 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
         if (currentWindow) chip.className += ' is-active-window';
         jumps.append(chip);
       }
-      suggestions.append(jumps);
+      moreActions.append(jumps);
     }
     const visibleSuggestions = savedSuggestions;
     if (!visibleSuggestions.length) suggestions.append(make(document, 'p', savedSuggestions.length ? 'No saved suggestions in this window.' : state.status || (state.autoSuggest ? 'No saved suggestions yet.' : `Use “Suggest events around ${dateText}” to explore this timeline.`), 'history-session-status'));
     else if (state.status) suggestions.append(make(document, 'p', state.status, 'history-session-status'));
-    const galleryActions = make(document,'div',null,'history-gallery-actions');
     const expandGallery = button(galleryExpanded ? 'Close expanded gallery' : 'Expand gallery','toggle-gallery','gallery');
     expandGallery.setAttribute('aria-expanded',String(galleryExpanded));
     expandGallery.setAttribute('aria-label',galleryExpanded ? 'Close expanded suggestion gallery' : 'Expand suggestions into a comparison board');
-    galleryActions.append(expandGallery); suggestions.append(galleryActions);
+    if (galleryExpanded) {
+      const galleryActions=make(document,'div',null,'history-gallery-actions');
+      galleryActions.append(expandGallery); suggestions.append(galleryActions);
+    } else moreActions.append(expandGallery);
     const groups = new Map();
     for (const item of cachedWindows.values()) groups.set(`${item.window.fromYear}:${item.window.toYear}`,{window:item.window,items:[]});
     for (const item of visibleSuggestions) {
@@ -958,14 +977,15 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     if (orderedGroups.length) suggestions.append(groupList);
     if (deckView === 'deck') {
       suggestions.classList?.add('history-deck-active');
-      groupList.hidden = true; galleryActions.hidden = true;
+      groupList.hidden = true;
       deckPortal.replaceChildren(); deckPortal.hidden = false;
       positionDeckPortal();
       const deckHeader=make(document,'div',null,'history-deck-header');
       deckHeader.append(make(document,'strong',`Review suggestions · ${deckReview.unreviewedIds.length} left`));
-      deckHeader.append(button('Back to list','deck-list','list'));
-      deckPortal.append(deckHeader);
-      const portalActions=make(document,'div',null,'history-deck-shortcuts');
+      const portalMore=make(document,'details',null,'history-suggestion-more');
+      const portalMoreSummary=make(document,'summary','⋯'); portalMoreSummary.setAttribute('aria-label','More deck review controls');
+      portalMore.append(portalMoreSummary);
+      const portalMoreActions=make(document,'div',null,'history-suggestion-more-actions'); portalMore.append(portalMoreActions);
       const portalKeepAll=button('Keep all fits','deck-keep-all-fits','keep-all');
       portalKeepAll.disabled=!savedSuggestions.some(item=>!deckReview.keptIds.includes(String(item.id))&&item.verdict==='fits'&&!item.conflictsWith)
         ||deckReview.keptIds.length>=deckState.maxKept;
@@ -973,7 +993,10 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       portalReview.disabled=!deckReview.keptIds.length||!!state.busyIds?.size;
       const portalUndo=button('Undo last','deck-undo','undo');
       portalUndo.disabled=!owner.questionId||!owner.historyId||!savedSuggestions.length||!deckState.canUndo(owner);
-      portalActions.append(portalKeepAll,portalReview,portalUndo); deckPortal.append(portalActions);
+      portalMoreActions.append(portalKeepAll,portalReview,portalUndo);
+      deckHeader.append(portalMore);
+      deckHeader.append(button('Back to list','deck-list','list'));
+      deckPortal.append(deckHeader);
       const currentId=deckCurrentIds.get(batchScope);
       const currentItem=savedSuggestions.find(item=>String(item.id)===currentId&&deckReview.unreviewedIds.includes(String(item.id)))
         || savedSuggestions.find(item=>deckReview.unreviewedIds.includes(String(item.id)));
@@ -999,7 +1022,6 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
         if (meaningfulReason) cardContent.append(make(document,'p',reason,'history-deck-reason'));
         const cardActions=make(document,'div',null,'history-deck-actions');
         cardActions.append(button('Not now','deck-pass',currentItem.id,{swipeIgnore:'true'}),button('Keep','deck-keep',currentItem.id,{swipeIgnore:'true'}));
-        cardActions.append(conflict?button('What if','deck-fork',currentItem.id,{swipeIgnore:'true'}):button('Weave','deck-weave',currentItem.id,{swipeIgnore:'true'}));
         cardContent.append(cardActions); card.append(cardContent); deckPortal.append(card);
         deckPortal.append(make(document,'p','Swipe right or press → to keep. Swipe left or press ← for Not now.','history-deck-help'));
       }
@@ -1027,10 +1049,12 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     }
     if (selectionChanged) {
       const selectedEra = timeline.queryAll?.('details').find(details => details.queryAll?.('button').some(button => button.dataset.action === 'select-event' && button.dataset.id === state.selectedEventId));
+      const selectedRow = timeline.queryAll?.('li').find(item => String(item.dataset.eventId) === String(state.selectedEventId));
       if (selectedEra) {
         selectedEra.open = true;
-        const row = selectedEra.queryAll?.('li').find(item => item.dataset.eventId === state.selectedEventId);
-        row?.scrollIntoView?.({block:'nearest'});
+        selectedRow?.scrollIntoView?.({block:'nearest'});
+      } else if (selectedRow) {
+        selectedRow.scrollIntoView?.({block:'nearest'});
       } else {
         const card = suggestions.queryAll?.('article').find(item => item.dataset.suggestionId === state.selectedEventId);
         card?.scrollIntoView?.({block:'nearest'});

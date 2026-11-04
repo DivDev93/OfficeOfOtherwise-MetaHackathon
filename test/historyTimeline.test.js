@@ -48,7 +48,7 @@ const question = { id:'q', title:'The question', histories:[
 ] };
 
 test('timeline groups eras, lists cause links, per-flag ripple controls, fork actions and suggestions', async () => {
-  const state = { question, history:question.histories[0], histories:question.histories, historyId:'h1', selectedEventId:'e3', date:-1000, window:{ fromYear:-1500,toYear:-501 }, autoSuggest:true,
+  const state = { question, history:question.histories[0], histories:question.histories, historyId:'h1', selectedEventId:'e2', date:-1000, window:{ fromYear:-1500,toYear:-501 }, autoSuggest:true,
     suggestions:[{ id:'s1', year:-900, title:'Canal network', summary:'It connects wetlands.', verdict:'fits', reason:'Fits beside the dry season.' },
       { id:'s2', year:-850, title:'Rain returns', summary:'A conflicting possibility.', verdict:'conflicts', conflictsWith:'e3', reason:'Would reverse the dry spell.' }] };
   const root = new Element('main', document), calls = [];
@@ -62,10 +62,10 @@ test('timeline groups eras, lists cause links, per-flag ripple controls, fork ac
   assert.match(mounted.element.textContent, /Fits beside the dry season/);
   assert.match(mounted.element.textContent, /Would reverse the dry spell/);
   const timeline = mounted.element.children[1], suggestions = mounted.element.children[2];
-  const details = timeline.queryAll('details').find(item=>item.queryAll('button').some(button=>button.dataset.id==='e3'));
+  const details = timeline.queryAll('details').find(item=>item.queryAll('button').some(button=>button.dataset.id==='e2'));
   assert.equal(details.open, true, 'the selected event era opens on first view');
   details.open = false; details.listeners.toggle(); state.date = -950; mounted.render(state);
-  assert.equal(timeline.queryAll('details').find(item=>item.queryAll('button').some(button=>button.dataset.id==='e3')).open, false, 'manual era folding is preserved across date changes');
+  assert.equal(timeline.queryAll('details').find(item=>item.queryAll('button').some(button=>button.dataset.id==='e2')).open, false, 'manual era folding is preserved across date changes');
   const click = async (container, action, id) => container.listeners.click({ target:{ closest:() => ({ dataset:{ action, id, wovenId:'woven-1' } }) } });
   await click(timeline,'keep','e3'); await click(timeline,'regenerate','e3'); await click(timeline,'fork-event','e3');
   await click(suggestions,'weave','s1'); await click(suggestions,'fork-suggestion','s2');
@@ -83,13 +83,52 @@ test('timeline recomputes generated era ranges after an inserted event and prese
   assert.deepEqual(groupHistoryEras(events).map(group=>group.label), ['Era 1 · 1800 BCE–1000 BCE','Coastal observatories']);
 });
 
+test('near-equal era and period labels merge, while singleton event eras have no heading', () => {
+  const events = [
+    event('h1',-300,'Hellenistic start',{era:'Hellenistic Era'}),
+    event('h2',-250,'Hellenistic middle',{era:'Hellenistic Period',causeEventId:'h1'}),
+    event('r1',-100,'Republic event',{era:'Roman Republic',causeEventId:'h2'}),
+  ];
+  const groups=groupHistoryEras(events);
+  assert.deepEqual(groups.map(group=>group.events.map(item=>item.id)),[['h1','h2'],['r1']]);
+  const history={id:'eras',events,suggestions:[]};
+  const state={question:{id:'q-eras',histories:[history]},history,histories:[history],historyId:history.id,date:-100,selectedEventId:'r1',suggestions:[]};
+  const mounted=mountHistoryTimeline(new Element('main',document),{getState:()=>state,document});
+  const timeline=mounted.element.children[1];
+  assert.equal(timeline.queryAll('details').length,1,'only the two-event era has a disclosure header');
+  assert.equal(timeline.queryAll('ol').length,2,'the singleton event remains visible in a direct list');
+  assert.match(timeline.textContent,/Hellenistic Era/);
+  assert.ok(timeline.queryAll('li').some(row=>row.dataset.eventId==='r1'));
+  assert.doesNotMatch(timeline.textContent,/Roman Republic/,'a singleton has no era heading');
+});
+
+test('suggestion tray keeps only view, batch weave, and date actions visible', () => {
+  const history={id:'compact',events:[],suggestions:[],suggestionWindows:[{window:{fromYear:100,toYear:199},status:'ready',suggestionCount:1}]};
+  const suggestion={id:'compact-s',year:120,title:'Possibility',verdict:'fits',window:{fromYear:100,toYear:199}};
+  history.suggestions=[suggestion];
+  const state={question:{id:'q-compact',histories:[history]},history,histories:[history],historyId:history.id,date:150,window:{fromYear:100,toYear:199},windowCached:true,suggestions:[suggestion]};
+  const mounted=mountHistoryTimeline(new Element('main',document),{getState:()=>state,document});
+  const tray=mounted.element.children[2], visible=tray.children.find(node=>node.className==='history-suggestion-controls');
+  assert.ok(visible.queryAll('button').some(button=>button.dataset.action==='deck-mode-list'));
+  assert.ok(visible.queryAll('button').some(button=>button.dataset.action==='deck-mode-deck'));
+  assert.match(visible.queryAll('button').find(button=>button.dataset.action==='batch-preview').textContent,/Weave selected \(1\)/);
+  assert.match(visible.queryAll('button').find(button=>button.dataset.action==='manual-more').textContent,/More around/);
+  assert.equal(visible.children.some(node=>node.tagName==='button'&&node.dataset.action==='batch-select-all'),false,'selection shortcuts sit inside the ellipsis menu');
+  const menu=visible.children.find(node=>node.className==='history-suggestion-more');
+  assert.ok(menu.queryAll('button').some(button=>button.dataset.action==='batch-select-all'));
+  assert.ok(menu.queryAll('button').some(button=>button.dataset.action==='toggle-gallery'));
+  assert.ok(menu.queryAll('button').some(button=>button.dataset.action==='deck-keep-all-fits'));
+  assert.ok(menu.queryAll('button').some(button=>button.dataset.action==='deck-review-kept'));
+  assert.ok(menu.queryAll('button').some(button=>button.dataset.action==='suggest-window'));
+});
+
 test('all saved suggestion windows stay visible, window controls jump without moving date, and expanded board flattens chronologically', async () => {
   const firstWindow={fromYear:100,toYear:199}, secondWindow={fromYear:200,toYear:299};
   const first={id:'s-first',year:120,title:'First window',summary:'Saved first',reason:'Migrated from earlier exploration.',window:firstWindow,sceneRef:'/event-scenes/first.png'};
   const second={id:'s-second',year:220,title:'Second window',summary:'Saved second',window:secondWindow};
   const third={id:'s-third',year:240,title:'Later in second',summary:'Saved third',window:secondWindow,heroRef:{status:'complete',url:'/runs/old/hero.png'}};
   const alreadyWoven={id:'e-first',year:50,title:'Already woven duplicate',window:firstWindow};
-  const active={id:'gallery-history',events:[event('e-first',50,'Earlier',{era:'Early'}),event('e-selected',300,'Selected',{era:'Late'})],suggestions:[alreadyWoven,first,second,third],suggestionWindows:[
+  const active={id:'gallery-history',events:[event('e-first',50,'Earlier',{era:'Early'}),event('e-selected',300,'Selected',{era:'Early'})],suggestions:[alreadyWoven,first,second,third],suggestionWindows:[
     {window:firstWindow,status:'ready',suggestionCount:1},{window:secondWindow,status:'ready',suggestionCount:2},
   ]};
   const state={question:{id:'q-gallery',histories:[active]},history:active,histories:[active],historyId:active.id,selectedEventId:'e-first',date:150,window:firstWindow,suggestions:[first,alreadyWoven]};
@@ -177,14 +216,14 @@ test('batch preview resolves selected rows, reuses unchanged checks, toggles mer
   assert.equal(checks().find(input=>input.dataset.batchSuggestion==='fit-a').checked,false,'refresh rendering preserves an explicit deselection');
   const selectNone=suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-select-none');
   await suggestions.listeners.click({target:{closest:()=>selectNone}});
-  assert.equal(suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-preview').textContent,'Weave 0',
-    'Select none updates the tray through the native querySelectorAll path');
+  assert.equal(suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-preview').textContent,'Weave selected (0)',
+    'Select none updates the visible batch review action through the native querySelectorAll path');
   const selectAll=suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-select-all');
   await suggestions.listeners.click({target:{closest:()=>selectAll}});
-  assert.equal(suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-preview').textContent,'Weave 2',
-    'Select all updates the tray through the native querySelectorAll path');
+  assert.equal(suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-preview').textContent,'Weave selected (2)',
+    'Select all updates the visible batch review action through the native querySelectorAll path');
   const preview=suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-preview');
-  assert.equal(preview.textContent,'Weave 2');
+  assert.equal(preview.textContent,'Weave selected (2)');
   assert.equal(preview.getAttribute('aria-label'),'Weave 2 selected suggestions into history');
   await suggestions.listeners.click({target:{closest:()=>preview}});
   const panel=mounted.element.children[3], buttons=()=>panel.querySelectorAll('button[data-action]');
@@ -309,7 +348,7 @@ test('compact timeline keeps the batch action understandable with its short phon
     date:150,window:{fromYear:100,toYear:199},suggestions:[fit]};
   const mounted=mountHistoryTimeline(new Element('main',document),{getState:()=>state,isCompact:()=>true,document});
   const action=mounted.element.children[2].queryAll('button').find(button=>button.dataset.action==='batch-preview');
-  assert.equal(action.textContent,'Weave 1');
+  assert.equal(action.textContent,'Weave selected (1)');
   assert.equal(action.getAttribute('aria-label'),'Weave 1 selected suggestions into history');
 });
 
@@ -463,6 +502,7 @@ test('deck review keeps list selection separate, routes keyboard and button deci
   await tray.listeners.click({target:{closest:()=>mode}});
   let card=portal.queryAll('article').find(node=>node.dataset.swipeCard==='true');
   assert.equal(card.dataset.suggestionId,'deck-a','the deck starts with the first chronological unreviewed source');
+  assert.deepEqual(card.queryAll('button').map(node=>node.dataset.action),['deck-inspect','deck-pass','deck-keep'],'deck cards expose only inspection plus Not now and Keep decisions');
   assert.equal(card.queryAll('span').some(node=>String(node.className).includes('history-verdict')),false,'starting-point decks hide fit/conflict verdict labels');
   portal.listeners.keydown({key:'ArrowRight',target:card,preventDefault(){},stopPropagation(){}});
   assert.equal(state.heldSuggestionIds[0],'deck-a','right arrow keeps and synchronizes the active owner held set');
@@ -483,8 +523,8 @@ test('deck review keeps list selection separate, routes keyboard and button deci
   await portal.listeners.click({target:{closest:()=>keep}});
   assert.deepEqual(state.heldSuggestionIds,['deck-a','deck-b'],'the card Keep button uses the same state decision path');
   assert.deepEqual(listChecks().filter(input=>input.checked).map(input=>input.dataset.batchSuggestion),['deck-a','deck-b'],'deck decisions do not rewrite the list checkbox selection');
-  const review=tray.queryAll('button').find(node=>node.dataset.action==='deck-review-kept');
-  await tray.listeners.click({target:{closest:()=>review}});
+  const review=portal.queryAll('button').find(node=>node.dataset.action==='deck-review-kept');
+  await portal.listeners.click({target:{closest:()=>review}});
   assert.deepEqual(calls,[['check',['deck-a','deck-b']]],'Review kept checks kept deck IDs, not the current list selection set');
   assert.match(mounted.element.children[3].textContent,/2 selected suggestions/);
   const cancel=mounted.element.children[3].queryAll('button').find(node=>node.dataset.action==='batch-cancel');
@@ -525,17 +565,19 @@ test('deck portal keeps review shortcuts available, folds the compact rail, and 
   const panel=mounted.element.children[3];
   await tray.listeners.click({target:{closest:()=>mode}});
   assert.equal(doc.body.classList.contains('history-phone-deck-active'),true,'compact deck mode folds the rail behind the globe');
-  assert.equal(tray.queryAll('button').find(node=>node.dataset.action==='deck-keep-all-fits').hidden,true,'portal actions have no duplicate visible rail controls');
+  assert.equal(tray.queryAll('button').find(node=>node.dataset.action==='deck-keep-all-fits').hidden,true,'deck-only actions stay out of the hidden rail menu');
+  const portalMenu=portal.queryAll('details').find(node=>node.className==='history-suggestion-more');
+  assert.ok(portalMenu,'the deck portal exposes a single ellipsis menu for recovery actions');
   for (let index=0;index<sources.length;index++) {
     const pass=portal.queryAll('button').find(node=>node.dataset.action==='deck-pass');
     assert.ok(pass);
     await portal.listeners.click({target:{closest:()=>pass}});
   }
   assert.equal(portal.queryAll('article').filter(node=>node.dataset.swipeCard==='true').length,0,'all fitting cards have been passed');
-  assert.equal(tray.queryAll('button').find(node=>node.dataset.action==='deck-keep-all-fits').disabled,false,'list shortcut can recover fits when every card is passed');
+  assert.equal(portalMenu.queryAll('button').find(node=>node.dataset.action==='deck-keep-all-fits').disabled,false,'the ellipsis menu can recover fits when every card is passed');
   const keepAll=portal.queryAll('button').find(node=>node.dataset.action==='deck-keep-all-fits');
-  assert.ok(keepAll,'Keep all fits remains available directly in the deck portal');
-  assert.equal(keepAll.disabled,false,'portal shortcut can recover fits when every card is passed');
+  assert.ok(keepAll,'Keep all fits remains available through the deck ellipsis menu');
+  assert.equal(keepAll.disabled,false,'the menu action can recover fits when every card is passed');
   await portal.listeners.click({target:{closest:()=>keepAll}});
   assert.deepEqual(checked,[['fit-one','fit-two']],'empty-deck transition previews only the newly kept IDs');
   assert.equal(panel.hidden,false);
