@@ -11,7 +11,7 @@ import { createAtlasController } from './atlas/controller.js';
 import { renderEvidencePanel } from './evidence.js';
 import { createLocalMetaKeySetup } from './localMetaKey.js';
 import { createHistorySession } from './historySession.js';
-import { mountHistoryTimeline } from './historyTimeline.js';
+import { mountHistoryTimeline, isEmptyHistoryBoilerplateReason } from './historyTimeline.js';
 import { mountHistoryTimebar } from './historyTimebar.js';
 import { composeGeography } from './historyModel.js';
 import { historyAtlasStatus } from './historyAtlas.js';
@@ -182,7 +182,11 @@ function renderHistoryEvent(event, { preview = false, suggestion = false, questi
   modelApi?.clear?.();
   $('history-asof-header').hidden = false;
   $('hero-title').textContent = `${formatYear(event.year)} · ${event.title}`;
-  $('hero-description').textContent = event.summary || '';
+  const suggestionReason = suggestion && typeof event.reason === 'string' ? event.reason.trim() : '';
+  const meaningfulSuggestionReason = suggestionReason
+    && !/^migrated from (?:an )?earlier exploration\.?$/i.test(suggestionReason)
+    && !(suggestion && !(owner.history?.events || []).length && isEmptyHistoryBoilerplateReason(suggestionReason));
+  $('hero-description').textContent = `${event.summary || ''}${meaningfulSuggestionReason ? `${event.summary ? '\n\n' : ''}${suggestionReason}` : ''}`;
   $('hero-tag').textContent = suggestion ? (preview ? 'SUGGESTION PREVIEW' : 'SELECTED SUGGESTION') : 'HISTORY EVENT';
   $('selected-branch-context').hidden = true; $('selected-branch-context').replaceChildren();
   $('event-consequences').hidden = true; $('event-children').replaceChildren(); $('event-retry').hidden = true; $('event-scene-action').hidden = true;

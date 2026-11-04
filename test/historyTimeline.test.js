@@ -18,7 +18,10 @@ class Element {
     ? this.queryAll('input').filter(input => input.dataset.batchSuggestion)
     : selector === 'input[data-preview-exclude]' ? this.queryAll('input').filter(input => input.dataset.previewExclude)
     : selector === 'button[data-action]' ? this.queryAll('button').filter(button => button.dataset.action) : []; }
-  closest(selector) { return selector === 'button[data-action]' && this.tagName === 'button' && this.dataset.action || selector === 'button[data-history-id]' && this.tagName === 'button' && this.dataset.historyId ? this : null; }
+  closest(selector) {
+    if (selector === 'article.history-timeline-suggestion') { let node=this; while(node){if(node.tagName==='article'&&String(node.className).split(/\s+/).includes('history-timeline-suggestion'))return node;node=node.parentNode;} }
+    return selector === 'button[data-action]' && this.tagName === 'button' && this.dataset.action || selector === 'button[data-history-id]' && this.tagName === 'button' && this.dataset.historyId ? this : null;
+  }
   focus(options) { this.focused = true; this.focusOptions = options; this.listeners.focus?.({ target:this }); }
   scrollIntoView() { this.scrolled = true; }
   contains(node) { return node === this || this.children.some(child => child === node || child.contains?.(node)); }
@@ -67,7 +70,7 @@ test('timeline recomputes generated era ranges after an inserted event and prese
   assert.deepEqual(groupHistoryEras(events).map(group=>group.label), ['Era 1 · 1800 BCE–1000 BCE','Coastal observatories']);
 });
 
-test('all saved suggestion windows stay visible, window controls jump without moving date, and expanded board flattens chronologically', () => {
+test('all saved suggestion windows stay visible, window controls jump without moving date, and expanded board flattens chronologically', async () => {
   const firstWindow={fromYear:100,toYear:199}, secondWindow={fromYear:200,toYear:299};
   const first={id:'s-first',year:120,title:'First window',summary:'Saved first',reason:'Migrated from earlier exploration.',window:firstWindow,sceneRef:'/event-scenes/first.png'};
   const second={id:'s-second',year:220,title:'Second window',summary:'Saved second',window:secondWindow};
@@ -85,6 +88,32 @@ test('all saved suggestion windows stay visible, window controls jump without mo
   assert.equal(cards().some(card=>card.dataset.suggestionId==='e-first'),false,'already-woven event IDs are excluded from the suggestion gallery');
   assert.match(timeline.queryAll('button').find(button=>button.dataset.action==='jump-suggestions').textContent,/3/,'the direct gallery shortcut counts only visible unwoven suggestions');
   assert.equal(cards()[0].children[0].tagName,'img'); assert.equal(cards()[0].children[0].src,first.sceneRef);
+  assert.match(suggestions.queryAll('h4').map(node=>node.textContent).join(' '),/100.*199/,'the date window is labeled once in its group header');
+  assert.doesNotMatch(cards()[0].textContent,/100.*199/,'the window label is not repeated inside each row');
+  const rowDetailsButton=cards()[0].queryAll('button').find(button=>button.dataset.action==='toggle-suggestion-details');
+  const rowDetailsPanel=cards()[0].queryAll('div').find(node=>node.dataset.suggestionDetails==='s-first');
+  assert.equal(rowDetailsButton.getAttribute('aria-expanded'),'false','suggestion details start collapsed');
+  assert.equal(rowDetailsButton.getAttribute('aria-label'),'Show summary and reason for First window');
+  assert.equal(rowDetailsButton.getAttribute('aria-controls'),rowDetailsPanel.id);
+  assert.equal(rowDetailsPanel.hidden,true);
+  assert.match(rowDetailsPanel.textContent,/Saved first/,'the summary is available inside the disclosure');
+  assert.ok(cards()[0].queryAll('button').some(button=>button.dataset.action==='weave'&&button.getAttribute('aria-label')==='Weave First window into history'));
+  const clickDetails=button=>suggestions.listeners.click({target:{closest:selector=>selector==='button[data-action]'?button:null}});
+  await clickDetails(rowDetailsButton);
+  assert.equal(inspected.length,0,'opening details does not inspect or select the suggestion');
+  assert.equal(rowDetailsButton.getAttribute('aria-expanded'),'true');
+  assert.equal(rowDetailsPanel.hidden,false);
+  mounted.render(state);
+  let reopenedDetails=cards()[0].queryAll('button').find(button=>button.dataset.action==='toggle-suggestion-details');
+  let reopenedPanel=cards()[0].queryAll('div').find(node=>node.dataset.suggestionDetails==='s-first');
+  assert.equal(reopenedDetails.getAttribute('aria-expanded'),'true','an open disclosure survives timeline rerenders');
+  assert.equal(reopenedPanel.hidden,false);
+  await clickDetails(reopenedDetails);
+  assert.equal(reopenedDetails.getAttribute('aria-expanded'),'false','the same Details control closes the panel');
+  assert.equal(reopenedPanel.hidden,true);
+  mounted.render(state);
+  reopenedDetails=cards()[0].queryAll('button').find(button=>button.dataset.action==='toggle-suggestion-details');
+  assert.equal(reopenedDetails.getAttribute('aria-expanded'),'false','closing persists across subsequent rerenders');
   assert.doesNotMatch(suggestions.textContent,/Migrated from earlier exploration/i,'migration housekeeping is omitted from product cards');
   assert.equal(cards()[2].children[0].src,third.heroRef.url,'legacy hero is used when a suggestion has no scene ref');
   const jump=suggestions.queryAll('button').find(button=>button.dataset.action==='suggest-window'&&button.dataset.fromYear==='200');
@@ -254,7 +283,7 @@ test('empty histories show starting points without verdict badges or empty-histo
   state.history={...history,events:[event('canonical-event',50,'A canonical event')]};
   state.histories=[state.history]; mounted.render(state);
   const populatedCards=mounted.element.children[2].queryAll('article').filter(node=>node.className==='history-timeline-suggestion');
-  assert.ok(populatedCards[0].queryAll('div').some(node=>String(node.className).includes('history-verdict')),'canonical history restores fit/conflict verdict badges');
+  assert.ok(populatedCards[0].queryAll('span').some(node=>String(node.className).includes('history-verdict-dot')),'canonical history restores compact fit/conflict dots');
 });
 
 test('preview portals above filtered rails and restores to the timeline on close or destroy', async () => {

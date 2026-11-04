@@ -65,11 +65,13 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   comparison.setAttribute('aria-label','Compare saved timelines');
   host.append(tabs, timeline, suggestions, batchPreview, comparison, status);
   const openEras = new Map();
+  const suggestionDetailOpen = new Map();
   const batchSelections = new Map();
   const seenBatchSuggestions = new Map();
   let batchScope = '', batchNotice = '';
   const batchPreviewState = { open:false, loading:false, error:'', plan:null, scope:'', selectionKey:'', selectedIds:[], acceptedMergeIds:new Set(), excludedSuggestionIds:new Set(), focusAction:'batch-cancel', focusId:'', requestId:0 };
   let galleryExpanded = false, lastRenderedHistoryId = '', lastRenderedSelectionId = '';
+  const suggestionDetailKey = (historyId,suggestionId) => `${String(historyId || '')}:${String(suggestionId || '')}`;
   let comparisonOpen = false, comparisonHasFocus = false, comparisonFocusAction = 'back-to-timeline', comparisonFocusHistoryId = '', comparisonCards = null, comparisonPreviousRail = null, comparisonPreviousScrollTop = null;
   const button = (label, action, id, extra = {}) => {
     const node = make(document, 'button', label, 'outline'); node.type = 'button'; node.dataset.action = action; node.dataset.id = id;
@@ -168,6 +170,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   });
   suggestions.addEventListener('click', async event => {
     if (event.target?.dataset?.batchSuggestion) return;
+    if (event.target.closest?.('details.history-suggestion-details')?.tagName?.toLowerCase() === 'details') return;
     const node = event.target.closest?.('button[data-action]');
     if (!node) {
       const card = event.target.closest?.('article.history-timeline-suggestion');
@@ -175,6 +178,18 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       return;
     }
     if (node.dataset.action === 'select-suggestion') inspectSuggestion(node.dataset.id);
+    else if (node.dataset.action === 'toggle-suggestion-details') {
+      const card = node.closest?.('article.history-timeline-suggestion');
+      const nativeCandidates = card?.querySelectorAll?.('[data-suggestion-details]');
+      const candidates = [...(nativeCandidates?.length ? nativeCandidates : card?.queryAll?.('div') || [])];
+      const panel = candidates.find(item => item.dataset?.suggestionDetails === node.dataset.id);
+      if (panel) {
+        const open = node.getAttribute('aria-expanded') !== 'true';
+        panel.hidden = !open; node.setAttribute('aria-expanded',String(open));
+        node.setAttribute('aria-label',`${open ? 'Hide' : 'Show'} summary and reason for ${node.dataset.title || 'suggestion'}`);
+        suggestionDetailOpen.set(suggestionDetailKey(node.dataset.historyId,node.dataset.id),open);
+      }
+    }
     else if (node.dataset.action === 'weave') await session?.weave?.(node.dataset.id);
     else if (node.dataset.action === 'fork-suggestion') await session?.forkSuggestion?.(node.dataset.id);
     else if (node.dataset.action === 'suggest-window') {
@@ -430,6 +445,11 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const question = state.question || null;
     const histories = state.histories || question?.histories || [];
     const active = state.history || state.activeHistory || histories.find(item => item.id === state.historyId) || histories[0] || null;
+    for (const details of suggestions.queryAll?.('details') || []) {
+      if (details.className?.split?.(/\s+/).includes('history-suggestion-details') && details.open) {
+        suggestionDetailOpen.set(suggestionDetailKey(details.dataset.historyId,details.dataset.suggestionId),true);
+      }
+    }
     const nextBatchScope = `${String(state.questionId || question?.id || '')}\u0000${String(active?.id || '')}`;
     if (nextBatchScope !== batchScope) { batchScope = nextBatchScope; batchNotice = ''; }
     if (batchPreviewState.open && batchPreviewState.scope !== nextBatchScope) {
@@ -663,25 +683,52 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
         batchChoice.checked = selectedSuggestionIds.has(String(item.id));
         batchChoice.disabled = item.verdict !== 'fits' || !!item.conflictsWith || !!state.loading || !!state.paused || batchBusy;
         batchChoice.setAttribute('aria-label',`Select ${item.title || 'untitled possibility'} for batch weave`);
-        content.append(batchChoice);
-        const currentDateWindow = item.window?.fromYear === state.window?.fromYear && item.window?.toYear === state.window?.toYear;
-        const windowText = galleryExpanded ? currentDateWindow ? ' · Current date window' : ''
-          : item.window ? ` · ${labelYear(item.window.fromYear)}–${labelYear(item.window.toYear)}${currentDateWindow ? ' · Current date window' : ''}` : '';
+        const head = make(document,'div',null,'history-timeline-suggestion-head');
+        const main = make(document,'div',null,'history-timeline-suggestion-main');
+        const tools = make(document,'div',null,'history-timeline-suggestion-tools');
+        const status = make(document,'div',null,'history-timeline-suggestion-status');
+        const actions = make(document,'div',null,'history-timeline-suggestion-actions');
         const startingPoint = !active.events.length;
-        content.append(make(document, 'div', startingPoint ? `${labelYear(item.year)}${windowText}` : `${labelYear(item.year)} · ${item.verdict === 'conflicts' ? 'Conflicts' : 'Fits'}${windowText}`,
-          startingPoint ? 'history-suggestion-starting-meta' : `history-verdict ${item.verdict === 'conflicts' ? 'conflicts' : 'fits'}`));
+        main.append(make(document,'span',labelYear(item.year),'history-timeline-suggestion-year'));
         const title = button(item.id === state.selectedEventId ? `Selected · ${item.title || 'Untitled possibility'}` : item.title || 'Untitled possibility','select-suggestion',item.id);
         title.className += ' history-timeline-suggestion-title'; title.setAttribute('aria-pressed',String(item.id === state.selectedEventId));
         title.setAttribute('aria-label',`${item.id === state.selectedEventId ? 'Selected suggestion' : 'Inspect suggestion'}: ${item.title || 'Untitled possibility'}, ${labelYear(item.year)}`);
-        content.append(title,make(document, 'p', item.summary || ''));
+        main.append(title);
+        status.append(batchChoice);
+        if (!startingPoint) {
+          const verdict = make(document,'span',null,`history-verdict-dot ${item.verdict === 'conflicts' ? 'conflicts' : 'fits'}`);
+          verdict.setAttribute('aria-label',item.verdict === 'conflicts' ? 'Conflicts with this history' : 'Fits this history');
+          verdict.setAttribute('title',item.verdict === 'conflicts' ? 'Conflicts with this history' : 'Fits this history');
+          status.append(verdict);
+        }
         const reason = typeof item.reason === 'string' ? item.reason.trim() : '';
-        if (reason && !/^migrated from (?:an )?earlier exploration\.?$/i.test(reason)
-            && !(startingPoint && isEmptyHistoryBoilerplateReason(reason))) content.append(make(document, 'p', reason, 'history-suggestion-reason'));
-        const actions = make(document,'div',null,'history-timeline-suggestion-actions');
-        if (item.id === state.selectedEventId) actions.append(make(document,'span','Selected','history-timeline-suggestion-selected'));
-        if (item.verdict === 'conflicts') actions.append(button('What if instead…', 'fork-suggestion', item.id));
-        else actions.append(button('Weave into history', 'weave', item.id));
-        content.append(actions); card.append(content); groupNode.append(card);
+        const meaningfulReason = reason && !/^migrated from (?:an )?earlier exploration\.?$/i.test(reason)
+          && !(startingPoint && isEmptyHistoryBoilerplateReason(reason));
+        const detailKey = suggestionDetailKey(active.id,item.id);
+        const detailsOpen = suggestionDetailOpen.get(detailKey) === true;
+        const detailsButton = button('Details','toggle-suggestion-details',item.id,{historyId:String(active.id),title:item.title || 'untitled possibility'});
+        detailsButton.setAttribute('aria-expanded',String(detailsOpen));
+        detailsButton.setAttribute('aria-label',`${detailsOpen ? 'Hide' : 'Show'} summary and reason for ${item.title || 'untitled possibility'}`);
+        const detailPanel = make(document,'div',null,'history-timeline-suggestion-details-body');
+        detailPanel.dataset.suggestionDetails = String(item.id);
+        detailPanel.hidden = !detailsOpen;
+        detailPanel.id = `history-suggestion-details-${encodeURIComponent(String(active.id))}-${encodeURIComponent(String(item.id))}`;
+        detailsButton.setAttribute('aria-controls',detailPanel.id);
+        if (item.summary) detailPanel.append(make(document,'p',item.summary,'history-suggestion-summary'));
+        if (meaningfulReason) detailPanel.append(make(document,'p',reason,'history-suggestion-reason'));
+        if (item.summary || meaningfulReason) actions.append(detailsButton);
+        const action = item.verdict === 'conflicts'
+          ? button('What if', 'fork-suggestion', item.id)
+          : button('Weave', 'weave', item.id);
+        action.setAttribute('aria-label',item.verdict === 'conflicts'
+          ? `Explore what if ${item.title || 'untitled possibility'} instead`
+          : `Weave ${item.title || 'untitled possibility'} into history`);
+        actions.append(action);
+        tools.append(status,actions);
+        head.append(main,tools);
+        content.append(head);
+        if (item.summary || meaningfulReason) content.append(detailPanel);
+        card.append(content); groupNode.append(card);
       }
       groupList.append(groupNode);
     }
@@ -705,4 +752,4 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   return { element: host, render, destroy() { unsubscribe?.(); portalBatchPreview(false); root.replaceChildren(); } };
 }
 
-export { erasFor as groupHistoryEras, historyForkYear };
+export { erasFor as groupHistoryEras, historyForkYear, isEmptyHistoryBoilerplateReason };
