@@ -1,0 +1,44 @@
+{
+  "question": "What if Buddhism Spread to Arabia",
+  "events": [
+    {
+      "id": "suggestion:a72c30f0a7e059e917bc8db705786eb86230b0eedd0101b077c3f87eca931256",
+      "year": -245,
+      "title": "Red Sea Monks Reach Jeddah",
+      "causeEventId": "question-895184fc-5cf0-4561-b3d4-324c007ca248"
+    },
+    {
+      "id": "suggestion:d2145ee80df3994157d448f55b6540c295fca4c7d2b1b470f649ca9b09a1dbad",
+      "year": -238,
+      "title": "Buddhist Sailors' Shrine at Jeddah",
+      "causeEventId": "suggestion:a72c30f0a7e059e917bc8db705786eb86230b0eedd0101b077c3f87eca931256"
+    },
+    {
+      "id": "suggestion:7a04084bdc22863df97a22743ad01e37bbabbc14cd78d542d1058bbc07be5ad3",
+      "year": -176,
+      "title": "Lotus Carvings at Hegra",
+      "causeEventId": "suggestion:d2145ee80df3994157d448f55b6540c295fca4c7d2b1b470f649ca9b09a1dbad"
+    },
+    {
+      "id": "suggestion:14665b33c0b5b66789fe4ba63bbefdcb33332a2a596a890d35c512c6140ae4ef",
+      "year": -170,
+      "title": "Meccan Jataka Reliefs",
+      "causeEventId": "suggestion:7a04084bdc22863df97a22743ad01e37bbabbc14cd78d542d1058bbc07be5ad3"
+    },
+    {
+      "id": "suggestion:60a6f6c876ca8e74b2152709793e7c5be4fc89f2ec6a047d32b34b2e94555f36",
+      "year": -98,
+      "title": "Vihara Healing Garden in Mecca",
+      "causeEventId": "suggestion:14665b33c0b5b66789fe4ba63bbefdcb33332a2a596a890d35c512c6140ae4ef"
+    },
+    {
+      "id": "suggestion:35066f32d3a39a6120ed81c28b14d1775e798138a287f4d311021c072c1f7809",
+      "year": -75,
+      "title": "Buddhist Healing House at Hegra",
+      "causeEventId": "suggestion:60a6f6c876ca8e74b2152709793e7c5be4fc89f2ec6a047d32b34b2e94555f36"
+    }
+  ],
+  "suggestionCount": 0,
+  "completeSceneCount": 6,
+  "acceptedMergeCount": 0
+}

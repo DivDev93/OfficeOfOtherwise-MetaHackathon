@@ -827,6 +827,38 @@ body:not(.invitation-open):has(.history-gallery-expanded) #history-timebar-host,
 .history-timeline-suggestion-title[aria-pressed=true]{border-color:var(--gold);color:var(--gold)}
 .history-timeline-suggestion-title:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
 .history-suggestion-starting-meta{color:var(--neutral-400);font-size:10px;line-height:1.25}
+
+/* The suggestion deck is a body portal so rail filters cannot offset its fixed card. */
+.history-timeline-suggestions.history-deck-active .history-timeline-suggestion-groups{display:none}
+.history-suggestion-deck-portal{position:fixed;z-index:1200;display:grid;gap:9px;max-height:min(68dvh,600px);overflow:auto;padding:11px;border:1px solid #73aaa188;border-radius:12px;background:rgba(7,12,13,.97);box-shadow:0 16px 48px #000b;color:var(--parchment);backdrop-filter:blur(12px)}
+.history-suggestion-deck-portal[hidden]{display:none}
+.history-deck-header{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--cyan);font:500 14px/1.2 var(--serif)}
+.history-deck-header .outline,.history-deck-empty+.outline{min-height:36px;padding:5px 10px;font-size:10px}
+.history-deck-card{display:grid;grid-template-columns:84px minmax(0,1fr);gap:10px;align-items:start;padding:9px;border:1px solid #7cd1c177;border-radius:10px;background:linear-gradient(145deg,#152323,#0a1011);box-shadow:0 6px 20px #0008;touch-action:pan-y;user-select:none;outline:none}
+.history-deck-card:focus-visible{box-shadow:0 0 0 2px var(--cyan),0 6px 20px #0008}
+.history-deck-image,.history-deck-image-placeholder{width:84px;height:104px;object-fit:cover;border-radius:7px;background:radial-gradient(ellipse at 50% 45%,#47706b,#182d31 48%,#111819 78%);color:#d0d2bb;font-size:10px;display:grid;place-items:center;text-align:center}
+.history-deck-content{display:grid;gap:6px;min-width:0}
+.history-deck-title{justify-self:stretch!important;min-height:40px!important;padding:3px 0!important;text-align:left;font:500 17px/1.2 var(--serif)!important;color:var(--parchment)!important;white-space:normal;overflow-wrap:anywhere}
+.history-deck-state-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.history-deck-disposition{padding:2px 6px;border:1px solid #73aaa155;border-radius:10px;color:var(--cyan);font-size:9px;line-height:1.2}
+.history-deck-summary,.history-deck-reason,.history-deck-empty,.history-deck-help{margin:0;color:var(--neutral-300);font-size:11px;line-height:1.4;overflow-wrap:anywhere}
+.history-deck-reason{font-style:italic;color:var(--neutral-400)}
+.history-deck-actions{display:flex;flex-wrap:wrap;gap:5px;margin-top:3px}
+.history-deck-actions .outline{min-height:38px;padding:5px 9px;font-size:10px}
+.history-deck-actions .outline[data-action="deck-keep"]{border-color:#7cd1c188;color:var(--cyan)}
+.history-deck-help{font-size:10px;color:var(--neutral-400)}
+.history-deck-passed-group{display:grid;gap:5px;padding-top:7px;border-top:1px solid #73aaa144}
+.history-deck-passed-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:5px 0;border-bottom:1px solid #73aaa122}
+.history-deck-passed-title{flex:1 1 100%;color:var(--neutral-300);font-size:10px;line-height:1.3}
+.history-deck-passed-row .outline{min-height:34px;padding:4px 8px;font-size:9px}
+.history-deck-shortcuts{display:flex;flex-wrap:wrap;gap:5px}
+.history-deck-shortcuts .outline{min-height:36px;padding:5px 8px;font-size:10px}
+.history-event-quiet-suggestions{justify-self:start;padding:2px 6px;border:1px dashed #7cd1c166;border-radius:10px;color:var(--neutral-400);font-size:9px}
+.history-suggestion-controls{align-items:center}
+.history-suggestion-controls .outline[aria-pressed="true"]{border-color:var(--cyan);color:var(--cyan);background:#7cd1c122}
+@media(max-width:700px){body.history-phone-deck-active .exploration-rail{display:none!important}.history-suggestion-deck-portal{left:8px!important;right:8px!important;top:auto!important;bottom:84px!important;width:auto!important;max-height:48dvh;padding:8px;gap:7px}.history-deck-card{grid-template-columns:64px minmax(0,1fr);gap:8px;padding:7px}.history-deck-image,.history-deck-image-placeholder{width:64px;height:86px}.history-deck-title{font-size:15px!important}.history-deck-actions .outline{min-height:36px}.history-deck-summary,.history-deck-reason{font-size:10px}}
+/* The phone timebar normally floats above the rail; lift the open history drawer over it. */
+@media(max-width:700px){body.history-mode.atlas-panels-open .exploration-rail{z-index:16!important}}
 .history-weave-tray{position:sticky;top:0;z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px;margin:0 0 6px;border:1px solid #73aaa155;border-radius:7px;background:rgba(8,12,13,.96);box-shadow:0 4px 12px #0008}
 .history-weave-tray .outline{min-height:32px;padding:4px 8px;font-size:10px}
 .history-weave-tray-notice{flex:1 1 100%;color:var(--gold);font-size:10px}

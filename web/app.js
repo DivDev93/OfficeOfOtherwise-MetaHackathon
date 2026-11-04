@@ -465,14 +465,22 @@ function updateHistoryAtlasView(state = historySession.getState()) {
   try { surfaceGeography = geographyFromControls(surfaceGeographyRaw || composeGeography(state.history.events,state.date), currentGeographyControls()); }
   catch { /* Keep the history projection available if a local display adjustment is invalid. */ }
   const composedGeography = composeGeography(state.history.events,state.date);
+  const heldSuggestionIds = [...new Set((state.heldSuggestionIds || []).map(String))];
+  const heldSuggestionSet = new Set(heldSuggestionIds);
+  const atlasSuggestionsById = new Map();
+  for (const item of state.history.suggestions || []) {
+    if (item?.id != null && heldSuggestionSet.has(String(item.id))) atlasSuggestionsById.set(String(item.id), item);
+  }
+  for (const item of state.suggestions || []) if (item?.id != null) atlasSuggestionsById.set(String(item.id), item);
+  const atlasSuggestions = [...atlasSuggestionsById.values()];
   const view = { question:state.question, historyId:state.historyId, asOfYear:state.date, date:state.date,
-    window:state.window, suggestions:state.suggestions, selectedEventId:state.selectedEventId,
+    window:state.window, suggestions:atlasSuggestions, heldSuggestionIds, selectedEventId:state.selectedEventId,
     questions:state.questions, activeQuestionId:state.questionId, showOrbit:historyShowOrbit,
     surfaceMode, composedGeography, surfaceGeography:surfaceMode === 'present' ? presentDayGeography() : surfaceGeography };
   // Atlas records preserve event content and media refs, so same-count hydration updates must
   // invalidate the scene just like selection, date, or geography changes do.
   const signature = JSON.stringify([state.questionId,state.historyId,state.date,state.selectedEventId,state.window,
-    surfaceMode,view.surfaceGeography,historyShowOrbit,state.question,state.history,state.suggestions,state.questions]);
+    surfaceMode,view.surfaceGeography,historyShowOrbit,state.question,state.history,state.suggestions,heldSuggestionIds,atlasSuggestions,state.questions]);
   if (signature === historyRenderSignature && !historyRenderFailed) return;
   historyRenderSignature = signature;
   try {

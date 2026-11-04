@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { historyPinColorRole, isPendingHistoryEvent, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../web/historyAtlas.js';
+import { historyPinColorRole, isHeldHistorySuggestion, isPendingHistoryEvent, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../web/historyAtlas.js';
 
 const scene = readFileSync(new URL('../web/atlas/scene.js', import.meta.url), 'utf8');
 
@@ -42,6 +42,27 @@ test('pending canonical events keep gold semantics and add a display-only dashed
     'pending status does not resize the small 14/18px Surface pin');
   assert.match(scene, /atlasMarkerHitRadius\(renderedRadius \+ padding, activationRadius, activation\)/,
     'pending status does not enlarge pointer hit geometry');
+});
+
+test('held suggestions retain cyan selectable identity and add a CSS-sized display-only halo', () => {
+  const held = { id:'held-suggestion', visualKind:'history-suggestion', held:true, selectionEventId:'event-source' };
+  assert.equal(isHeldHistorySuggestion(held), true);
+  assert.equal(isHeldHistorySuggestion({ ...held, held:false }), false);
+  assert.equal(isHeldHistorySuggestion({ ...held, visualKind:'history-event' }), false);
+  assert.equal(historyPinColorRole(held), 'cyan');
+  assert.equal(held.id, 'held-suggestion');
+  assert.equal(held.selectionEventId, 'event-source');
+  assert.match(scene, /Held history suggestion dashed cyan outline/);
+  assert.match(scene, /worldRecord\.label\.dataset\.historyHeld = String\(isHeldHistorySuggestion\(entry\.world\)\)/);
+  assert.match(scene, /heldOutline\.position\.copy\(flatSurfacePinMode\s*\?\s*surfacePinAnchorPosition\(entry, state, timestamp\)\s*:\s*worldPosition\(entry, state, timestamp, markerRadius\)\)/,
+    'the halo follows the exact surface or Atlas pin anchor');
+  assert.match(scene, /const depth = -heldOutline\.position\.clone\(\)\.applyMatrix4\(atlasGroup\.matrixWorld\)\.applyMatrix4\(camera\.matrixWorldInverse\)\.z/);
+  assert.match(scene, /worldRadiusForScreenPixels\(Math\.max\(0\.01, depth\), camera\.fov, Math\.max\(1, renderer\.domElement\.clientHeight\), diameter\)/,
+    'halo diameter stays in CSS pixels at close and far camera depths');
+  assert.match(scene, /const renderedRadius = flatMarker \? worldRadiusForScreenPixels\(viewDepth, camera\.fov, Math\.max\(1, bounds\.height\), entry\.world\.selected \? 18 : 14\)/,
+    'held status leaves the small 14/18px pin unchanged');
+  assert.match(scene, /atlasMarkerHitRadius\(renderedRadius \+ padding, activationRadius, activation\)/,
+    'the separate halo does not enlarge hit geometry');
 });
 
 test('history surface drops legacy cyan possibility halos and hides its synthetic current-world label', () => {

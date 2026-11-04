@@ -33,6 +33,85 @@ test('auto-suggest waits 800ms, reuses cached windows, and hover is inert', asyn
   clock.fire(); await tick(); assert.equal(suggestions, 1, 'only an uncached window requests generation');
 });
 
+test('held suggestions are local, owner-scoped, valid-ID filtered, and do not change selection', async () => {
+  const clock = timers(), oldWindow = { fromYear: -3000, toYear: -2001 }, activeWindow = { fromYear: 1001, toYear: 2000 };
+  const held = suggestion('held-old-window', oldWindow), current = suggestion('current-window', activeWindow);
+  const saved = { ...history('h1', [held, current]), suggestionWindows: [
+    { window: oldWindow, status: 'ready' }, { window: activeWindow, status: 'ready' },
+  ] };
+  const second = history('h2'); let postCount = 0;
+  const session = createHistorySession({ setTimer: clock.setTimer, clearTimer: clock.clearTimer, fetchImpl: async (url, init = {}) => {
+    if (url === '/api/history/preferences') return response({ autoSuggest: false, autoWeave: false });
+    if (url.startsWith('/api/histories')) return response({ questions: [{ id: 'q', histories: [saved, second] }] });
+    if (init.method === 'POST') { postCount++; throw new Error(`Unexpected POST ${url}`); }
+    throw new Error(url);
+  } });
+  session.setContext({ questionId: 'q', historyId: 'h1', eventId: 'event-1', date: -2400 }); await tick();
+  const selected = session.getState().selectedEventId;
+  assert.deepEqual(session.setHeldSuggestionIds([held.id, 'not-a-suggestion', current.id, held.id]), [held.id, current.id]);
+  assert.deepEqual(session.getState().heldSuggestionIds, [held.id, current.id]);
+  assert.equal(session.getState().selectedEventId, selected, 'holding suggestions does not change selection');
+  session.setDate(1978);
+  assert.deepEqual(session.getState().heldSuggestionIds, [held.id, current.id], 'same owner retains its deck state across windows');
+  session.setContext({ questionId: 'q', historyId: 'h2', eventId: 'event-1', date: 1978, readOnly: true }); await tick();
+  assert.deepEqual(session.getState().heldSuggestionIds, [], 'owner changes clear held IDs');
+  assert.equal(postCount, 0, 'holding creates no history or model requests');
+});
+
+test('preference writes ignore stale responses and auto-weave cannot overwrite auto-suggest', async () => {
+  const clock = timers(), initialRead = deferred(), weaveOn = deferred(), weaveOff = deferred();
+  const suggestOff = deferred(), suggestOn = deferred();
+  const session = createHistorySession({ setTimer: clock.setTimer, clearTimer: clock.clearTimer, fetchImpl: async (url, init = {}) => {
+    if (url !== '/api/history/preferences') throw new Error(url);
+    if (!init.method) return initialRead.promise;
+    const body = JSON.parse(init.body);
+    if (Object.hasOwn(body, 'autoWeave')) return body.autoWeave ? weaveOn.promise : weaveOff.promise;
+    return body.autoSuggest ? suggestOn.promise : suggestOff.promise;
+  } });
+
+  const weaveOnRequest = session.setAutoWeave(true);
+  const weaveOffRequest = session.setAutoWeave(false);
+  weaveOff.resolve(response({ autoSuggest: false, autoWeave: false }));
+  await weaveOffRequest;
+  weaveOn.resolve(response({ autoSuggest: false, autoWeave: true }));
+  await weaveOnRequest;
+  initialRead.resolve(response({ autoSuggest: false, autoWeave: true }));
+  await tick();
+  assert.equal(session.getState().autoWeave, false, 'older write and initial read cannot undo the last toggle');
+  assert.equal(session.getState().autoSuggest, true, 'auto-weave responses cannot change the separate auto-suggest setting');
+
+  const suggestOffRequest = session.setAutoSuggest(false);
+  const suggestOnRequest = session.setAutoSuggest(true);
+  suggestOn.resolve(response({ autoSuggest: true, autoWeave: false }));
+  await suggestOnRequest;
+  suggestOff.resolve({ ok: false, json: async () => ({ error: 'old request failed' }) });
+  await suggestOffRequest;
+  assert.equal(session.getState().autoSuggest, true, 'an older failed toggle cannot roll back a newer choice');
+  assert.equal(session.getState().autoWeave, false);
+  assert.equal(session.getState().status, '', 'stale preference failures do not replace current status');
+});
+
+test('suggestion requests include inspiration only for a selected canonical event', async () => {
+  const clock = timers(), window = { fromYear: -3000, toYear: -2001 };
+  const savedSuggestion = suggestion('inspiration-candidate', window), saved = { ...history('h', [savedSuggestion]), suggestionWindows: [{ window, status: 'ready' }] };
+  const bodies = [];
+  const session = createHistorySession({ setTimer: clock.setTimer, clearTimer: clock.clearTimer, fetchImpl: async (url, init = {}) => {
+    if (url === '/api/history/preferences') return response({ autoSuggest: false });
+    if (url.startsWith('/api/histories')) return response({ questions: [{ id: 'q', histories: [saved] }] });
+    if (url === '/api/history/suggest') {
+      bodies.push(JSON.parse(init.body));
+      return response({ history: saved, suggestions: [savedSuggestion] });
+    }
+    throw new Error(url);
+  } });
+  session.setContext({ questionId: 'q', historyId: 'h', eventId: 'event-1', date: -2400 }); await tick();
+  await session.more();
+  assert.equal(bodies[0].inspiredByEventId, 'event-1');
+  assert.equal(session.selectSuggestion(savedSuggestion.id), true);
+  await session.more();
+  assert.equal(Object.hasOwn(bodies[1], 'inspiredByEventId'), false, 'suggestion selection is not treated as an event cause');
+});
+
 test('question and sibling-history selection preserve the global date and stay read-only', async () => {
   const clock = timers(), calls = [];
   const q1 = { id:'q1', histories:[history('h1'), history('h1-sibling', [{ id:'future', year:2003, title:'Future', window:{fromYear:1001,toYear:2000} }])] };

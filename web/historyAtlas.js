@@ -23,6 +23,11 @@ export function isPendingHistoryEvent(world = {}) {
   return world.visualKind === 'history-event' && world.pending === true;
 }
 
+/** Held suggestions remain cyan history-suggestion pins and receive a separate dashed halo. */
+export function isHeldHistorySuggestion(world = {}) {
+  return world.visualKind === 'history-suggestion' && world.held === true;
+}
+
 /** Skip the optional one-history Orbit tier while keeping direct surface-to-Atlas interpolation. */
 export function historyZoomPresentation(value, orbitEnabled = false) {
   const zoom = Math.min(1, Math.max(0, Number(value) || 0));
@@ -202,6 +207,8 @@ export function projectHistoryAtlas(question, {
   asOfYear,
   window = null,
   suggestions,
+  heldSuggestions = [],
+  heldSuggestionIds = [],
 } = {}) {
   if (!question || typeof question !== 'object' || !Array.isArray(question.histories)) {
     throw new Error('Atlas projection requires a question with histories');
@@ -223,17 +230,31 @@ export function projectHistoryAtlas(question, {
   }));
   const suppliedSuggestions = Array.isArray(suggestions);
   const suggestionRecords = suppliedSuggestions ? suggestions : (activeHistory.suggestions || []);
+  const heldIds = new Set((heldSuggestionIds instanceof Set ? [...heldSuggestionIds] : Array.isArray(heldSuggestionIds) ? heldSuggestionIds : [])
+    .filter(id => typeof id === 'string' && id.trim()).map(String));
+  const canonicalIds = new Set(activeHistory.events.map(event => String(event.id)));
+  const heldSources = [...(activeHistory.suggestions || []), ...suggestionRecords, ...(Array.isArray(heldSuggestions) ? heldSuggestions : [])];
+  const heldById = new Map(heldSources.filter(item => item && heldIds.has(String(item.id))
+    && !canonicalIds.has(String(item.id)) && (item.historyId == null || String(item.historyId) === String(activeHistory.id)))
+    .map(item => [String(item.id), item]));
   const visibleSuggestions = suggestionRecords
     .filter(item => (item?.historyId == null || String(item.historyId) === String(activeHistory.id))
       && exactWindowSuggestion(item, dateWindow, suppliedSuggestions))
     .sort(byYearAndId)
     .map(item => ({
-      ...item,
+      ...(heldById.get(String(item.id)) || item),
       historyId: activeHistory.id,
       visualKind: 'history-suggestion',
+      ...(heldIds.has(String(item.id)) ? { held: true } : {}),
       highlighted: false,
       selectionEventId: item.suggestionForEventId || item.id,
     }));
+  const visibleSuggestionIds = new Set(visibleSuggestions.map(item => String(item.id)));
+  for (const [id, item] of heldById) if (!visibleSuggestionIds.has(id)) visibleSuggestions.push({
+    ...item, historyId: activeHistory.id, visualKind:'history-suggestion', held:true,
+    highlighted:false, selectionEventId:item.suggestionForEventId || item.id,
+  });
+  visibleSuggestions.sort(byYearAndId);
   const composedGeography = composeGeography(pastEvents, asOfYear);
   const siblingEarths = question.histories
     .filter(history => history !== activeHistory && String(history.id) !== String(activeHistory.id))
@@ -250,6 +271,7 @@ export function projectHistoryAtlas(question, {
     latestEvent,
     pins,
     suggestions: visibleSuggestions,
+    heldSuggestionIds: visibleSuggestions.filter(item => item.held === true).map(item => String(item.id)),
     composedGeography,
     surface: { historyId: activeHistory.id, asOfYear, latestEvent, geography: composedGeography },
     siblingEarths,

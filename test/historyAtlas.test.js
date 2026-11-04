@@ -81,6 +81,30 @@ test('pending canonical events retain provenance and use normal as-of date and g
   assert.ok(!beforeDate.pins.some(item => item.id === pending.id), 'the date does not advance to include pending events');
 });
 
+test('held suggestions stay selectable cyan ideas across cache windows without changing history data', () => {
+  const source = question();
+  const held = { id:'held-old-window', year:-4200, title:'Held lake study', summary:'Still an idea.', place,
+    window:{ fromYear:-5000, toYear:-4001 }, sceneRef:{ path:'scenes/held.png', status:'complete' } };
+  const heldInCurrentWindow = { ...source.histories[0].suggestions[0], id:'held-current-window' };
+  const before = structuredClone(source);
+  const projected = projectHistoryAtlas(source, { historyId:'history-main', asOfYear:-2500,
+    window:{ fromYear:-3000, toYear:-2001 }, suggestions:[...source.histories[0].suggestions, held, heldInCurrentWindow],
+    heldSuggestionIds:[held.id, heldInCurrentWindow.id] });
+  const oldIdea = projected.suggestions.find(item => item.id === held.id);
+  assert.ok(oldIdea, 'held ideas from other cache windows remain visible');
+  assert.equal(oldIdea.held, true);
+  assert.equal(oldIdea.visualKind, 'history-suggestion');
+  assert.equal(oldIdea.selectionEventId, held.id);
+  assert.equal(oldIdea.sceneRef, held.sceneRef);
+  const currentIdea = projected.suggestions.find(item => item.id === heldInCurrentWindow.id);
+  assert.equal(currentIdea.held, true, 'current-window held ideas use the same selectable pin');
+  assert.equal(currentIdea.visualKind, 'history-suggestion');
+  assert.equal(projected.heldSuggestionIds.includes(held.id), true);
+  assert.equal(projected.suggestions.some(item => item.id === 'sug-overlap-only'), false,
+    'unheld ideas from an older overlapping cache stay hidden');
+  assert.deepEqual(source, before, 'projection does not mutate source suggestions or history');
+});
+
 test('Atlas suggestions stay within the active history and exact current window', () => {
   const projected = projectHistoryAtlas(question(), { historyId: 'history-main', asOfYear: -2500, window: { fromYear: -3000, toYear: -2001 } });
   assert.deepEqual(projected.suggestions.map(item => item.id), ['sug-in-window']);

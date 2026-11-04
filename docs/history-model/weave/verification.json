@@ -1,0 +1,42 @@
+{
+  "date": "2026-11-03",
+  "runtime": "Node 22.23.3",
+  "testsPassed": 835,
+  "nativeChecks": {
+    "desktopKeyboard1440x900": true,
+    "phonePointerDrag375x812": true,
+    "touch": "unverified: in-app touch input unsupported; Chrome native-host registry entry missing",
+    "reducedMotionSkipsFlight": true,
+    "listSelectionIndependentOfDeck": true,
+    "passedSuggestionsRecoverable": true,
+    "cancelDoesNotReopenPreview": true,
+    "canonicalAndSuggestionSelectionPersistsAcrossSurfaceAndAtlas": true,
+    "hoverRestoresClickedSelection": true,
+    "pendingSurvivesReload": true,
+    "singlePendingRemovalRetainsPeersAndReadyScene": true,
+    "dateWindowFinalizationPersistsThroughCachedReturn": true
+  },
+  "sixSourceWeave": {
+    "canonicalEvents": 6,
+    "retainedScenes": 6,
+    "acceptedMerges": 0,
+    "additionalModelCallsUsingCachedPlan": 0,
+    "jeddahArrivalCausesShrine": true
+  },
+  "freshAutoWeave": {
+    "generatedSources": 3,
+    "pendingEvents": 3,
+    "wonderGenerationCalls": 1,
+    "sparkTopicPolicyCalls": 3,
+    "wonderBatchCheckCalls": 1,
+    "sparkRippleCalls": 0,
+    "imageCalls": 3,
+    "costUsd": 0.388439,
+    "removedPendingEvents": 1,
+    "permanentEventsAfterWindowChange": 8,
+    "restoredUnwovenSuggestions": 1,
+    "modelCallsForRemovalAndFinalization": 0
+  },
+  "finalPreferences": { "autoSuggest": true, "autoWeave": false },
+  "spendLedgerTotalUsd": 44.57822830208354
+}

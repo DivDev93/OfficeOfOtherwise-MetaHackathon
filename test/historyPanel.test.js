@@ -39,6 +39,19 @@ test('automatic history scene preparation waits for auto-weave and covers pendin
     'scene preparation is deferred while an auto-weave batch is unresolved');
 });
 
+test('Atlas view includes held cached suggestions and invalidates rendering when held IDs change', () => {
+  const view = app.slice(app.indexOf('function updateHistoryAtlasView'), app.indexOf('function parseHistoryLocation'));
+  assert.match(view, /state\.history\.suggestions[\s\S]*heldSuggestionSet\.has\(String\(item\.id\)\)/,
+    'held suggestions from cached windows are added to the Atlas projection');
+  assert.match(view, /heldSuggestionIds/);
+  assert.match(view, /suggestions:atlasSuggestions/);
+  assert.match(view, /heldSuggestionIds,atlasSuggestions/,
+    'held membership changes invalidate the projected Atlas view');
+  assert.doesNotMatch(view, /state\.history\s*=|state\.suggestions\s*=/,
+    'Atlas ghost projection does not mutate session history or gallery suggestions');
+});
+
+
 test('history panel uses text nodes for model content and wires weave, fork, Keep and regeneration actions', async () => {
   const root = new Element('main', document), calls = [];
   let listener;

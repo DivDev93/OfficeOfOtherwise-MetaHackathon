@@ -147,6 +147,19 @@ test('normalization sorts events, validates causal references, and derives stabl
   assert.throws(() => normalizeQuestionHistories({ id: 'q', histories: [{ id: 'same', events: [] }, { id: 'same', events: [] }] }), /Duplicate history/);
 });
 
+test('suggestion inspiration provenance persists only for an existing event and stays separate from causal metadata', () => {
+  const history = normalizeHistory({ id:'h', events:[event('source', 10)], suggestions:[
+    { id:'inspired', causeEventId:'q', inspiredByEventId:' source ' },
+    { id:'orphan', causeEventId:'source', inspiredByEventId:'missing' },
+    { id:'causal-only', causeEventId:'source' },
+  ] }, { questionId:'q' });
+  assert.equal(history.suggestions[0].inspiredByEventId, 'source');
+  assert.equal(history.suggestions[0].causeEventId, 'q');
+  assert.equal(history.suggestions[1].causeEventId, 'source');
+  assert.equal('inspiredByEventId' in history.suggestions[1], false, 'unknown event links are discarded');
+  assert.equal('inspiredByEventId' in history.suggestions[2], false, 'legacy causes do not get mislabeled as inspiration');
+});
+
 test('normalization keeps explicit question causes on later events and preserves history metadata', () => {
   const history = normalizeHistory({ id: 'h', origin: { source: 'saved' }, forkedFromHistoryId: 'h0', checkFlags: ['reviewed'], events: [
     event('first', -100, 'First'), event('later', 100, 'Later', { causeEventId: 'q', checkFlags: { verified: true } }),

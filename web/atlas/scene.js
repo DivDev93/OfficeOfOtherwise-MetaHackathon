@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { defaultWorldImageUrl } from './imageRefs.js';
 import { createWorldTextureFactory } from './worldTextures.js';
-import { formatHistoryQuestionChip, historyAtlasFrameBounds, historyOrbitMarkerScale, historyOrbitPositions, historyPinColorRole, historySurfaceVisibility, historyYearToAtlasX, historyZoomPresentation, historyZoomStage, isPendingHistoryEvent, layoutHistoryPins, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../historyAtlas.js';
+import { formatHistoryQuestionChip, historyAtlasFrameBounds, historyOrbitMarkerScale, historyOrbitPositions, historyPinColorRole, historySurfaceVisibility, historyYearToAtlasX, historyZoomPresentation, historyZoomStage, isHeldHistorySuggestion, isPendingHistoryEvent, layoutHistoryPins, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../historyAtlas.js';
 import { buildHistorySceneRecords, projectHistorySpineGeometry } from '../historySpines.js';
 import { projectGeographyLocation } from '../terrainRaster.js';
 import { clusterOpacityAtPresentation, orbitClusteredIdsForPresentation, planWorldClusters } from './clusters.js';
@@ -934,6 +934,7 @@ export function createAtlasScene(container, {
     }
     if (record.unenteredOutline) { atlasGroup.remove(record.unenteredOutline); record.unenteredOutline.material.dispose(); }
     if (record.pendingOutline) { atlasGroup.remove(record.pendingOutline); record.pendingOutline.material.dispose(); }
+    if (record.heldOutline) { atlasGroup.remove(record.heldOutline); record.heldOutline.material.dispose(); }
   }
 
   function updateLayout({ animateQuestionRefocus = false, timestamp = performance.now() } = {}) {
@@ -1084,13 +1085,24 @@ export function createAtlasScene(container, {
       } else if (worldRecord.pendingOutline) {
         atlasGroup.remove(worldRecord.pendingOutline); worldRecord.pendingOutline.material.dispose(); worldRecord.pendingOutline = null;
       }
+      if (isHeldHistorySuggestion(entry.world)) {
+        if (!worldRecord.heldOutline) {
+          const material = new THREE.SpriteMaterial({ map: unenteredOutlineTexture, color: '#55c9e9', transparent: true, depthWrite: false, opacity: 0 });
+          worldRecord.heldOutline = new THREE.Sprite(material);
+          worldRecord.heldOutline.name = 'Held history suggestion dashed cyan outline';
+          atlasGroup.add(worldRecord.heldOutline);
+        }
+      } else if (worldRecord.heldOutline) {
+        atlasGroup.remove(worldRecord.heldOutline); worldRecord.heldOutline.material.dispose(); worldRecord.heldOutline = null;
+      }
       if (historyProjection && worldRecord.label) {
         worldRecord.label.dataset.historySelected = String(entry.world.selected === true);
         worldRecord.label.dataset.historyPinRole = entry.world.visualKind === 'history-event'
           ? entry.world.highlighted ? 'gold-latest' : 'gold'
           : entry.world.visualKind === 'history-suggestion' ? 'cyan' : '';
         worldRecord.label.dataset.historyPending = String(isPendingHistoryEvent(entry.world));
-      } else if (worldRecord.label?.dataset) { delete worldRecord.label.dataset.historyPinRole; delete worldRecord.label.dataset.historySelected; delete worldRecord.label.dataset.historyPending; }
+        worldRecord.label.dataset.historyHeld = String(isHeldHistorySuggestion(entry.world));
+      } else if (worldRecord.label?.dataset) { delete worldRecord.label.dataset.historyPinRole; delete worldRecord.label.dataset.historySelected; delete worldRecord.label.dataset.historyPending; delete worldRecord.label.dataset.historyHeld; }
     }
 
     const desiredClusters = [
@@ -1484,6 +1496,19 @@ export function createAtlasScene(container, {
         const diameter = (entry.world.selected ? 22 : 18) - 4 * state.atlas;
         const size = 2 * worldRadiusForScreenPixels(Math.max(0.01, depth), camera.fov, Math.max(1, renderer.domElement.clientHeight), diameter);
         pendingOutline.scale.set(size, size, 1);
+      }
+      const heldOutline = registry.get(entry.id)?.heldOutline;
+      if (heldOutline) {
+        heldOutline.position.copy(flatSurfacePinMode
+          ? surfacePinAnchorPosition(entry, state, timestamp)
+          : worldPosition(entry, state, timestamp, markerRadius));
+        heldOutline.material.opacity = Math.max(entry.surfaceVisible ? state.surface : 0,
+          entry.world.visualKind === 'history-suggestion' ? state.atlas : 0) * 0.96 * revealAlpha(entry.id);
+        const depth = -heldOutline.position.clone().applyMatrix4(atlasGroup.matrixWorld).applyMatrix4(camera.matrixWorldInverse).z;
+        // The cyan ghost halo is CSS-sized and never participates in pin hit testing.
+        const diameter = (entry.world.selected ? 22 : 18) - 4 * state.atlas;
+        const size = 2 * worldRadiusForScreenPixels(Math.max(0.01, depth), camera.fov, Math.max(1, renderer.domElement.clientHeight), diameter);
+        heldOutline.scale.set(size, size, 1);
       }
     }
     for (const sprite of clusterSprites.values()) {

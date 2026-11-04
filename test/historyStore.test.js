@@ -57,6 +57,22 @@ test('deterministically migrates a realistic saved tree without rewriting its le
   assert.deepEqual(restarted.list(), [question]);
 });
 
+test('history suggestion window cache preserves explicit inspiration metadata across store restart', async t => {
+  const root = await fixture(t);
+  const store = createHistoryStore(root);
+  store.save({ id:'inspiration-question', histories:[{ id:'h', events:[branch('source-event', -2400, 'Seasonal channel builders')] }] });
+  const identity = { questionId:'inspiration-question', historyId:'h', window:{ fromYear:-3000, toYear:-2000 } };
+  const reservation = store.reserveWindow({ ...identity, requestId:'suggestion-request', userId:'user', sessionId:'session', cap:5 });
+  assert.equal(reservation.status, 'reserved');
+  const suggestion = { id:'window-suggestion', year:-2300, title:'Canal markers follow flood seasons',
+    summary:'Markers guide seasonal planting.', place:{ name:'Lake Chad', lat:13, lon:14 }, causeEventId:'inspiration-question',
+    inspiredByEventId:'source-event', window:identity.window };
+  assert.equal(store.completeWindow({ ...identity, requestId:'suggestion-request', suggestions:[suggestion] }).status, 'ready');
+  const restarted = createHistoryStore(root);
+  assert.equal(restarted.get(identity.questionId).histories[0].suggestions[0].inspiredByEventId, 'source-event');
+  assert.equal(restarted.getWindow(identity).suggestions[0].inspiredByEventId, 'source-event');
+});
+
 test('batch plan reservations persist ready plans and require their receipt for an uncertain explicit retry', async t => {
   const root = await fixture(t), store = createHistoryStore(root, () => Date.UTC(2026, 10, 3));
   const base = { planKey: 'a'.repeat(64), questionId: 'q', historyId: 'h', userId: 'u', sessionId: 's', cap: 5 };

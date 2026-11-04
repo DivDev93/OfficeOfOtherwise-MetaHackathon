@@ -394,13 +394,18 @@ test('history spine projection enables sibling selection and count-chip question
     onPreview(world) { previewWorld = world; },
   });
   const projection = controller.setHistoryView({ questions:[active,other], question:active, activeQuestionId:active.id,
-    historyId:'history-a', asOfYear:-1900, window:{ fromYear:-3000, toYear:-1001 }, showOrbit:true });
+    historyId:'history-a', asOfYear:-1900, window:{ fromYear:-3000, toYear:-1001 }, showOrbit:true,
+    suggestions:[{ id:'held-from-prior-window', year:-4200, title:'Held idea', place:{ lat:12, lon:20 },
+      window:{ fromYear:-5000, toYear:-4001 } }], heldSuggestionIds:['held-from-prior-window'] });
   assert.equal(projection.spineLayout.spines.length, 2);
   assert.equal(projection.siblingEarths[0].asOfYear, -1900);
   assert.deepEqual(projection.siblingEarths[0].events.map(item => item.id), ['shared'], 'future sibling events stay off the same-date Earth snapshot');
   assert.equal(projection.showOrbit, true);
   assert.equal(byText(toolbar, 'Unfolded worlds (orbit)').hidden, true, 'legacy unfold number input is removed in history mode');
   assert.equal(scene.history, projection);
+  assert.equal(projection.suggestions.find(item => item.id === 'held-from-prior-window')?.held, true,
+    'held suggestion IDs supplied by the session remain projected across cache windows');
+  assert.equal(projection.suggestions.find(item => item.id === 'held-from-prior-window')?.visualKind, 'history-suggestion');
   const siblingId = projection.siblingEarths[0].historyId;
   assert.equal(scene.callbacks.onHistorySelect(siblingId, { source:'pointer' }), true);
   assert.equal(selectedHistory.id, siblingId);

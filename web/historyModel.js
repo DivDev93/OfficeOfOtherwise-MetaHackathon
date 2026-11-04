@@ -162,7 +162,13 @@ export function normalizeHistory(history, { questionId, maxEraGapYears = 500 } =
   if (text(history.forkEventId)) result.forkEventId = text(history.forkEventId);
   for (const key of ['forkedFromHistoryId', 'forkReason', 'origin']) if (history[key] !== undefined) result[key] = structuredClone(history[key]);
   if (history.checkFlags !== undefined) result.checkFlags = structuredClone(history.checkFlags);
-  if (Array.isArray(history.suggestions)) result.suggestions = history.suggestions.map(item => ({ ...item }));
+  if (Array.isArray(history.suggestions)) result.suggestions = history.suggestions.map(item => {
+    const suggestion = { ...item };
+    const inspiredByEventId = text(item?.inspiredByEventId);
+    if (inspiredByEventId && ids.has(inspiredByEventId)) suggestion.inspiredByEventId = inspiredByEventId;
+    else delete suggestion.inspiredByEventId;
+    return suggestion;
+  });
   if (history.weaveBatches !== undefined) {
     if (!Array.isArray(history.weaveBatches) || history.weaveBatches.length > 256) throw new Error('Invalid weave batch ledger');
     result.weaveBatches = history.weaveBatches.map(batch => {

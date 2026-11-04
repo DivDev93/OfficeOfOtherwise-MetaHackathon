@@ -508,6 +508,8 @@ export async function createAtlasController({
         asOfYear,
         window: snapshot.window,
         suggestions: snapshot.suggestions,
+        heldSuggestions: snapshot.heldSuggestions,
+        heldSuggestionIds: snapshot.heldSuggestionIds,
         }),
         selectedEventId: snapshot.selectedEventId == null ? '' : String(snapshot.selectedEventId),
         selectedEventHistoryId: String(snapshot.selectedEventHistoryId ?? snapshot.historyId ?? snapshot.history?.id ?? ''),

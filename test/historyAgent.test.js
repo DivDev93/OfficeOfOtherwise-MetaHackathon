@@ -30,6 +30,21 @@ test('history suggestion agent accepts a named conflict and a compatible fit fro
   assert.match(calls[0].instructions, /"fits" means it can plausibly be true alongside every event/);
 });
 
+test('history suggestion agent receives the selected event as idea context without making it the cause', async () => {
+  const { agent, calls } = agentFor({ suggestions: fixture.suggestions });
+  const suggestions = await agent.suggest({ ...fixture, window: fixture.window, inspiredByEventId: 'channels-2400-bce' });
+  const input = JSON.parse(calls[0].input);
+  assert.deepEqual(input.inspiration, { eventId: 'channels-2400-bce', event: { year: -2400,
+    title: 'Timed channels water dry fields', summary: 'Communities use seasonal channels to direct lake water toward fields.',
+    place: { name: 'Lake Chad basin', lat: 13.2, lon: 14.1 } } });
+  assert.equal(Object.hasOwn(input.inspiration.event, 'causeEventId'), false, 'idea context does not label a cause');
+  assert.equal(input.history.events.length, fixture.history.events.length, 'full history remains the compatibility context');
+  assert.equal(suggestions[0].causeEventId, 'lake-chad', 'model-checked cause remains independent of the inspiration source');
+  assert.match(calls[0].instructions, /only an idea prompt source[\s\S]*choose causeEventId independently/);
+  await assert.rejects(agent.suggest({ ...fixture, window: fixture.window, inspiredByEventId: 'missing-event' }), /Invalid selected inspiration event/);
+  assert.equal(calls.length, 1, 'invalid inspiration is rejected before model dispatch');
+});
+
 test('history agent checks all later events against one newly woven batch in a single Spark call', async () => {
   const laterEvents = [{ id: 'later-a', year: -1000 }, { id: 'later-b', year: -500 }];
   const response = { checks: laterEvents.map(event => ({ eventId: event.id, inconsistent: event.id === 'later-b', reason: 'A shared resource no longer supports the later event.' })) };

@@ -56,6 +56,35 @@ test('suggestion windows cache by history and window; More explicitly appends a 
   assert.equal(more.history.suggestions.length, 2);
 });
 
+test('generated suggestion inspiration is explicit, survives window caching, and does not masquerade as cause', async () => {
+  const store = memoryStore();
+  const gate = deferred();
+  let calls = 0, agentInput = null;
+  const service = createHistoryService({ store, agent: { async suggest(input) {
+    calls++; agentInput = input; await gate.promise;
+    return [{ ...candidate('inspired-suggestion', -2300), inspiredByEventId:'model-spoof' }];
+  } } });
+  const args = { questionId:'lake-chad', historyId:'history-1', window:{ fromYear:-3000, toYear:-2000 },
+    userId:'u', sessionId:'s', inspiredByEventId:'settlement-1800' };
+  const firstRequest = service.suggest(args);
+  const coalescedRequest = service.suggest(args);
+  gate.resolve();
+  const [first, joined] = await Promise.all([firstRequest, coalescedRequest]);
+  assert.equal(agentInput.inspiredByEventId, 'settlement-1800', 'the validated selected event reaches the Wonder agent');
+  assert.equal(first.suggestions[0].inspiredByEventId, 'settlement-1800');
+  assert.equal(first.suggestions[0].causeEventId, 'channels-2400', 'inspiration never rewrites the model-checked cause');
+  assert.deepEqual(first.generatedSuggestionIds, ['inspired-suggestion']);
+  assert.equal(joined.generated, false);
+  assert.deepEqual(joined.generatedSuggestionIds, [], 'coalesced callers cannot trigger generation-only auto-weave');
+  const cached = await service.suggest(args);
+  assert.equal(cached.suggestions[0].inspiredByEventId, 'settlement-1800', 'cached rows retain their original provenance');
+  assert.equal(cached.generatedSuggestionIds, undefined);
+  assert.equal(calls, 1);
+  await assert.rejects(service.suggest({ ...args, window:{ fromYear:-2000, toYear:-1000 }, inspiredByEventId:'not-in-history' }),
+    error => error.code === 'invalid_inspiration');
+  assert.equal(calls, 1, 'invalid inspiration is rejected before model dispatch');
+});
+
 test('cached suggestions survive earlier weaves; each stale candidate is rechecked without another Wonder window call', async () => {
   const store = memoryStore();
   let generationCalls = 0, compatibilityChecks = 0, rippleChecks = 0;
@@ -466,6 +495,11 @@ test('removing one pending merged row restores only its sources and leaves the o
     excludedSuggestionIds: [], pending: true });
   assert.deepEqual(committed.events.map(item => item.id), ['row-a', mergedId, 'row-c']);
   assert.equal(modelCalls, 2, 'the checked batch uses one Wonder and one combined Spark call');
+  const mergedSceneRef = { status:'complete', url:`/history-media/${'c'.repeat(64)}.png` };
+  const withMergedMedia = store.get('lake-chad');
+  withMergedMedia.histories[0].events = withMergedMedia.histories[0].events.map(item => item.id === mergedId
+    ? { ...item, sceneRef:mergedSceneRef } : item);
+  store.save(withMergedMedia);
   const callCount = modelCalls;
   const removed = await service.removePendingWeave({ questionId: 'lake-chad', historyId: 'history-1',
     pendingBatchId: committed.pendingBatchId, eventId: mergedId });
@@ -476,6 +510,8 @@ test('removing one pending merged row restores only its sources and leaves the o
   assert.deepEqual(removed.history.suggestions.map(item => item.id), ['row-mid-a', 'row-mid-b']);
   assert.equal(removed.history.suggestions.find(item => item.id === 'row-mid-a').sceneRef.path, 'scenes/row-mid-a.png');
   assert.equal(removed.history.suggestions.find(item => item.id === 'row-mid-b').heroRef.path, 'scenes/row-mid-b.png');
+  assert.notDeepEqual(removed.history.suggestions.find(item => item.id === 'row-mid-a').sceneRef, mergedSceneRef,
+    'a late merged image never overwrites distinct source media');
   assert.deepEqual(removed.history.weaveBatches[0].eventIds, ['row-a', 'row-c']);
   assert.deepEqual(removed.history.weaveBatches[0].sourceSuggestions.map(item => item.id), ['row-a', 'row-c']);
   const laterFlags = removed.history.events.find(item => item.id === 'settlement-1800').checkFlags.filter(flag => flag.kind === 'weave-ripple');
@@ -486,6 +522,43 @@ test('removing one pending merged row restores only its sources and leaves the o
   assert.deepEqual(finalized.events.map(item => item.id), ['row-a', 'row-c']);
   assert.ok(finalized.events.every(item => item.pending !== true));
   assert.equal(modelCalls, callCount, 'finalizing the remaining rows is persistence-only');
+});
+
+test('removing a single-source pending event restores ready media generated after its snapshot without model calls', async () => {
+  const store = memoryStore();
+  const source = { ...candidate('late-media-source', -2300), window: { fromYear: -2500, toYear: -2000 } };
+  const seeded = store.get('lake-chad'); seeded.histories[0].suggestions = [source]; store.save(seeded);
+  let modelCalls = 0;
+  const service = createHistoryService({ store, agent: { async suggest() { throw new Error('not used'); },
+    async planBatchWeave({ question, suggestions }) {
+      modelCalls++;
+      return { chain: suggestions.map(item => ({ suggestionId: item.id, causeEventId: question.id })), merges: [], conflicts: [] };
+    }, async checkRippleBatch({ events }) {
+      modelCalls++;
+      return events.map(item => ({ eventId: item.id, inconsistent: false, reason: '' }));
+    } } });
+  const args = { questionId: 'lake-chad', historyId: 'history-1', suggestionIds: [source.id], userId: 'u', sessionId: 's' };
+  const checked = await service.batchCheck(args);
+  const committed = await service.weaveBatch({ ...args, planId: checked.plan.id, acceptedMergeIds: [], excludedSuggestionIds: [], pending: true });
+  const woven = committed.events[0];
+  assert.deepEqual(committed.history.weaveBatches[0].eventSources, [{ eventId: woven.id, sourceSuggestionIds: [source.id] }]);
+  assert.equal(woven.sceneRef, undefined, 'the source snapshot predates scene creation');
+  const sceneRef = { status: 'complete', url: `/history-media/${'a'.repeat(64)}.png` };
+  const cutoutRef = { status: 'complete', url: `/history-media/${'b'.repeat(64)}.png` };
+  const withMedia = store.get('lake-chad');
+  withMedia.histories[0].events = withMedia.histories[0].events.map(item => item.id === woven.id
+    ? { ...item, sceneRef, cutoutRef } : item);
+  const mediaSaved = store.save(withMedia);
+  const savedWoven = mediaSaved.histories[0].events.find(item => item.id === woven.id);
+  assert.equal(savedWoven.sceneRef?.url, sceneRef.url);
+  assert.equal(savedWoven.cutoutRef?.url, cutoutRef.url);
+  const modelCallsBeforeRemove = modelCalls;
+  const removed = await service.removePendingWeave({ questionId: 'lake-chad', historyId: 'history-1',
+    pendingBatchId: committed.pendingBatchId, eventId: woven.id });
+  const restored = removed.history.suggestions.find(item => item.id === source.id);
+  assert.equal(restored.sceneRef.status, 'complete'); assert.equal(restored.sceneRef.url, sceneRef.url);
+  assert.equal(restored.cutoutRef.status, 'complete'); assert.equal(restored.cutoutRef.url, cutoutRef.url);
+  assert.equal(modelCalls, modelCallsBeforeRemove, 'restoration is persistence-only');
 });
 
 test('conflicting suggestion forks with shared earlier prefix and leaves original history intact', async () => {

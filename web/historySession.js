@@ -8,7 +8,8 @@ const windowFor = year => {
 
 export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setTimeout, clearTimer = clearTimeout,
   onChange = () => {}, debounceMs = 800 } = {}) {
-  let context = null, timer = null, generation = 0, preferenceRequest = 0;
+  let context = null, timer = null, generation = 0, preferenceRequest = 0, heldOwnerKey = '';
+  const preferenceWriteVersion = { autoSuggest: 0, autoWeave: 0 };
   let batchCheckOwner = 0;
   let autoWeaveTask = null;
   const pendingFinalizeFlights = new Set();
@@ -16,9 +17,9 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   const batchPlanFlights = new Map();
   const batchCheckUncertainCache = new Map();
   const listeners = new Set();
-  const state = { autoSuggest: true, autoWeave: false, autoWeaveRunning: false, questionId: '', historyId: '', selectedEventId: '', date: null, window: null, question: null, questions: [], histories: [],
+  const state = { autoSuggest: true, autoWeave: false, autoWeaveRunning: false, questionId: '', historyId: '', selectedEventId: '', heldSuggestionIds: [], date: null, window: null, question: null, questions: [], histories: [],
     suggestions: [], status: '', paused: false, loading: false, busyIds: new Set(), history: null, windowCached: false, windowStatus: '', batchCheckUncertain:null };
-  const emit = () => { const snapshot = { ...state, suggestions: [...state.suggestions], busyIds: new Set(state.busyIds) }; onChange(snapshot); for (const listener of listeners) listener(snapshot); };
+  const emit = () => { const snapshot = { ...state, suggestions: [...state.suggestions], heldSuggestionIds: [...state.heldSuggestionIds], busyIds: new Set(state.busyIds) }; onChange(snapshot); for (const listener of listeners) listener(snapshot); };
   const isCurrent = (token, identity) => token === generation && context?.questionId === identity.questionId
     && (!identity.historyId || context?.historyId === identity.historyId);
   function cachedEntry(history, year) {
@@ -80,29 +81,50 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     } catch { /* Preference loading must not block cached history. */ }
   }
   async function persistPreference(value) {
+    const previous = state.autoSuggest, writeVersion = ++preferenceWriteVersion.autoSuggest;
+    preferenceRequest++;
     state.autoSuggest = value; state.paused = false;
     if (timer !== null) { clearTimer(timer); timer = null; }
     emit();
     try {
       const response = await fetchImpl('/api/history/preferences', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ autoSuggest: value }) });
-      if (!response.ok) state.status = 'Could not save the auto-suggest setting.';
-    } catch { state.status = 'Could not save the auto-suggest setting.'; }
-    emit();
-    if (value && context && !context.readOnly && !state.suggestions.length) scheduleSuggest();
+      if (!response.ok && writeVersion === preferenceWriteVersion.autoSuggest) {
+        state.autoSuggest = previous; state.status = 'Could not save the auto-suggest setting.';
+      }
+    } catch {
+      if (writeVersion === preferenceWriteVersion.autoSuggest) {
+        state.autoSuggest = previous; state.status = 'Could not save the auto-suggest setting.';
+      }
+    }
+    if (writeVersion === preferenceWriteVersion.autoSuggest) {
+      emit();
+      if (value && context && !context.readOnly && !state.suggestions.length) scheduleSuggest();
+    }
   }
   async function persistAutoWeave(value) {
     if (typeof value !== 'boolean') return false;
-    const previous = state.autoWeave;
+    const previous = state.autoWeave, writeVersion = ++preferenceWriteVersion.autoWeave;
+    preferenceRequest++;
     state.autoWeave = value; emit();
     try {
       const response = await fetchImpl('/api/history/preferences', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ autoWeave: value }) });
-      if (!response.ok) { state.autoWeave = previous; state.status = 'Could not save the auto-weave setting.'; emit(); return false; }
+      if (!response.ok) {
+        if (writeVersion === preferenceWriteVersion.autoWeave) {
+          state.autoWeave = previous; state.status = 'Could not save the auto-weave setting.'; emit();
+        }
+        return false;
+      }
       const saved = await response.json().catch(() => ({}));
-      if (typeof saved.autoWeave === 'boolean') state.autoWeave = saved.autoWeave;
-      if (typeof saved.autoSuggest === 'boolean') state.autoSuggest = saved.autoSuggest;
-      emit(); return true;
+      if (writeVersion === preferenceWriteVersion.autoWeave) {
+        if (typeof saved.autoWeave === 'boolean') state.autoWeave = saved.autoWeave;
+        emit();
+      }
+      return true;
     } catch {
-      state.autoWeave = previous; state.status = 'Could not save the auto-weave setting.'; emit(); return false;
+      if (writeVersion === preferenceWriteVersion.autoWeave) {
+        state.autoWeave = previous; state.status = 'Could not save the auto-weave setting.'; emit();
+      }
+      return false;
     }
   }
   async function loadHistory(identity, token) {
@@ -118,7 +140,10 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
       const history = question?.histories?.find(item => item.id === identity.historyId)
         || question?.histories?.find(item => item.events?.some(event => event.id === identity.eventId));
       if (!history) { state.history = null; state.suggestions = []; state.status = 'No saved history is available for this story.'; return; }
-      context.historyId = history.id; state.question = question; state.histories = question.histories || [];
+      context.historyId = history.id;
+      const ownerKey = `${identity.questionId}:${history.id}`;
+      if (heldOwnerKey !== ownerKey) state.heldSuggestionIds = [];
+      heldOwnerKey = ownerKey; state.question = question; state.histories = question.histories || [];
       state.historyId = history.id; state.history = history; state.window = windowFor(identity.date);
       updateWindowSuggestions(); state.status = state.windowStatus === 'pending' ? 'Suggestions for this window are still being prepared.' : state.windowStatus === 'unknown' ? 'A previous request may have completed; use More to check for another batch.' : '';
     } catch (error) {
@@ -138,8 +163,11 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     let autoWeaveIds = [];
     state.loading = true; state.status = more ? `Finding more events around ${identity.date}…` : `Finding events around ${identity.date}…`; emit();
     try {
+      const canonicalSelection = state.history?.events?.find(event => String(event.id) === String(state.selectedEventId));
+      const requestBody = { questionId: identity.questionId, historyId: identity.historyId, window: identity.window,
+        ...(more ? { more: true } : {}), ...(canonicalSelection?.id != null ? { inspiredByEventId: String(canonicalSelection.id) } : {}) };
       const response = await fetchImpl('/api/history/suggest', { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ questionId: identity.questionId, historyId: identity.historyId, window: identity.window, ...(more ? { more: true } : {}) }) });
+        body: JSON.stringify(requestBody) });
       const data = await response.json().catch(() => ({}));
       if (!isCurrent(token, identity)) return;
       if (!response.ok) {
@@ -395,6 +423,9 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     const cachedHistory = sameHistory ? state.history : savedHistories.find(item => item.id === historyId)
       || (!historyId ? savedHistories.find(item => item.events?.some(item => item.id === eventId)) : null);
     if (cachedHistory && !next.historyId) next.historyId = cachedHistory.id;
+    const ownerKey = `${questionId}:${next.historyId || ''}`;
+    if (heldOwnerKey !== ownerKey) state.heldSuggestionIds = [];
+    heldOwnerKey = ownerKey;
     context = next; state.questionId = questionId; state.historyId = next.historyId; state.selectedEventId = eventId; state.date = date; state.window = next.window;
     state.question = savedQuestion; state.histories = savedHistories;
     state.loading = false; state.busyIds.clear(); state.paused = false; state.autoWeaveRunning = false; state.history = cachedHistory || null;
@@ -510,18 +541,33 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     if (!state.questionId || !state.historyId || !Number.isSafeInteger(date) || date === 0) return;
     setContext({ questionId: state.questionId, historyId: state.historyId, eventId: state.selectedEventId, date });
   }
+  function setHeldSuggestionIds(ids = []) {
+    if (!Array.isArray(ids) && !(ids instanceof Set)) return false;
+    const ownerKey = context ? `${context.questionId}:${context.historyId}` : '';
+    if (!ownerKey || ownerKey !== heldOwnerKey || !state.history) {
+      state.heldSuggestionIds = [];
+      emit();
+      return [];
+    }
+    const validIds = new Set([...(state.history.suggestions || []), ...state.suggestions]
+      .filter(item => item?.id != null && (item.historyId == null || String(item.historyId) === String(state.historyId)))
+      .map(item => String(item.id)));
+    state.heldSuggestionIds = [...new Set([...ids].map(String).filter(id => validIds.has(id)))];
+    emit();
+    return [...state.heldSuggestionIds];
+  }
   function clear() {
     finalizePendingBeforeNavigation(context, state.history);
     generation++; if (timer !== null) clearTimer(timer); timer = null; context = null;
     batchCheckOwner++; batchPlanCache.clear(); batchPlanFlights.clear(); batchCheckUncertainCache.clear(); state.batchCheckUncertain = null;
-    state.questionId = ''; state.historyId = ''; state.selectedEventId = ''; state.date = null; state.window = null; state.suggestions = [];
+    heldOwnerKey = ''; state.questionId = ''; state.historyId = ''; state.selectedEventId = ''; state.heldSuggestionIds = []; state.date = null; state.window = null; state.suggestions = [];
     state.status = ''; state.loading = false; state.paused = false; state.autoWeaveRunning = false; state.busyIds.clear(); state.history = null; state.question = null; state.histories = []; state.questions = []; state.windowCached = false; state.windowStatus = ''; emit();
   }
   function hover() { /* Preview is deliberately inert: never generate from hover. */ }
   readPreferences();
-  return { getState: () => ({ ...state, suggestions: [...state.suggestions], busyIds: new Set(state.busyIds) }),
+  return { getState: () => ({ ...state, suggestions: [...state.suggestions], heldSuggestionIds: [...state.heldSuggestionIds], busyIds: new Set(state.busyIds) }),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-     setContext, selectHistory, selectQuestion, openQuestion, setQuestions, updateMediaReference, selectEvent, selectSuggestion, selectRecord, selectSuggestionWindow, setDate, clear, hover,
+     setContext, selectHistory, selectQuestion, openQuestion, setQuestions, updateMediaReference, selectEvent, selectSuggestion, selectRecord, selectSuggestionWindow, setDate, setHeldSuggestionIds, clear, hover,
     setAutoSuggest: persistPreference, setAutoWeave: persistAutoWeave, finalizePendingBatch, removePendingEvent,
     suggest: () => requestSuggestions(false), more: () => requestSuggestions(true),
     weave: suggestionId => mutate('/api/history/weave', { suggestionId }, `suggestion:${suggestionId}`),

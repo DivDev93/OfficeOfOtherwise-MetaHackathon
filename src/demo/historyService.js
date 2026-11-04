@@ -98,12 +98,16 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
     finally { release(); if (mutationTails.get(questionId) === current) mutationTails.delete(questionId); }
   }
 
-  async function suggest({ questionId, historyId, window, userId, sessionId, signal, more = false } = {}) {
+  async function suggest({ questionId, historyId, window, userId, sessionId, signal, more = false, inspiredByEventId } = {}) {
     if (!validId(questionId) || !validId(historyId)) throw new HistoryServiceError('invalid_request', 'Question and history are required');
     if (!window || !Number.isSafeInteger(window.fromYear) || !Number.isSafeInteger(window.toYear) || window.fromYear > window.toYear || window.toYear - window.fromYear > 100_000) {
       throw new HistoryServiceError('invalid_window', 'Invalid suggestion window');
     }
     const { question, history } = resolve(store, questionId, historyId);
+    if (inspiredByEventId !== undefined && (!validId(inspiredByEventId)
+        || !history.events.some(event => event.id === inspiredByEventId))) {
+      throw new HistoryServiceError('invalid_inspiration', 'Choose an existing event in this history as the suggestion inspiration.', 400);
+    }
     const key = `${windowKey(questionId, historyId, window)}:${more ? 'more' : 'initial'}`;
     if (inFlight.has(key)) {
       const joined = await inFlight.get(key);
@@ -133,9 +137,13 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
       }
       const dispatchStart = agent.client?.dispatchCount?.();
       try {
-        const generated = await agent.suggest({ question, history, window, signal });
+        const generated = await agent.suggest({ question, history, window, signal, ...(inspiredByEventId ? { inspiredByEventId } : {}) });
         const revision = historyRevision(history);
-        const suggestions = generated.map(item => ({ ...item, window: { ...window }, historyRevision: revision, generatedAt: new Date(now()).toISOString() }));
+        const suggestions = generated.map(item => {
+          const { inspiredByEventId: _modelInspiration, ...candidate } = item;
+          return { ...candidate, ...(inspiredByEventId ? { inspiredByEventId } : {}), window: { ...window },
+            historyRevision: revision, generatedAt: new Date(now()).toISOString() };
+        });
         let completed = { status: 'ready', suggestions };
         if (typeof store.completeWindow === 'function') completed = store.completeWindow({ questionId, historyId, window,
           requestId: reservation.requestId, more, suggestions });
@@ -840,9 +848,22 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
         throw new HistoryServiceError('pending_batch_snapshot_missing', 'A source suggestion snapshot is unavailable; removal was not applied.', 409);
       }
       for (const sourceId of restoredSourceIds) {
-        const suggestion = sourceSnapshots.get(sourceId);
+        let suggestion = structuredClone(sourceSnapshots.get(sourceId));
+        const sourceEvent = [...removedIds].map(id => ({ event: removedEvents.get(id), sourceIds: eventSources.get(id)
+          ?? removedEvents.get(id)?.sourceSuggestionIds ?? [id] })).find(item => item.sourceIds.includes(sourceId));
+        // A single-source pending event can acquire ready media after the source
+        // snapshot is taken. Carry only missing refs back to that source. Merged
+        // events keep their source-specific snapshots so one merged image never
+        // replaces several distinct source images.
+        if (sourceEvent?.sourceIds.length === 1) {
+          const readyRef = value => typeof value === 'string' ? Boolean(value.trim())
+            : value?.status === 'complete' && Boolean(value.url || value.path);
+          for (const key of ['sceneRef', 'heroRef', 'cutoutRef', 'modelRef']) {
+            if (!readyRef(suggestion[key]) && readyRef(sourceEvent.event?.[key])) suggestion[key] = structuredClone(sourceEvent.event[key]);
+          }
+        }
         if (!retained.some(event => event.id === suggestion.id) && !currentSuggestions.has(suggestion.id)) {
-          currentSuggestions.set(suggestion.id, structuredClone(suggestion));
+          currentSuggestions.set(suggestion.id, suggestion);
         }
       }
       const suggestions = [...currentSuggestions.values()].sort((a, b) => a.year - b.year || a.id.localeCompare(b.id));

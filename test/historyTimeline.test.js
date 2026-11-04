@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mountHistoryTimeline, groupHistoryEras } from '../web/historyTimeline.js';
 
 class Element {
-  constructor(tag, document) { this.tagName = tag; this.ownerDocument = document; this.children = []; this.dataset = {}; this.listeners = {}; this.attributes = {}; this.style = {}; this.hidden = false; this.selected = false; this.value = ''; }
+  constructor(tag, document) { this.tagName = tag; this.ownerDocument = document; this.children = []; this.dataset = {}; this.listeners = {}; this.attributes = {}; this.style = {}; this.hidden = false; this.selected = false; this.value = '';
+    const classes=new Set(); this.classList={toggle(name,force){if(force===undefined)force=!classes.has(name);if(force)classes.add(name);else classes.delete(name);return force;},add(name){classes.add(name);},remove(name){classes.delete(name);},contains(name){return classes.has(name);}}; }
   set textContent(value) { this._text = String(value); this.children = []; }
   get textContent() { return (this._text || '') + this.children.map(node => node.textContent || '').join(''); }
   append(...nodes) { for (const node of nodes) { node.parentNode?.children?.splice(node.parentNode.children.indexOf(node),1); node.parentNode=this; this.children.push(node); } }
@@ -11,7 +12,17 @@ class Element {
   insertBefore(node, reference) { node.parentNode?.children?.splice(node.parentNode.children.indexOf(node),1); const index=this.children.indexOf(reference); node.parentNode=this; this.children.splice(index<0?this.children.length:index,0,node); return node; }
   setAttribute(key, value) { this.attributes[key] = String(value); }
   getAttribute(key) { return this.attributes[key] ?? null; }
-  addEventListener(type, fn) { this.listeners[type] = fn; }
+  addEventListener(type, fn) {
+    const existing=this.listeners[type];
+    if (!existing) this.listeners[type]=fn;
+    else { const callbacks=existing._callbacks || [existing]; callbacks.push(fn); this.listeners[type]=Object.assign(event=>callbacks.forEach(callback=>callback(event)),{_callbacks:callbacks}); }
+  }
+  removeEventListener(type, fn) {
+    const existing=this.listeners[type]; if (!existing) return;
+    const callbacks=existing._callbacks || [existing], next=callbacks.filter(callback=>callback!==fn);
+    if (!next.length) delete this.listeners[type];
+    else this.listeners[type]=Object.assign(event=>next.forEach(callback=>callback(event)),{_callbacks:next});
+  }
   matches(selector) { return selector === 'select[data-history-select]' && this.tagName === 'select' && this.dataset.historySelect === 'true'; }
   queryAll(tag) { return [...(this.tagName === tag ? [this] : []), ...this.children.flatMap(node => node.queryAll?.(tag) || [])]; }
   querySelectorAll(selector) { return selector === 'input[data-batch-suggestion]'
@@ -19,8 +30,10 @@ class Element {
     : selector === 'input[data-preview-exclude]' ? this.queryAll('input').filter(input => input.dataset.previewExclude)
     : selector === 'button[data-action]' ? this.queryAll('button').filter(button => button.dataset.action) : []; }
   closest(selector) {
+    if (selector === '[data-swipe-card]') { let node=this; while(node){if(node.dataset?.swipeCard==='true')return node;node=node.parentNode;} }
+    if (selector === 'button[data-action]') { let node=this; while(node){if(node.tagName==='button'&&node.dataset?.action)return node;node=node.parentNode;} }
     if (selector === 'article.history-timeline-suggestion') { let node=this; while(node){if(node.tagName==='article'&&String(node.className).split(/\s+/).includes('history-timeline-suggestion'))return node;node=node.parentNode;} }
-    return selector === 'button[data-action]' && this.tagName === 'button' && this.dataset.action || selector === 'button[data-history-id]' && this.tagName === 'button' && this.dataset.historyId ? this : null;
+    return selector === 'button[data-history-id]' && this.tagName === 'button' && this.dataset.historyId ? this : null;
   }
   focus(options) { this.focused = true; this.focusOptions = options; this.listeners.focus?.({ target:this }); }
   scrollIntoView() { this.scrolled = true; }
@@ -428,4 +441,144 @@ test('comparison cards distinguish histories from saved event paths instead of f
   state.date=2402; mounted.render(state);
   assert.match(mounted.element.children[4].textContent,/Shares 1 opening event through 1,978 CE/);
   assert.doesNotMatch(mounted.element.children[4].textContent,/from 2,402 CE/);
+});
+
+test('deck review keeps list selection separate, routes keyboard and button decisions, scopes held suggestions, and reviews kept IDs', async () => {
+  const suggestions=[
+    event('deck-a',110,'First deck source',{verdict:'fits'}),
+    event('deck-b',120,'Second deck source',{verdict:'fits'}),
+    event('deck-c',130,'Third deck source',{verdict:'conflicts',conflictsWith:'anchor'}),
+  ];
+  const history={id:'deck-history',events:[],suggestions};
+  const state={questionId:'deck-question',question:{id:'deck-question',histories:[history]},history,histories:[history],historyId:history.id,suggestions};
+  const calls=[], held=[];
+  const plan={id:'deck-plan',questionId:state.questionId,historyId:history.id,suggestionIds:['deck-a','deck-b'],existingEventIds:[state.questionId],existingEvents:[],
+    chain:[{...suggestions[0],causeEventId:state.questionId},{...suggestions[1],causeEventId:'deck-a'}],merges:[],conflicts:[]};
+  const session={setHeldSuggestionIds(ids){state.heldSuggestionIds=[...ids];held.push([...ids]);},checkWeaveBatch:async ids=>{calls.push(['check',[...ids]]);return plan;},getState:()=>({status:''})};
+  const root=new Element('main',document), mounted=mountHistoryTimeline(root,{getState:()=>state,session,document});
+  const timeline=mounted.element.children[1], tray=mounted.element.children[2], portal=root.children.find(node=>node.className==='history-suggestion-deck-portal');
+  const listChecks=()=>tray.queryAll('input').filter(input=>input.dataset.batchSuggestion);
+  assert.deepEqual(listChecks().filter(input=>input.checked).map(input=>input.dataset.batchSuggestion),['deck-a','deck-b'],'conflicts remain excluded from the independent list batch selection');
+  const mode=tray.queryAll('button').find(node=>node.dataset.action==='deck-mode-deck');
+  await tray.listeners.click({target:{closest:()=>mode}});
+  let card=portal.queryAll('article').find(node=>node.dataset.swipeCard==='true');
+  assert.equal(card.dataset.suggestionId,'deck-a','the deck starts with the first chronological unreviewed source');
+  assert.equal(card.queryAll('span').some(node=>String(node.className).includes('history-verdict')),false,'starting-point decks hide fit/conflict verdict labels');
+  portal.listeners.keydown({key:'ArrowRight',target:card,preventDefault(){},stopPropagation(){}});
+  assert.equal(state.heldSuggestionIds[0],'deck-a','right arrow keeps and synchronizes the active owner held set');
+  card=portal.queryAll('article').find(node=>node.dataset.swipeCard==='true');
+  assert.equal(card.dataset.suggestionId,'deck-b');
+  portal.listeners.keydown({key:'ArrowLeft',target:card,preventDefault(){},stopPropagation(){}});
+  assert.deepEqual(held.at(-1),['deck-a'],'passing a card does not add it to held suggestion IDs');
+  const passedToggle=portal.queryAll('button').find(node=>node.dataset.action==='deck-passed-toggle');
+  await portal.listeners.click({target:{closest:()=>passedToggle}});
+  const passedRow=portal.queryAll('div').find(node=>node.className==='history-deck-passed-row');
+  assert.ok(passedRow.queryAll('button').some(node=>node.dataset.action==='deck-weave'),'passed suggestions remain individually weaveable');
+  assert.ok(passedRow.queryAll('button').some(node=>node.dataset.action==='deck-rekeep'),'a passed fitting suggestion can be re-kept');
+  const undo=tray.queryAll('button').find(node=>node.dataset.action==='deck-undo');
+  await tray.listeners.click({target:{closest:()=>undo}});
+  card=portal.queryAll('article').find(node=>node.dataset.swipeCard==='true');
+  assert.equal(card.dataset.suggestionId,'deck-b','Undo restores the prior card to the unreviewed deck');
+  const keep=card.queryAll('button').find(node=>node.dataset.action==='deck-keep');
+  await portal.listeners.click({target:{closest:()=>keep}});
+  assert.deepEqual(state.heldSuggestionIds,['deck-a','deck-b'],'the card Keep button uses the same state decision path');
+  assert.deepEqual(listChecks().filter(input=>input.checked).map(input=>input.dataset.batchSuggestion),['deck-a','deck-b'],'deck decisions do not rewrite the list checkbox selection');
+  const review=tray.queryAll('button').find(node=>node.dataset.action==='deck-review-kept');
+  await tray.listeners.click({target:{closest:()=>review}});
+  assert.deepEqual(calls,[['check',['deck-a','deck-b']]],'Review kept checks kept deck IDs, not the current list selection set');
+  assert.match(mounted.element.children[3].textContent,/2 selected suggestions/);
+  const cancel=mounted.element.children[3].queryAll('button').find(node=>node.dataset.action==='batch-cancel');
+  await mounted.element.children[3].listeners.click({target:{closest:()=>cancel}});
+  assert.equal(mounted.element.children[3].hidden,true);
+  assert.equal(portal.hidden,false,'cancel returns to the same deck without auto-opening another preview');
+  assert.equal(portal.queryAll('article').find(node=>node.dataset.swipeCard==='true').dataset.suggestionId,'deck-c');
+  assert.equal(timeline.queryAll('li').length,0);
+});
+
+test('event rows quietly count unwoven suggestions inspired by that event', () => {
+  const source=event('source',100,'Source event');
+  const history={id:'quiet-history',events:[source,event('woven-copy',130,'Already woven',{causeEventId:'source'})],suggestions:[
+    event('held-suggestion',110,'Held',{inspiredByEventId:'source'}),
+    event('passed-suggestion',120,'Passed',{inspiredByEventId:'source'}),
+    event('woven-copy',130,'Already woven',{inspiredByEventId:'source'}),
+  ]};
+  const state={questionId:'quiet-question',question:{id:'quiet-question',histories:[history]},history,histories:[history],historyId:history.id,
+    suggestions:[...history.suggestions],heldSuggestionIds:['held-suggestion']};
+  const mounted=mountHistoryTimeline(new Element('main',document),{getState:()=>state,document});
+  const row=mounted.element.queryAll('li').find(item=>item.dataset.eventId==='source');
+  assert.equal(row.queryAll('span').find(node=>node.className==='history-event-quiet-suggestions').textContent,'+2 unwoven');
+});
+
+test('deck portal keeps review shortcuts available, folds the compact rail, and does not repeat empty-deck preview after cancel', async () => {
+  const doc={createElement(tag){return new Element(tag,doc);},createTextNode(text){return {textContent:String(text),queryAll:()=>[]};},defaultView:{innerWidth:375,innerHeight:812,addEventListener(){},removeEventListener(){}}};
+  doc.body=new Element('body',doc);
+  const sources=[event('fit-one',110,'First fit',{verdict:'fits'}),event('fit-two',120,'Second fit',{verdict:'fits'})];
+  const history={id:'shortcut-history',events:[],suggestions:sources};
+  const state={questionId:'shortcut-question',question:{id:'shortcut-question',histories:[history]},history,histories:[history],historyId:history.id,suggestions:sources};
+  const plan={id:'shortcut-plan',questionId:state.questionId,historyId:history.id,suggestionIds:sources.map(item=>item.id),existingEventIds:[state.questionId],existingEvents:[],
+    chain:sources.map((item,index)=>({...item,causeEventId:index?sources[index-1].id:state.questionId})),merges:[],conflicts:[]};
+  const checked=[]; let cachedPlan=null;
+  const session={setHeldSuggestionIds(ids){state.heldSuggestionIds=[...ids];},checkWeaveBatch:async ids=>{if(!cachedPlan){checked.push([...ids]);cachedPlan=plan;}return cachedPlan;},getState:()=>({status:''})};
+  const root=new Element('main',doc), mounted=mountHistoryTimeline(root,{getState:()=>state,session,document:doc,isCompact:()=>true});
+  const tray=mounted.element.children[2], portal=doc.body.children.find(node=>node.className==='history-suggestion-deck-portal');
+  const mode=tray.queryAll('button').find(node=>node.dataset.action==='deck-mode-deck');
+  const panel=mounted.element.children[3];
+  await tray.listeners.click({target:{closest:()=>mode}});
+  assert.equal(doc.body.classList.contains('history-phone-deck-active'),true,'compact deck mode folds the rail behind the globe');
+  assert.equal(tray.queryAll('button').find(node=>node.dataset.action==='deck-keep-all-fits').hidden,true,'portal actions have no duplicate visible rail controls');
+  const keepAll=portal.queryAll('button').find(node=>node.dataset.action==='deck-keep-all-fits');
+  assert.ok(keepAll,'Keep all fits remains available directly in the deck portal');
+  await portal.listeners.click({target:{closest:()=>keepAll}});
+  assert.deepEqual(checked,[['fit-one','fit-two']],'empty-deck transition previews only the newly kept IDs');
+  assert.equal(panel.hidden,false);
+  const cancel=panel.queryAll('button').find(node=>node.dataset.action==='batch-cancel');
+  await panel.listeners.click({target:{closest:()=>cancel}});
+  assert.equal(panel.hidden,true); assert.equal(portal.hidden,false);
+  assert.equal(checked.length,1,'cancel does not automatically reopen an empty-deck preview');
+  const review=portal.queryAll('button').find(node=>node.dataset.action==='deck-review-kept');
+  await portal.listeners.click({target:{closest:()=>review}});
+  assert.equal(checked.length,1,'explicit Review kept reuses the same selection check');
+  const back=portal.queryAll('button').find(node=>node.dataset.action==='deck-list');
+  await portal.listeners.click({target:{closest:()=>back}});
+  assert.equal(doc.body.classList.contains('history-phone-deck-active'),false,'Back to list restores the phone history rail');
+});
+
+test('successful weave source removal clears held IDs after the outer render without duplicating the suggestion tray', async () => {
+  const window={fromYear:100,toYear:199};
+  const source=event('emit-source',110,'Emitted source',{verdict:'fits',window});
+  const history={id:'emit-history',events:[],suggestions:[source],suggestionWindows:[{window,status:'ready',suggestionCount:6}]};
+  const state={questionId:'emit-question',question:{id:'emit-question',title:'Emit question',histories:[history]},history,histories:[history],historyId:history.id,suggestions:[source],window};
+  let subscriber=null, heldUpdates=0;
+  const plan={id:'emit-plan',questionId:state.questionId,historyId:history.id,suggestionIds:[source.id],existingEventIds:[state.questionId],existingEvents:[],
+    chain:[{...source,causeEventId:state.questionId}],merges:[],conflicts:[]};
+  const session={
+    setHeldSuggestionIds(ids){state.heldSuggestionIds=[...ids];heldUpdates++;subscriber?.(state);},
+    checkWeaveBatch:async()=>plan,
+    commitWeaveBatch:async()=>{history.events=[event('woven-canonical',110,source.title,{causeEventId:state.questionId})];history.suggestions=[];state.suggestions=[];return {history};},
+    getState:()=>({status:''}),
+  };
+  const root=new Element('main',document), mounted=mountHistoryTimeline(root,{getState:()=>state,session,subscribe:callback=>{subscriber=callback;return()=>{};},document});
+  const tray=mounted.element.children[2];
+  assert.match(tray.queryAll('button').find(node=>node.dataset.action==='suggest-window').textContent,/1 · 100 CE to 199 CE/,'cached generation count does not inflate the visible unwoven count');
+  const mode=tray.queryAll('button').find(node=>node.dataset.action==='deck-mode-deck');
+  await tray.listeners.click({target:{closest:()=>mode}});
+  const portal=root.children.find(node=>node.className==='history-suggestion-deck-portal');
+  const keep=portal.queryAll('button').find(node=>node.dataset.action==='deck-keep');
+  await portal.listeners.click({target:{closest:()=>keep}});
+  assert.deepEqual(state.heldSuggestionIds,['emit-source']);
+  const review=portal.queryAll('button').find(node=>node.dataset.action==='deck-review-kept');
+  await portal.listeners.click({target:{closest:()=>review}});
+  const panel=mounted.element.children[3];
+  const commit=panel.queryAll('button').find(node=>node.dataset.action==='batch-commit');
+  await panel.listeners.click({target:{closest:()=>commit}});
+  assert.deepEqual(state.heldSuggestionIds,[],'commit source removal clears owner held IDs through the emitting session');
+  assert.equal(heldUpdates,2,'one keep and one source-removal reconciliation each emit once');
+  assert.equal(tray.queryAll('h3').filter(node=>node.textContent==='Saved suggestions · 0').length,1,'the finished render tree contains one heading');
+  assert.equal(tray.queryAll('input').filter(node=>node.dataset.autoSuggest==='true').length,1,'auto-suggest control is not duplicated');
+  assert.equal(tray.queryAll('input').filter(node=>node.dataset.autoWeave==='true').length,1,'auto-weave control is not duplicated');
+  assert.equal(tray.queryAll('button').filter(node=>node.dataset.action==='batch-preview').length,1,'the weave tray is not duplicated');
+  assert.equal(tray.queryAll('button').filter(node=>node.dataset.action==='suggest-window').length,0,'a cached window with no unwoven sources has no jump chip');
+  assert.equal(portal.hidden,false,'the empty deck shows its quiet completion state');
+  assert.match(portal.textContent,/No unwoven suggestions remain in this window/);
+  assert.equal(portal.queryAll('button').find(node=>node.dataset.action==='deck-undo').disabled,true,'removed suggestions cannot be restored by stale deck undo');
 });

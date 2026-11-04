@@ -1,0 +1,60 @@
+{
+  "events": 9,
+  "suggestions": 0,
+  "pendingEvents": [
+    {
+      "id": "suggestion:1a1e93a9754df9e57c27ff0081d68a099b60e74ac1b2d37ae63c4fadb964ccac",
+      "year": -61,
+      "title": "Oasis Hospice Garden at Tayma",
+      "causeEventId": "suggestion:35066f32d3a39a6120ed81c28b14d1775e798138a287f4d311021c072c1f7809",
+      "pendingBatchId": "pending-batch:84c029d803400b5f44089c4dd4da4bd5",
+      "pendingWindows": [
+        {
+          "fromYear": -1000,
+          "toYear": -1
+        }
+      ]
+    },
+    {
+      "id": "suggestion:a933072e86fc561d9920192dad16a3f2553973c09a189eecf6554438affd2bad",
+      "year": -44,
+      "title": "Buddhist Mariners' Chart House at Aden",
+      "causeEventId": "suggestion:d2145ee80df3994157d448f55b6540c295fca4c7d2b1b470f649ca9b09a1dbad",
+      "pendingBatchId": "pending-batch:84c029d803400b5f44089c4dd4da4bd5",
+      "pendingWindows": [
+        {
+          "fromYear": -1000,
+          "toYear": -1
+        }
+      ]
+    },
+    {
+      "id": "suggestion:3137747944420a6add61b5253ead403921180386eff69cec61d840fdd646b73e",
+      "year": -22,
+      "title": "Taif Jataka Storytelling Garden",
+      "causeEventId": "suggestion:14665b33c0b5b66789fe4ba63bbefdcb33332a2a596a890d35c512c6140ae4ef",
+      "pendingBatchId": "pending-batch:84c029d803400b5f44089c4dd4da4bd5",
+      "pendingWindows": [
+        {
+          "fromYear": -1000,
+          "toYear": -1
+        }
+      ]
+    }
+  ],
+  "sourceInspiration": [
+    {
+      "id": "suggestion:1a1e93a9754df9e57c27ff0081d68a099b60e74ac1b2d37ae63c4fadb964ccac",
+      "inspiredByEventId": "suggestion:35066f32d3a39a6120ed81c28b14d1775e798138a287f4d311021c072c1f7809"
+    },
+    {
+      "id": "suggestion:a933072e86fc561d9920192dad16a3f2553973c09a189eecf6554438affd2bad",
+      "inspiredByEventId": "suggestion:35066f32d3a39a6120ed81c28b14d1775e798138a287f4d311021c072c1f7809"
+    },
+    {
+      "id": "suggestion:3137747944420a6add61b5253ead403921180386eff69cec61d840fdd646b73e",
+      "inspiredByEventId": "suggestion:35066f32d3a39a6120ed81c28b14d1775e798138a287f4d311021c072c1f7809"
+    }
+  ],
+  "completeScenes": 9
+}
