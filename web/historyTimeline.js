@@ -646,12 +646,14 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     selectAll.disabled = !!state.loading || !!state.paused || !!batchBusy || selectedCount >= 32;
     selectNone.disabled = !!state.loading || !!state.paused || !!batchBusy || selectedCount === 0;
     tray.append(selectAll,selectNone);
-    const weaveBatch = button(batchChecking ? 'Checking…' : batchWeaving ? 'Weaving…' : `Weave ${selectedCount} into history`,'batch-preview','batch-weave');
+    const weaveBatch = button(batchChecking ? 'Checking…' : batchWeaving ? 'Weaving…' : `Weave ${selectedCount}`,'batch-preview','batch-weave');
+    weaveBatch.setAttribute('aria-label',batchChecking ? 'Checking selected suggestions' : batchWeaving ? 'Weaving selected suggestions into history' : `Weave ${selectedCount} selected suggestions into history`);
     weaveBatch.setAttribute('aria-controls',batchPreview.id); weaveBatch.setAttribute('aria-expanded',String(batchPreviewState.open));
     weaveBatch.disabled = !!state.loading || !!state.paused || !!batchBusy || selectedCount === 0;
     tray.append(weaveBatch);
     if (state.windowCached) {
-      const more = button(`More around ${dateText}`,'manual-more','current-window');
+      const more = button(`More · ${dateText}`,'manual-more','current-window');
+      more.setAttribute('aria-label',`Find more suggestions around ${dateText}`);
       more.disabled = !!state.loading || !!state.paused || !!batchBusy;
       tray.append(more);
     }

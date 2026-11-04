@@ -164,14 +164,15 @@ test('batch preview resolves selected rows, reuses unchanged checks, toggles mer
   assert.equal(checks().find(input=>input.dataset.batchSuggestion==='fit-a').checked,false,'refresh rendering preserves an explicit deselection');
   const selectNone=suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-select-none');
   await suggestions.listeners.click({target:{closest:()=>selectNone}});
-  assert.equal(suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-preview').textContent,'Weave 0 into history',
+  assert.equal(suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-preview').textContent,'Weave 0',
     'Select none updates the tray through the native querySelectorAll path');
   const selectAll=suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-select-all');
   await suggestions.listeners.click({target:{closest:()=>selectAll}});
-  assert.equal(suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-preview').textContent,'Weave 2 into history',
+  assert.equal(suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-preview').textContent,'Weave 2',
     'Select all updates the tray through the native querySelectorAll path');
   const preview=suggestions.querySelectorAll('button[data-action]').find(button=>button.dataset.action==='batch-preview');
-  assert.equal(preview.textContent,'Weave 2 into history');
+  assert.equal(preview.textContent,'Weave 2');
+  assert.equal(preview.getAttribute('aria-label'),'Weave 2 selected suggestions into history');
   await suggestions.listeners.click({target:{closest:()=>preview}});
   const panel=mounted.element.children[3], buttons=()=>panel.querySelectorAll('button[data-action]');
   assert.match(panel.textContent,/2 resulting events/);
@@ -194,6 +195,7 @@ test('batch preview resolves selected rows, reuses unchanged checks, toggles mer
   await panel.listeners.click({target:{closest:()=>commit}});
   assert.deepEqual(calls.slice(0,2),[['check',['fit-a','fit-b']],['commit',{suggestionIds:['fit-a','fit-b'],planId:'plan-1',acceptedMergeIds:['merge-ab'],excludedSuggestionIds:[]}]]);
   const more=suggestions.queryAll('button').find(button=>button.dataset.action==='manual-more');
+  assert.equal(more.getAttribute('aria-label'),'Find more suggestions around 150 CE');
   await suggestions.listeners.click({target:{closest:()=>more}});
   assert.deepEqual(calls.at(-1),['more'],'More retains its existing action');
   const otherHistory={...history,id:'other-history'}; state.history=otherHistory; state.histories=[otherHistory]; state.historyId=otherHistory.id;
@@ -286,6 +288,16 @@ test('auto-weave preference is opt-in and pending batches expose Keep all plus e
   const click=async button=>timeline.listeners.click({target:{closest:()=>button}});
   await click(keep); await click(remove);
   assert.deepEqual(calls,[['autoWeave',true],['finalize','batch-pending'],['remove','batch-pending','pending-a']]);
+});
+
+test('compact timeline keeps the batch action understandable with its short phone label', () => {
+  const fit=event('phone-fit',120,'Phone fit',{verdict:'fits'}),history={id:'phone-history',events:[],suggestions:[fit]};
+  const state={questionId:'phone-question',question:{id:'phone-question',histories:[history]},history,histories:[history],historyId:history.id,
+    date:150,window:{fromYear:100,toYear:199},suggestions:[fit]};
+  const mounted=mountHistoryTimeline(new Element('main',document),{getState:()=>state,isCompact:()=>true,document});
+  const action=mounted.element.children[2].queryAll('button').find(button=>button.dataset.action==='batch-preview');
+  assert.equal(action.textContent,'Weave 1');
+  assert.equal(action.getAttribute('aria-label'),'Weave 1 selected suggestions into history');
 });
 
 test('empty histories show starting points without verdict badges or empty-history boilerplate', () => {

@@ -831,6 +831,24 @@ body:not(.invitation-open):has(.history-gallery-expanded) #history-timebar-host,
 .history-weave-tray .outline{min-height:32px;padding:4px 8px;font-size:10px}
 .history-weave-tray-notice{flex:1 1 100%;color:var(--gold);font-size:10px}
 .history-batch-preview[hidden]{display:none!important}
+/* In history mode, cap the suggestion tray against the rail and scroll the two content panes independently. */
+body.history-mode #exploration-tree{--history-tray-max-height:calc(45dvh - 46.8px);min-height:0;overflow:hidden}
+body.history-mode #history-timeline-host{display:flex;flex:1 1 0;min-height:0;overflow:hidden}
+body.history-mode #history-timeline-host>.history-timeline{display:flex;flex:1 1 auto;flex-direction:column;min-height:0;overflow:hidden}
+body.history-mode .history-timeline-histories{flex:0 0 auto}
+body.history-mode .history-timeline-events{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain}
+body.history-mode .history-timeline-suggestions:not([hidden]){flex:0 1 auto;min-height:0;max-height:var(--history-tray-max-height);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#68543c transparent}
+body.history-mode .history-timeline-suggestions-context{display:none}
+body.history-mode .history-weave-tray{position:sticky;top:0;flex-wrap:nowrap;gap:4px;padding:4px}
+body.history-mode .history-weave-tray .outline{flex:0 1 auto;min-height:30px!important;padding:3px 5px;font-size:9px;white-space:nowrap}
+@media(max-width:700px){
+  body.history-mode.has-story:not(.invitation-open) .exploration-rail{display:flex;flex-direction:column;height:min(68dvh,calc(100dvh - 128px));max-height:calc(100dvh - 128px);overflow:hidden}
+  body.history-mode.has-story:not(.invitation-open) .exploration-rail>.exploration-tree{display:flex;flex:1 1 auto;height:100%;min-height:0;max-height:none;overflow:hidden}
+  body.history-mode #exploration-tree{--history-tray-max-height:30.6dvh}
+  body.history-mode .history-weave-tray .outline{font-size:8px}
+  body.history-mode .history-gallery-actions .outline{min-height:28px;padding:3px 6px;font-size:8px}
+}
+@media(max-height:399px){body.history-mode #exploration-tree{--history-tray-max-height:calc(45dvh - 58px)}}
 .history-batch-preview:not([hidden]){position:fixed;z-index:1001;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:8px;width:min(980px,calc(100vw - 32px));height:min(812px,calc(100dvh - 32px));max-height:none;overflow:hidden;padding:12px;border:1px solid #73aaa199;border-radius:12px;background:rgba(8,12,13,.99);box-shadow:0 18px 70px #000e}
 body:has(.history-batch-preview:not([hidden]))::before{content:"";position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.72)}
 .history-batch-preview-header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:6px;border-bottom:1px solid #73aaa144}
