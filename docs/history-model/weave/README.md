@@ -28,4 +28,4 @@ Removing middle Aden (44 BCE) left two events pending and eight canonical. It re
 
 Navigating to 1 CE finalized the two remaining pending events. Returning to the cached −1 BCE window showed zero pending events and no removal tags, while the source suggestion remained available. At verification, Auto-weave was off and Auto-suggest was on. Keep all for pending events is covered by API and unit checks only; it was not clicked in the native session.
 
-The 375px drawer sits at z-index 16 above the time bar at z-index 12. Native touch remains unverified: the enabled Chrome extension lacks its Windows native-host registration, and the user confirmed that host repair is unavailable. No physical-touch result is claimed.
+The 375px drawer sits at z-index 16 above the time bar at z-index 12. Native touch remains unverified: Chrome is running with its extension enabled, but the diagnostic found its Windows native-host registry entry missing. The plugin troubleshooting guide requires reinstalling through the UI rather than repairing that registration directly. No physical-touch result is claimed.

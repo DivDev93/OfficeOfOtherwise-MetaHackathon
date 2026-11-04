@@ -810,7 +810,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const autoWeaveLabel = make(document,'label',null,'history-auto-label');
     const autoWeaveToggle = make(document,'input'); autoWeaveToggle.type = 'checkbox'; autoWeaveToggle.checked = state.autoWeave === true; autoWeaveToggle.dataset.autoWeave = 'true';
     autoWeaveToggle.setAttribute('aria-label','Automatically weave new fitting suggestions after they are checked');
-    autoWeaveLabel.append(autoWeaveToggle,document.createTextNode(' Auto-weave')); controls.append(autoWeaveLabel);
+    autoWeaveLabel.append(autoWeaveToggle,document.createTextNode(' Auto-weave what fits')); controls.append(autoWeaveLabel);
     if (!state.windowCached && !(state.suggestions || []).length) controls.append(button(state.autoSuggest === false ? `Suggest events around ${dateText}` : `Suggest events now around ${dateText}`, 'manual-suggest', 'current-window'));
     controls.queryAll?.('button').forEach(node => { node.disabled = !!state.loading || !!state.paused; });
     suggestions.append(controls);
