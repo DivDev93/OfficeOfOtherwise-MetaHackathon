@@ -29,9 +29,11 @@ export function createHistoryTimeScale(events = [], currentDate = null, { extraY
   const years = [...new Set([...events.map(item => item.year), ...extraYears,
     ...windows.flatMap(item => [item.fromYear ?? item.window?.fromYear, item.toYear ?? item.window?.toYear]),
     ...(Number.isSafeInteger(currentDate) && currentDate !== 0 ? [currentDate] : [])].filter(year => Number.isSafeInteger(year) && year !== 0))];
-  let minYear = years.length ? Math.min(...years) : -500;
-  let maxYear = years.length ? Math.max(...years) : 500;
-  if (minYear === maxYear) { minYear -= 500; maxYear += 500; }
+  // Saved events and cached windows are context, not navigation boundaries.
+  // Keep the full human-history/future range available, expanding for older or
+  // later records and dated links instead of trapping a BCE history at 1 BCE.
+  const minYear = Math.min(-10_000, ...years);
+  const maxYear = Math.max(3000, ...years);
   const crossesZero = minYear < 0 && maxYear > 0;
   const maxIndex = maxYear - minYear - (crossesZero ? 1 : 0);
   const yearAt = index => {
@@ -56,7 +58,8 @@ export function historyEraTickSegments(events, scale) {
   return eras.map((era, index) => {
     const start = scale.maxIndex ? scale.indexAt(era.year) / scale.maxIndex * 100 : 0;
     const next = eras[index + 1];
-    const end = next && scale.maxIndex ? scale.indexAt(next.year) / scale.maxIndex * 100 : 100;
+    const lastYear = ordered(events).at(-1)?.year ?? era.year;
+    const end = scale.maxIndex ? scale.indexAt(next?.year ?? lastYear) / scale.maxIndex * 100 : 100;
     return { ...era, left:Math.max(0, Math.min(100, start)), width:Math.max(0, Math.min(100, end) - Math.max(0, start)) };
   });
 }
@@ -69,7 +72,8 @@ export function mountHistoryTimebar(root, { getState, subscribe, onDateChange = 
   const range = make(document, 'input', null, 'history-timebar-range'); range.type = 'range'; range.step = '1'; range.setAttribute('aria-label', 'History as of date');
   const eraLayer = make(document, 'div', null, 'history-timebar-eras');
   const eventLayer = make(document, 'div', null, 'history-timebar-events');
-  track.append(range, eraLayer, eventLayer); host.append(readout, track);
+  const bounds = make(document, 'div', null, 'history-timebar-bounds');
+  track.append(range, eraLayer, eventLayer, bounds); host.append(readout, track);
   let current = null, scale = null, events = [];
   const selectYear = (year, source = 'tick') => {
     if (!Number.isSafeInteger(year) || year === 0) return;
@@ -119,11 +123,22 @@ export function mountHistoryTimebar(root, { getState, subscribe, onDateChange = 
     range.setAttribute('aria-valuetext', `History as of ${labelYear(scale.yearAt(Number(range.value)))}`);
     const selectedYear = scale.yearAt(Number(range.value));
     updateReadout(selectedYear);
+    bounds.replaceChildren(make(document, 'span', labelYear(scale.minYear)), make(document, 'span', labelYear(scale.maxYear)));
     eraLayer.replaceChildren(); eventLayer.replaceChildren();
     for (const era of historyEraTickSegments(events, scale)) {
-      const tick = make(document, 'button', era.label, 'history-timebar-era-tick'); tick.type = 'button'; tick.dataset.year = String(era.year);
+      const label = era.width / 100 * eventWidth >= 72 ? era.label : '';
+      const tick = make(document, 'button', label, 'history-timebar-era-tick'); tick.type = 'button'; tick.dataset.year = String(era.year);
       tick.style.left = `${era.left}%`; tick.style.width = `${era.width}%`; tick.title = `${era.label} · ${labelYear(era.year)}`;
+      tick.setAttribute('aria-label', tick.title);
       eraLayer.append(tick);
+    }
+    const lastYear = events.at(-1)?.year;
+    if (lastYear != null && lastYear < scale.maxYear) {
+      const future = make(document, 'span', 'Unwritten future', 'history-timebar-future');
+      const start = scale.indexAt(lastYear) / scale.maxIndex * 100;
+      future.style.left = `${start}%`; future.style.width = `${100 - start}%`;
+      future.title = 'Scrub forward to suggest possibilities using this entire history as context.';
+      eraLayer.append(future);
     }
     for (const event of events) {
       const tick = make(document, 'button', '', `history-timebar-event-tick${event.id === state.selectedEventId ? ' is-selected' : ''}`); tick.type = 'button';

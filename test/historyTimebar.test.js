@@ -24,7 +24,7 @@ test('time scale skips year zero and maps BCE and CE dates back to exact slider 
   const scale = createHistoryTimeScale(events, -100);
   for (const year of [-3000,-1,1,1500,2000]) assert.equal(scale.yearAt(scale.indexAt(year)),year);
   assert.equal(scale.crossesZero,true);
-  assert.equal(scale.yearAt(3000),1);
+  assert.equal(scale.yearAt(scale.indexAt(-1)+1),1);
   assert.deepEqual(collectHistoryEraTicks(events), [{ label:'Green era',year:-3000 },{ label:'Coastal era',year:1500 }]);
 });
 
@@ -55,11 +55,21 @@ test('canonical era labels each own a non-overlapping stretch across the date tr
   const scale = createHistoryTimeScale(eras);
   const segments = historyEraTickSegments(eras, scale);
   assert.equal(segments.length, 3);
-  assert.equal(segments[0].left, 0);
-  assert.equal(segments.at(-1).left + segments.at(-1).width, 100);
+  assert.equal(segments[0].left, scale.indexAt(eras[0].year) / scale.maxIndex * 100);
+  assert.equal(segments.at(-1).left + segments.at(-1).width, scale.indexAt(eras.at(-1).year) / scale.maxIndex * 100);
   for (let index = 1; index < segments.length; index++) {
     assert.ok(segments[index - 1].left + segments[index - 1].width <= segments[index].left + 1e-9);
   }
+});
+
+test('a BCE history and its cached window never prevent scrubbing into the unwritten CE future', () => {
+  const ancient = [{id:'first',year:-245,title:'First'},{id:'latest',year:-22,title:'Latest'}];
+  const scale = createHistoryTimeScale(ancient,-1,{windows:[{fromYear:-1000,toYear:-1}]});
+  assert.equal(scale.minYear,-10000);
+  assert.equal(scale.maxYear,3000);
+  for (const year of [-10000,-245,-1,1,1500,2500,3000]) assert.equal(scale.yearAt(scale.indexAt(year)),year);
+  const expanded = createHistoryTimeScale([{id:'older',year:-20000}],5000);
+  assert.equal(expanded.minYear,-20000); assert.equal(expanded.maxYear,5000);
 });
 
 test('timebar date scrub, event ticks and arrows notify selected as-of date without generating on hover', () => {
@@ -70,6 +80,9 @@ test('timebar date scrub, event ticks and arrows notify selected as-of date with
   const stableSlider = slider;
   slider.value=String(createHistoryTimeScale(events,-100).indexAt(1)); slider.listeners.input();
   assert.equal(dates.at(-1)[0],1); assert.equal(dates.at(-1)[1],'scrub');
+  slider.value=String(createHistoryTimeScale(events,-100).indexAt(2500)); slider.listeners.input();
+  assert.equal(dates.at(-1)[0],2500,'future dates reach the existing context-aware suggestion flow');
+  assert.match(mounted.element.textContent,/Unwritten future/);
   slider.value=String(createHistoryTimeScale(events,-100).indexAt(1000));
   slider.listeners.keydown({ key:'ArrowRight', preventDefault(){} });
   assert.equal(dates.at(-1)[0],1500); assert.equal(dates.at(-1)[1],'event-step');

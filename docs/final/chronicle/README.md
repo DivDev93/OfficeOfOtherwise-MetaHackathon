@@ -35,3 +35,11 @@ Review now fits its contents with a prominent gold Weave action beside the event
 The in-app browser check began at 245 BCE with eight canonical events and the saved Aden possibility. Keep, Cancel, Weave kept and confirmation succeeded in the disposable history copy: HTTP 200, nine events, Aden selected at 44 BCE. The original history remains at eight events with its suggestion available. The normal recording server was restarted with its configured key and existing spend ledger.
 
 The final Node 22 suite passed **853/853**, including cross-session ownership and unavailable-plan recovery checks. Updated confirmation screenshots: [985×822](weave-review-985.png), [375×812](weave-review-375.png).
+
+## Follow-up: scrub into the unwritten future
+
+The time bar previously derived both endpoints only from saved events and cached windows. A BCE-only history therefore stopped at 1 BCE. Its default navigation range now spans 10,000 BCE–3000 CE and includes any older/later saved or explicitly selected dates. Endpoint labels expose the range, and the stretch after the latest canonical event is marked Unwritten future. Narrow historical era labels remain available by hover/accessibility name rather than colliding with future labels.
+
+Native in-app scrubbing reached 2500 CE. The existing suggestion service received the 2001–3000 CE window with the full nine-event history as context. The resulting checked preview contains Taif Living Jataka Archive Opens (2058), Jeddah Monsoon Climate Observatory (2317), and Meccan Healing Plants Studied in Orbit (2874), each linked to an earlier canonical event, with zero unresolved conflicts. These remain suggestions; no future event was woven automatically.
+
+The final Node 22 suite passed **854/854**. Evidence: [desktop timeline](future-timebar-1595.png), [phone timeline](future-timebar-375.png), [checked future preview](future-chain-1595.png).

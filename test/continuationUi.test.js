@@ -179,7 +179,7 @@ test('active history mode drives the real timeline, timebar and Atlas without se
   const range = app.get('history-timebar-host').queryAll('input')[0];
   assert.ok(range, `range input is mounted: ${JSON.stringify(app.get('history-timebar-host').children.map(node => ({tag:node.tagName,children:node.children?.map(child=>child.tagName)})))}`);
   range.value = String(range.min); range.dispatch('input');
-  assert.equal(app.ui.state().history.date, -1200);
+  assert.equal(app.ui.state().history.date, -10000, 'the full timeline extends before the first saved event');
   assert.equal(app.ui.state().historyAtlasView.surfaceGeography.seaLevelMeters, 0, 'a different as-of date starts from that date’s composed scenario');
   app.ui.setHistoryDateForTest(900);
   assert.equal(app.ui.state().historyAtlasView.surfaceGeography.seaLevelMeters, 350, 'date-specific local controls persist with their history and return date');
