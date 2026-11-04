@@ -254,6 +254,7 @@ test('batch preview resolves selected rows, reuses unchanged checks, toggles mer
   assert.equal(preview.textContent,'Weave selected (2)');
   assert.equal(preview.getAttribute('aria-label'),'Weave 2 selected suggestions into history');
   await preview.click();
+  assert.deepEqual(calls.map(([name])=>name),['check'],'a checked plan with proposed merges opens review without auto-commit');
   const panel=mounted.element.children[3], buttons=()=>panel.querySelectorAll('button[data-action]');
   assert.match(panel.textContent,/2 resulting events/);
   assert.match(panel.textContent,/because ← Anchor/); assert.match(panel.textContent,/because ← Fit A/,'cause links can point to another selected peer');
@@ -285,11 +286,12 @@ test('batch preview resolves selected rows, reuses unchanged checks, toggles mer
 
 test('batch preview blocks unresolved conflicts and commits only after an affected suggestion is excluded', async () => {
   const candidate=event('conf-a',120,'Conflicting possibility',{verdict:'fits'});
-  const history={id:'conf-history',events:[event('anchor',50,'Anchor')],suggestions:[candidate]};
-  const state={questionId:'q-conflict',question:{id:'q-conflict',histories:[history]},history,histories:[history],historyId:history.id,date:150,window:{fromYear:100,toYear:199},suggestions:[candidate]};
-  const plan={id:'conf-plan',questionId:state.questionId,historyId:history.id,suggestionIds:[candidate.id],
+  const unaffected=event('conf-b',125,'Unaffected possibility',{verdict:'fits'});
+  const history={id:'conf-history',events:[event('anchor',50,'Anchor')],suggestions:[candidate,unaffected]};
+  const state={questionId:'q-conflict',question:{id:'q-conflict',histories:[history]},history,histories:[history],historyId:history.id,date:150,window:{fromYear:100,toYear:199},suggestions:[candidate,unaffected]};
+  const plan={id:'conf-plan',questionId:state.questionId,historyId:history.id,suggestionIds:[candidate.id,unaffected.id],
     existingEventIds:['anchor'],existingEvents:[{id:'anchor',year:50}],
-    chain:[{...candidate,causeEventId:'anchor'}],merges:[],conflicts:[{suggestionId:candidate.id,conflictsWith:'anchor',reason:'They compete for the same event slot.'}]};
+    chain:[{...candidate,causeEventId:'anchor'},{...unaffected,causeEventId:'anchor'}],merges:[],conflicts:[{suggestionId:candidate.id,conflictsWith:unaffected.id,reason:'They compete for the same event slot.'}]};
   let commitBody=null;
   const session={checkWeaveBatch:async()=>plan,commitWeaveBatch:async body=>{commitBody=body;return {history};},getState:()=>({status:''})};
   const mounted=mountHistoryTimeline(new Element('main',document),{getState:()=>state,session,document});
@@ -298,12 +300,18 @@ test('batch preview blocks unresolved conflicts and commits only after an affect
   const panel=mounted.element.children[3], find=(action)=>panel.querySelectorAll('button[data-action]').find(item=>item.dataset.action===action);
   assert.match(panel.textContent,/1 unresolved conflict/);
   assert.equal(find('batch-commit').disabled,true,'the commit is blocked while a conflict remains included');
-  const exclude=panel.queryAll('input').find(input=>input.dataset.previewExclude===candidate.id);
+  const exclusions=()=>panel.queryAll('input').filter(input=>input.dataset.previewExclude);
+  const exclude=exclusions().find(input=>input.dataset.previewExclude===candidate.id);
   exclude.checked=true; panel.listeners.change({target:exclude});
-  assert.match(panel.textContent,/0 resulting events/);
+  assert.match(panel.textContent,/1 resulting event/);
   assert.equal(find('batch-commit').disabled,false);
+  const excludeLast=exclusions().find(input=>input.dataset.previewExclude===unaffected.id);
+  excludeLast.checked=true; panel.listeners.change({target:excludeLast});
+  assert.match(panel.textContent,/0 resulting events/,'the preview can become empty after conflict resolution');
+  assert.equal(find('batch-commit').disabled,true,'an empty checked plan cannot be committed');
+  excludeLast.checked=false; panel.listeners.change({target:excludeLast});
   await panel.listeners.click({target:{closest:()=>find('batch-commit')}});
-  assert.deepEqual(commitBody,{suggestionIds:[candidate.id],planId:'conf-plan',acceptedMergeIds:[],excludedSuggestionIds:[candidate.id]});
+  assert.deepEqual(commitBody,{suggestionIds:[candidate.id,unaffected.id],planId:'conf-plan',acceptedMergeIds:[],excludedSuggestionIds:[candidate.id]});
 });
 
 test('uncertain preview offers an explicit receipt retry and explains possible charge', async () => {
@@ -468,62 +476,73 @@ test('eras fold into compact rows only when a history has more than twelve event
   assert.match(eras[0].queryAll('summary')[0].textContent,/First era.*0 CE–60 CE.*7 events/);
   assert.equal(eras.some(era=>era.open),false,'unselected eras start folded in long histories');
 });
-test('deck and inline List review share window scope without losing checked selection', async () => {
+test('deck right swipe weaves one source and advances; the last safe weave returns to Timeline', async () => {
   const window={fromYear:100,toYear:199};
   const suggestions=[
     event('deck-a',110,'First deck source',{verdict:'fits',window}),
     event('deck-b',120,'Second deck source',{verdict:'fits',window}),
-    event('deck-c',130,'Third deck source',{verdict:'conflicts',conflictsWith:'anchor',window}),
+    event('deck-c',130,'Third deck source',{verdict:'fits',window}),
   ];
-  const history={id:'deck-history',events:[],suggestions,suggestionWindows:[{window,status:'ready',suggestionCount:3}]};
+  const history={id:'deck-history',events:[],suggestions:[...suggestions],suggestionWindows:[{window,status:'ready',suggestionCount:3}]};
   const state={questionId:'deck-question',question:{id:'deck-question',histories:[history]},history,histories:[history],historyId:history.id,suggestions,date:130,window};
-  const calls=[],held=[];
-  const plan={id:'deck-plan',questionId:state.questionId,historyId:history.id,suggestionIds:['deck-a','deck-b'],existingEventIds:[state.questionId],existingEvents:[],
-    chain:[{...suggestions[0],causeEventId:state.questionId},{...suggestions[1],causeEventId:'deck-a'}],merges:[],conflicts:[]};
-  const session={setHeldSuggestionIds(ids){state.heldSuggestionIds=[...ids];held.push([...ids]);},checkWeaveBatch:async ids=>{calls.push(['check',[...ids]]);return plan;},getState:()=>({status:''})};
+  const calls=[]; let planNumber=0;
+  const session={
+    setHeldSuggestionIds(ids){state.heldSuggestionIds=[...ids];},
+    checkWeaveBatch:async ids=>{calls.push(['check',[...ids]]);const selected=ids.map(id=>suggestions.find(item=>item.id===id));return {
+      id:`deck-plan-${++planNumber}`,questionId:state.questionId,historyId:history.id,suggestionIds:[...ids],existingEventIds:[state.questionId],existingEvents:[],
+      chain:selected.map((item,index)=>({...item,causeEventId:index?selected[index-1].id:state.questionId})),merges:[],conflicts:[]};},
+    commitWeaveBatch:async body=>{calls.push(['commit',{...body,suggestionIds:[...body.suggestionIds]}]);
+      const woven=body.suggestionIds.map(id=>suggestions.find(item=>item.id===id));
+      history.events.push(...woven.map(item=>event(`woven-${item.id}`,item.year,item.title,{causeEventId:state.questionId})));
+      const wovenIds=new Set(body.suggestionIds);history.suggestions=history.suggestions.filter(item=>!wovenIds.has(item.id));state.suggestions=history.suggestions;
+      return {history};},getState:()=>({status:''})
+  };
   const root=new Element('main',document),mounted=mountHistoryTimeline(root,{getState:()=>state,session,document});
   const timeline=mounted.element.children[1],suggestionsPanel=mounted.element.children[2],portal=root.children.find(node=>node.className==='history-suggestion-deck-portal');
   const possibility=timeline.queryAll('button').find(node=>node.dataset.action==='open-window-deck');
   await timeline.listeners.click({target:{closest:()=>possibility}});
   let card=portal.queryAll('article').find(node=>node.dataset.swipeCard==='true');
   assert.equal(card.dataset.suggestionId,'deck-a','the deck starts with the first chronological unreviewed source');
-  assert.deepEqual(card.queryAll('button').map(node=>node.dataset.action),['deck-inspect','deck-pass','deck-keep'],'deck cards expose only inspection plus Not now and Keep decisions');
+  assert.deepEqual(card.queryAll('button').map(node=>node.dataset.action),['deck-inspect','deck-pass','deck-weave'],'the primary card action checks and weaves directly');
   assert.equal(card.queryAll('span').some(node=>String(node.className).includes('history-verdict')),false,'starting-point decks hide fit/conflict verdict labels');
   const listLink=portal.queryAll('button').find(node=>node.dataset.action==='deck-list');
   await portal.listeners.click({target:{closest:()=>listLink}});
   assert.equal(suggestionsPanel.parentNode,portal,'List review renders inside the same overlay, not in the Chronicle rail');
   const listChecks=()=>suggestionsPanel.queryAll('input').filter(input=>input.dataset.batchSuggestion);
-  assert.deepEqual(listChecks().filter(input=>input.checked).map(input=>input.dataset.batchSuggestion),['deck-a','deck-b']);
+  assert.deepEqual(listChecks().filter(input=>input.checked).map(input=>input.dataset.batchSuggestion),['deck-a','deck-b','deck-c']);
   assert.equal(portal.queryAll('button').find(node=>node.dataset.action==='deck-mode-deck').textContent,'Deck');
   const deckMode=portal.queryAll('button').find(node=>node.dataset.action==='deck-mode-deck');
   await portal.listeners.click({target:{closest:()=>deckMode}});
   card=portal.queryAll('article').find(node=>node.dataset.swipeCard==='true');
-  portal.listeners.keydown({key:'ArrowRight',target:card,preventDefault(){},stopPropagation(){}});
-  assert.equal(state.heldSuggestionIds[0],'deck-a','right arrow keeps and synchronizes the active owner held set');
+  portal.listeners.pointerdown({target:card,clientX:0,clientY:0,pointerId:1,isPrimary:true,button:0});
+  portal.listeners.pointermove({clientX:100,clientY:0,pointerId:1,preventDefault(){}});
+  portal.listeners.pointerup({clientX:100,clientY:0,pointerId:1,preventDefault(){}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(calls.slice(0,2),[['check',['deck-a']],['commit',{suggestionIds:['deck-a'],planId:'deck-plan-1',acceptedMergeIds:[],excludedSuggestionIds:[]}]],
+    'a right swipe performs one checked weave and one commit');
   card=portal.queryAll('article').find(node=>node.dataset.swipeCard==='true'); assert.equal(card.dataset.suggestionId,'deck-b');
+  const weaveSecond=card.queryAll('button').find(node=>node.dataset.action==='deck-weave');
+  await portal.listeners.click({target:{closest:()=>weaveSecond}});
+  await new Promise(resolve=>setImmediate(resolve));
+  card=portal.queryAll('article').find(node=>node.dataset.swipeCard==='true'); assert.equal(card.dataset.suggestionId,'deck-c');
   portal.listeners.keydown({key:'ArrowLeft',target:card,preventDefault(){},stopPropagation(){}});
-  assert.deepEqual(held.at(-1),['deck-a'],'passing a card does not add it to held suggestion IDs');
   const passedToggle=portal.queryAll('button').find(node=>node.dataset.action==='deck-passed-toggle');
   await portal.listeners.click({target:{closest:()=>passedToggle}});
   const passedRow=portal.queryAll('div').find(node=>node.className==='history-deck-passed-row');
   assert.ok(passedRow.queryAll('button').some(node=>node.dataset.action==='deck-weave'));
   assert.ok(passedRow.queryAll('button').some(node=>node.dataset.action==='deck-rekeep'));
-  const undo=portal.queryAll('button').find(node=>node.dataset.action==='deck-undo');
-  await portal.listeners.click({target:{closest:()=>undo}});
-  card=portal.queryAll('article').find(node=>node.dataset.swipeCard==='true'); assert.equal(card.dataset.suggestionId,'deck-b');
-  const keep=card.queryAll('button').find(node=>node.dataset.action==='deck-keep');
-  await portal.listeners.click({target:{closest:()=>keep}});
-  assert.deepEqual(state.heldSuggestionIds,['deck-a','deck-b']);
-  assert.deepEqual(listChecks().filter(input=>input.checked).map(input=>input.dataset.batchSuggestion),['deck-a','deck-b'],'deck decisions do not rewrite list checkbox selection');
+  const rekeep=passedRow.queryAll('button').find(node=>node.dataset.action==='deck-rekeep');
+  await portal.listeners.click({target:{closest:()=>rekeep}});
   const review=portal.queryAll('button').find(node=>node.dataset.action==='deck-review-kept');
+  assert.match(review.textContent,/Weave kept \(1\)/,'the legacy kept CTA remains available for existing review dispositions');
   await portal.listeners.click({target:{closest:()=>review}});
-  assert.deepEqual(calls,[['check',['deck-a','deck-b']]],'Review kept checks kept deck IDs, not list selection');
-  const panel=mounted.element.children[3]; assert.match(panel.textContent,/Weave 2 possibilities/);
-  const cancel=panel.queryAll('button').find(node=>node.dataset.action==='batch-cancel');
-  await panel.listeners.click({target:{closest:()=>cancel}});
-  assert.equal(panel.hidden,true); assert.equal(portal.hidden,false);
-  assert.equal(portal.queryAll('article').find(node=>node.dataset.swipeCard==='true').dataset.suggestionId,'deck-c');
-  assert.equal(timeline.queryAll('li').filter(node=>node.dataset.eventId).length,0);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(calls.slice(2),[
+    ['check',['deck-b']],['commit',{suggestionIds:['deck-b'],planId:'deck-plan-2',acceptedMergeIds:[],excludedSuggestionIds:[]}],
+    ['check',['deck-c']],['commit',{suggestionIds:['deck-c'],planId:'deck-plan-3',acceptedMergeIds:[],excludedSuggestionIds:[]}],
+  ],'the next card and legacy kept CTA each use the same checked one-action path');
+  assert.deepEqual(history.events.map(item=>item.id),['woven-deck-a','woven-deck-b','woven-deck-c']);
+  assert.equal(portal.hidden,true,'the last safe weave returns the deck to Timeline');
 });
 test('event rows quietly count unwoven suggestions inspired by that event', () => {
   const source=event('source',100,'Source event');
@@ -539,7 +558,7 @@ test('event rows quietly count unwoven suggestions inspired by that event', () =
   assert.equal(row.queryAll('span').find(node=>node.className==='history-event-quiet-suggestions').textContent,'+2 unwoven');
 });
 
-test('compact window deck keeps recovery shortcuts and its List pane in the overlay', async () => {
+test('compact window deck keeps List in the overlay and Weave all fits commits one safe checked plan', async () => {
   const doc={createElement(tag){return new Element(tag,doc);},createTextNode(text){return {textContent:String(text),queryAll:()=>[]};},defaultView:{innerWidth:375,innerHeight:812,addEventListener(){},removeEventListener(){}}};
   doc.body=new Element('body',doc);
   const window={fromYear:100,toYear:199};
@@ -548,79 +567,65 @@ test('compact window deck keeps recovery shortcuts and its List pane in the over
   const state={questionId:'shortcut-question',question:{id:'shortcut-question',histories:[history]},history,histories:[history],historyId:history.id,suggestions:sources,date:150,window};
   const plan={id:'shortcut-plan',questionId:state.questionId,historyId:history.id,suggestionIds:sources.map(item=>item.id),existingEventIds:[state.questionId],existingEvents:[],
     chain:sources.map((item,index)=>({...item,causeEventId:index?sources[index-1].id:state.questionId})),merges:[],conflicts:[]};
-  const checked=[]; let cachedPlan=null;
-  const session={setHeldSuggestionIds(ids){state.heldSuggestionIds=[...ids];},checkWeaveBatch:async ids=>{if(!cachedPlan){checked.push([...ids]);cachedPlan=plan;}return cachedPlan;},getState:()=>({status:''})};
+  const checked=[],committed=[];
+  const session={checkWeaveBatch:async ids=>{checked.push([...ids]);return plan;},commitWeaveBatch:async body=>{
+    committed.push({...body,suggestionIds:[...body.suggestionIds],acceptedMergeIds:[...body.acceptedMergeIds],excludedSuggestionIds:[...body.excludedSuggestionIds]});
+    history.events=sources.map((item,index)=>event(`woven-${item.id}`,item.year,item.title,{causeEventId:index?sources[index-1].id:state.questionId}));
+    history.suggestions=[];state.suggestions=[];return {history};
+  },getState:()=>({status:''})};
   const root=new Element('main',doc),mounted=mountHistoryTimeline(root,{getState:()=>state,session,document:doc,isCompact:()=>true});
   const timeline=mounted.element.children[1],portal=doc.body.children.find(node=>node.className==='history-suggestion-deck-portal');
   const possibility=timeline.queryAll('button').find(node=>node.dataset.action==='open-window-deck');
   await timeline.listeners.click({target:{closest:()=>possibility}});
   assert.equal(doc.body.classList.contains('history-phone-deck-active'),true);
-  const portalMenu=portal.queryAll('details').find(node=>node.className==='history-suggestion-more'); assert.ok(portalMenu);
-  for (let index=0;index<sources.length;index++) {
-    const pass=portal.queryAll('button').find(node=>node.dataset.action==='deck-pass'); await portal.listeners.click({target:{closest:()=>pass}});
-  }
-  const keepAll=portal.queryAll('button').find(node=>node.dataset.action==='deck-keep-all-fits');
-  assert.equal(keepAll.disabled,false,'the ellipsis menu recovers fits after all cards are passed');
-  const panel=mounted.element.children.find(node=>node.className==='history-batch-preview');
-  assert.ok(panel,'the batch preview exists in the Chronicle before it opens');
-  await portal.listeners.click({target:{closest:()=>keepAll}});
-  assert.deepEqual(checked,[['fit-one','fit-two']]);
-  assert.equal(panel.parentNode,doc.body,'the batch preview moves into the body portal while open');
-  const cancel=panel.queryAll('button').find(node=>node.dataset.action==='batch-cancel');
-  await panel.listeners.click({target:{closest:()=>cancel}});
-  const review=portal.queryAll('button').find(node=>node.dataset.action==='deck-review-kept');
-  assert.equal(review.disabled,false,'kept suggestions remain reviewable after cancelling Keep all fits');
-  assert.equal(review.parentNode,portal.children[0],'the weave action remains visible in the deck header, outside the overflow menu');
-  await portal.listeners.click({target:{closest:()=>review}});
-  assert.equal(panel.hidden,false,'Review kept opens the cached batch preview');
-  assert.equal(checked.length,1,'Review kept reuses the cached plan');
-  const cancelAgain=panel.queryAll('button').find(node=>node.dataset.action==='batch-cancel');
-  await panel.listeners.click({target:{closest:()=>cancelAgain}});
   const listButton=portal.queryAll('button').find(node=>node.dataset.action==='deck-list'&&node.textContent==='List view');
-  assert.equal(portal.hidden,false,'the deck remains visible after canceling review');
-  assert.ok(listButton,'deck mode exposes List view after canceling review');
   await portal.listeners.click({target:{closest:()=>listButton}});
   const listSuggestions=portal.queryAll('section').find(node=>node.className==='history-timeline-suggestions');
   assert.ok(listSuggestions,'the compact portal contains the List review region');
   assert.equal(listSuggestions.parentNode,portal,'List remains owned by the compact review overlay');
   assert.equal(mounted.element.queryAll('section').some(node=>node.className==='history-timeline-suggestions'),false,
     'List content is removed from the Chronicle rail while it is open in the portal');
-  assert.equal(doc.body.classList.contains('history-phone-deck-active'),true,'List stays in the overlay on compact screens');
-  const timelineButton=portal.queryAll('button').find(node=>node.dataset.action==='deck-close');
-  await portal.listeners.click({target:{closest:()=>timelineButton}});
+  const deckButton=portal.queryAll('button').find(node=>node.dataset.action==='deck-mode-deck');
+  await portal.listeners.click({target:{closest:()=>deckButton}});
+  const portalMenu=portal.queryAll('details').find(node=>node.className==='history-suggestion-more'); assert.ok(portalMenu);
+  const keepAll=portal.queryAll('button').find(node=>node.dataset.action==='deck-keep-all-fits');
+  assert.equal(keepAll.disabled,false,'the deck menu exposes the safe bulk weave action');
+  assert.match(keepAll.textContent,/Weave all fits \(2\)/);
+  const panel=mounted.element.children.find(node=>node.className==='history-batch-preview');
+  await portal.listeners.click({target:{closest:()=>keepAll}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(checked,[['fit-one','fit-two']]);
+  assert.equal(committed.length,1,'safe bulk weave checks and commits in one action');
+  assert.deepEqual(committed[0],{suggestionIds:['fit-one','fit-two'],planId:'shortcut-plan',acceptedMergeIds:[],excludedSuggestionIds:[]});
+  assert.equal(panel.hidden,true,'a safe bulk weave does not open the preview panel');
+  assert.deepEqual(history.events.map(item=>item.id),['woven-fit-one','woven-fit-two']);
+  assert.equal(portal.hidden,true,'a completed bulk weave returns the overlay to Timeline');
   assert.equal(doc.body.classList.contains('history-phone-deck-active'),false,'Timeline returns to the Chronicle rail');
 });
-test('successful weave source removal clears held IDs after the outer render without duplicating Chronicle controls', async () => {
+test('successful direct weave removes its source without duplicating Chronicle controls', async () => {
   const window={fromYear:100,toYear:199};
   const source=event('emit-source',110,'Emitted source',{verdict:'fits',window});
   const history={id:'emit-history',events:[],suggestions:[source],suggestionWindows:[{window,status:'ready',suggestionCount:6}]};
   const state={questionId:'emit-question',question:{id:'emit-question',title:'Emit question',histories:[history]},history,histories:[history],historyId:history.id,suggestions:[source],window};
-  let subscriber=null, heldUpdates=0;
+  const calls=[];
   const plan={id:'emit-plan',questionId:state.questionId,historyId:history.id,suggestionIds:[source.id],existingEventIds:[state.questionId],existingEvents:[],
     chain:[{...source,causeEventId:state.questionId}],merges:[],conflicts:[]};
   const session={
-    setHeldSuggestionIds(ids){state.heldSuggestionIds=[...ids];heldUpdates++;subscriber?.(state);},
-    checkWeaveBatch:async()=>plan,
-    commitWeaveBatch:async()=>{history.events=[event('woven-canonical',110,source.title,{causeEventId:state.questionId})];history.suggestions=[];state.suggestions=[];return {history};},
+    checkWeaveBatch:async ids=>{calls.push(['check',[...ids]]);return plan;},
+    commitWeaveBatch:async body=>{calls.push(['commit',{...body,suggestionIds:[...body.suggestionIds]}]);history.events=[event('woven-canonical',110,source.title,{causeEventId:state.questionId})];history.suggestions=[];state.suggestions=[];return {history};},
     getState:()=>({status:''}),
   };
-  const root=new Element('main',document), mounted=mountHistoryTimeline(root,{getState:()=>state,session,subscribe:callback=>{subscriber=callback;return()=>{};},document});
+  const root=new Element('main',document), mounted=mountHistoryTimeline(root,{getState:()=>state,session,document});
   const tray=mounted.element.children[2], timeline=mounted.element.children[1];
   const possibility=timeline.queryAll('button').find(node=>node.dataset.action==='open-window-deck');
   assert.match(possibility.textContent,/✦ 1 possibility around 110 CE/,'cached counts do not inflate the actionable possibility count');
   await timeline.listeners.click({target:{closest:()=>possibility}});
   const portal=root.children.find(node=>node.className==='history-suggestion-deck-portal');
-  const keep=portal.queryAll('button').find(node=>node.dataset.action==='deck-keep');
-  await portal.listeners.click({target:{closest:()=>keep}});
-  assert.deepEqual(state.heldSuggestionIds,['emit-source']);
-  const review=portal.queryAll('button').find(node=>node.dataset.action==='deck-review-kept');
-  const panel=mounted.element.children.find(node=>node.className==='history-batch-preview');
-  assert.ok(panel,'the batch preview is present in the Chronicle before Review kept opens it');
-  await portal.listeners.click({target:{closest:()=>review}});
-  const commit=panel.queryAll('button').find(node=>node.dataset.action==='batch-commit');
-  await panel.listeners.click({target:{closest:()=>commit}});
-  assert.deepEqual(state.heldSuggestionIds,[],'commit source removal clears owner held IDs through the emitting session');
-  assert.equal(heldUpdates,2,'one keep and one source-removal reconciliation each emit once');
+  const weave=portal.queryAll('button').find(node=>node.dataset.action==='deck-weave');
+  await portal.listeners.click({target:{closest:()=>weave}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(calls,[['check',['emit-source']],['commit',{suggestionIds:['emit-source'],planId:'emit-plan',acceptedMergeIds:[],excludedSuggestionIds:[]}]],
+    'the direct source action checks and commits exactly once');
   assert.equal(tray.queryAll('h3').filter(node=>node.textContent==='Saved suggestions · 0').length,1,'the finished render tree contains one heading');
   assert.equal(timeline.queryAll('input').filter(node=>node.dataset.autoSuggest==='true').length,1,'auto-suggest control is not duplicated');
   assert.equal(timeline.queryAll('input').filter(node=>node.dataset.autoWeave==='true').length,1,'auto-weave control is not duplicated');

@@ -43,3 +43,13 @@ The time bar previously derived both endpoints only from saved events and cached
 Native in-app scrubbing reached 2500 CE. The existing suggestion service received the 2001–3000 CE window with the full nine-event history as context. The resulting checked preview contains Taif Living Jataka Archive Opens (2058), Jeddah Monsoon Climate Observatory (2317), and Meccan Healing Plants Studied in Orbit (2874), each linked to an earlier canonical event, with zero unresolved conflicts. These remain suggestions; no future event was woven automatically.
 
 The final Node 22 suite passed **854/854**. Evidence: [desktop timeline](future-timebar-1595.png), [phone timeline](future-timebar-375.png), [checked future preview](future-chain-1595.png).
+
+## Follow-up: direct Weave and swipe
+
+The deck now has **Not now** and a gold **Weave** action. One click or right swipe checks and adds a fitting event, then advances to the next unreviewed card. The last card returns to Chronicle with the new event/date selected. **Weave all fits (N)** adds a fitting batch directly; existing kept and List-selected batches use the same path. Checks proposing a merge or finding a conflict still open review. Empty plans cannot commit, and navigating away cancels stale checks before commit dispatch. Backend routes, ownership and revision checks are unchanged.
+
+Native Chrome verification used a disposable copy of the user's current ten-event Arabia history and the normal configured API/spend ledger. A desktop click added Tayma (1274 CE), advanced to Aden, and a native right swipe at 375×812 added Aden (1542 CE) and returned to Chronicle. Both actions received HTTP 200 from check and commit without another confirmation. This is Chrome touch emulation, not physical-device proof. The original ten-event history remains intact.
+
+After resetting only the disposable copy to its ten-event baseline, one click on **Weave all fits (2)** checked and committed both Tayma and Aden: HTTP 200 for each endpoint, twelve canonical events, 1542 CE selected, review closed. No extra confirmation was needed.
+
+All **854/854 Node 22 tests passed**, including direct weaving, advance/final return, conflict/merge review and empty-plan blocking. Screenshots: [direct deck at 1440×900](direct-weave-deck-1440.png), [phone after swipe](direct-weave-swipe-375.png).
