@@ -3,6 +3,7 @@
 // redispatch an uncertain paid Meta request.
 import { createHash, randomUUID } from 'node:crypto';
 import { normalizeHistory, normalizeQuestionHistories } from '../../web/historyModel.js';
+import { projectBatchPlan } from '../../web/historyBatch.js';
 
 const validId = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 240;
 const isYear = value => Number.isSafeInteger(value) && value !== 0;
@@ -20,6 +21,10 @@ const suggestionRevision = suggestion => {
     !['historyRevision', 'recheckStatus', 'recheckReason'].includes(key)).sort(([a], [b]) => a.localeCompare(b)));
   return createHash('sha256').update(JSON.stringify(content)).digest('hex');
 };
+const BATCH_PLANNER_VERSION = 2;
+const batchSuggestionRevision = suggestions => createHash('sha256').update(JSON.stringify(suggestions.map(item =>
+  Object.fromEntries(['id', 'year', 'place', 'title', 'summary', 'causeEventId', 'era', 'geography', 'verdict', 'conflictsWith', 'reason']
+    .filter(key => item[key] !== undefined).map(key => [key, item[key]]))).sort((a, b) => a.id.localeCompare(b.id)))).digest('hex');
 
 export class HistoryServiceError extends Error {
   constructor(code, message, status = 400, details = {}) { super(message); this.name = 'HistoryServiceError'; Object.assign(this, { code, status, ...details }); }
@@ -57,6 +62,10 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
   const localLedger = new Map();
   const mutationTails = new Map();
   const recheckFlights = new Map();
+  const batchPlanInFlight = new Map();
+  const localBatchPlans = new Map();
+  const localBatchAttempts = new Map();
+  const rippleRetryFlights = new Map();
 
   // Stamp migrated suggestions against their initial durable histories without
   // model calls. Later event changes make that snapshot stale and trigger a
@@ -287,102 +296,194 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
     return { ...resultFor(final.question, final.history, { event: final.event }), ripple: final.flags };
   }
 
-  async function weaveBatch({ questionId, historyId, suggestionIds, userId, sessionId, signal } = {}) {
-    if (!validId(questionId) || !validId(historyId) || !Array.isArray(suggestionIds)
-        || suggestionIds.length < 1 || suggestionIds.length > 32
-        || suggestionIds.some(id => !validId(id)) || new Set(suggestionIds).size !== suggestionIds.length) {
+  const batchPlanKey = (questionId, historyId, history, suggestions) => {
+    const semantic = item => Object.fromEntries(['id', 'year', 'place', 'title', 'summary', 'causeEventId', 'era', 'geography', 'verdict', 'conflictsWith', 'reason']
+      .filter(key => item[key] !== undefined).map(key => [key, item[key]]));
+    return createHash('sha256').update(JSON.stringify([BATCH_PLANNER_VERSION, questionId, historyId, historyRevision(history),
+      [...suggestions].map(semantic).sort((a, b) => a.id.localeCompare(b.id))])).digest('hex');
+  };
+  function hydrateBatchPlan(plan, history) {
+    const current = new Map((history.suggestions ?? []).map(item => [item.id, item]));
+    return { ...structuredClone(plan), chain: plan.chain.map(item => ({ ...(current.get(item.id) ?? item), causeEventId: item.causeEventId })) };
+  }
+
+  async function batchCheck({ questionId, historyId, suggestionIds, userId, sessionId, retryOf, signal } = {}) {
+    if (!validId(questionId) || !validId(historyId) || !validId(userId) || !validId(sessionId) || !Array.isArray(suggestionIds)
+        || suggestionIds.length < 1 || suggestionIds.length > 32 || suggestionIds.some(id => !validId(id))
+        || new Set(suggestionIds).size !== suggestionIds.length || (retryOf !== undefined && !validId(retryOf))) {
       throw new HistoryServiceError('invalid_batch', 'Select between 1 and 32 unique suggestions.', 400);
     }
+    const { question, history } = resolve(store, questionId, historyId);
+    const suggestions = suggestionIds.map(id => {
+      const suggestion = history.suggestions?.find(item => item.id === id);
+      if (!suggestion) throw new HistoryServiceError('not_found', 'Selected suggestion not found', 404);
+      if (suggestion.verdict !== 'fits') throw new HistoryServiceError('invalid_suggestion', 'Batch planning accepts fit suggestions only.', 409, { suggestion });
+      if (!isYear(suggestion.year) || !validId(suggestion.causeEventId)) throw new HistoryServiceError('invalid_suggestion', 'Selected suggestion is incomplete.', 409, { suggestion });
+      return suggestion;
+    });
+    if (typeof agent.planBatchWeave !== 'function') throw new HistoryServiceError('batch_plan_unavailable', 'Batch planning is unavailable.', 501);
+    const planKey = batchPlanKey(questionId, historyId, history, suggestions);
+    if (batchPlanInFlight.has(planKey)) return batchPlanInFlight.get(planKey);
+    const task = (async () => {
+      const requestId = randomUUID();
+      let reservation;
+      if (typeof store.reserveBatchPlan === 'function') {
+        reservation = store.reserveBatchPlan({ planKey, requestId, questionId, historyId, userId, sessionId,
+          cap: perSessionWindowCap, retryOf, now: new Date(now()).toISOString() });
+        if (reservation.status === 'cached') return { plan: hydrateBatchPlan(reservation.plan, resolve(store, questionId, historyId).history), cached: true };
+        if (reservation.status === 'pending') throw new HistoryServiceError('batch_plan_pending', 'This batch is already being checked.', 409);
+        if (reservation.status === 'unknown') throw new HistoryServiceError('batch_plan_uncertain', 'The check may have reached Muse Wonder. Review before explicitly retrying.', 409,
+          { retryOf: reservation.retryOf, possibleCharge: true });
+        if (reservation.status === 'capped') throw new HistoryServiceError('session_cap', 'Suggestion limit reached for this session', 429,
+          { used: reservation.used, limit: reservation.limit });
+        if (reservation.status !== 'reserved') throw new HistoryServiceError('batch_plan_unavailable', 'Batch check could not be reserved.', 409);
+      } else {
+        const count = localBatchAttempts.get(String(sessionId)) ?? 0;
+        if (count >= perSessionWindowCap) throw new HistoryServiceError('session_cap', 'Suggestion limit reached for this session', 429,
+          { used: count, limit: perSessionWindowCap });
+        const local = localBatchPlans.get(planKey);
+        if (local?.status === 'ready') return { plan: hydrateBatchPlan(local.plan, history), cached: true };
+        if (local?.status === 'unknown' && retryOf !== local.retryOf) throw new HistoryServiceError('batch_plan_uncertain', 'The check may have reached Muse Wonder. Review before explicitly retrying.', 409,
+          { retryOf: local.retryOf, possibleCharge: true });
+        localBatchAttempts.set(String(sessionId), count + 1);
+        reservation = { status: 'reserved', requestId };
+        localBatchPlans.set(planKey, { status: 'pending', requestId, attempts: (local?.attempts ?? 0) + 1 });
+      }
+      const dispatchStart = agent.client?.dispatchCount?.();
+      try {
+        const checked = await agent.planBatchWeave({ question, history, suggestions, signal });
+        const mergeIds = checked.merges.map(item => ({ ...item, id: `batch-merge:${createHash('sha256').update([...item.suggestionIds].sort().join('\n')).digest('hex').slice(0, 24)}` }));
+        const plan = { id: `batch-plan:${randomUUID()}`, questionId, historyId, suggestionIds: suggestions.map(item => item.id),
+          chain: checked.chain.map(item => ({ ...suggestions.find(source => source.id === item.suggestionId), causeEventId: item.causeEventId })),
+          merges: mergeIds, conflicts: checked.conflicts, plannerVersion: BATCH_PLANNER_VERSION, existingEventIds: history.events.map(item => item.id),
+          existingEvents: history.events.map(item => ({ id: item.id, year: item.year })),
+          historyRevision: historyRevision(history), selectionRevision: batchSuggestionRevision(suggestions),
+          planKey, createdAt: new Date(now()).toISOString() };
+        if (typeof store.completeBatchPlan === 'function') store.completeBatchPlan({ planKey, requestId: reservation.requestId, plan });
+        else localBatchPlans.set(planKey, { status: 'ready', requestId: reservation.requestId, attempts: localBatchPlans.get(planKey)?.attempts ?? 1, plan });
+        const latest = resolve(store, questionId, historyId);
+        const latestKey = batchPlanKey(questionId, historyId, latest.history, suggestions.map(item => latest.history.suggestions?.find(value => value.id === item.id) ?? item));
+        if (latestKey !== planKey) throw new HistoryServiceError('batch_plan_stale', 'History or selected suggestion content changed during planning. Refresh and check again.', 409, { plan });
+        return { plan: hydrateBatchPlan(plan, latest.history), cached: false };
+      } catch (error) {
+        const dispatched = Number.isSafeInteger(dispatchStart) && typeof agent.client?.dispatchCount === 'function'
+          ? agent.client.dispatchCount() > dispatchStart : true;
+        const failure = typeof store.failBatchPlan === 'function'
+          ? store.failBatchPlan({ planKey, requestId: reservation.requestId, uncertain: dispatched, reason: error?.name === 'SpendCapError' ? 'spend-cap' : 'generation-failed' })
+          : (() => { const previous = localBatchPlans.get(planKey) ?? {}; const entry = { ...previous, status: dispatched ? 'unknown' : 'failed', retryOf: randomUUID() }; localBatchPlans.set(planKey, entry); return entry; })();
+        if (error?.name === 'SpendCapError') throw new HistoryServiceError('spend_cap', error.message, 429, { cause: error });
+        if (dispatched) throw new HistoryServiceError('batch_plan_uncertain', 'The check may have reached Muse Wonder. Review before explicitly retrying.', 409,
+          { cause: error, retryOf: failure.retryOf, possibleCharge: true });
+        throw error;
+      }
+    })();
+    batchPlanInFlight.set(planKey, task);
+    try { return await task; } finally { if (batchPlanInFlight.get(planKey) === task) batchPlanInFlight.delete(planKey); }
+  }
 
-    // A replay of the same request is a read: it does not duplicate events or
-    // dispatch another compatibility check.
-    const initial = resolve(store, questionId, historyId);
-    const existingEvents = new Map(initial.history.events.map(item => [item.id, item]));
-    if (suggestionIds.every(id => existingEvents.has(id))) {
-      return { ...resultFor(initial.question, initial.history, { cached: true }),
-        events: suggestionIds.map(id => existingEvents.get(id)), ripple: [] };
+  async function weaveBatch({ questionId, historyId, planId, acceptedMergeIds = [], excludedSuggestionIds = [], userId, sessionId } = {}) {
+    if (!validId(questionId) || !validId(historyId) || !validId(userId) || !validId(sessionId) || !validId(planId)
+        || !Array.isArray(acceptedMergeIds) || !Array.isArray(excludedSuggestionIds)) {
+      throw new HistoryServiceError('invalid_batch', 'A checked batch plan and valid merge/exclusion choices are required.', 400);
     }
-
-    // Refresh every selected suggestion before making any timeline change.
-    // This may update stale suggestion verdict metadata, but never inserts a
-    // subset of the requested events.
-    for (const suggestionId of suggestionIds) {
-      if (!existingEvents.has(suggestionId)) await ensureCurrentSuggestion({ questionId, historyId, suggestionId, signal });
+    let reservation;
+    if (typeof store.getBatchPlanById === 'function') reservation = store.getBatchPlanById({ planId, questionId, historyId, userId, sessionId });
+    else {
+      const entry = [...localBatchPlans.values()].find(item => item.plan?.id === planId);
+      reservation = entry ? { status: entry.status === 'committed' ? 'committed' : entry.status, plan: entry.plan,
+        requestId: entry.requestId, eventIds: entry.eventIds } : { status: 'missing' };
     }
-
+    if (!reservation || !['ready', 'committed'].includes(reservation.status)) throw new HistoryServiceError('batch_plan_not_found', 'The checked batch plan is not available for this session.', 404);
+    const plan = reservation.plan;
+    if (plan.questionId !== questionId || plan.historyId !== historyId) throw new HistoryServiceError('batch_plan_not_found', 'The checked batch plan is not available for this history.', 404);
+    const resolved = resolve(store, questionId, historyId);
+    if (reservation.status === 'committed') {
+      const sameChoices = (left = [], right = []) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
+      if (!sameChoices(acceptedMergeIds, reservation.acceptedMergeIds ?? [])
+          || !sameChoices(excludedSuggestionIds, reservation.excludedSuggestionIds ?? [])) {
+        throw new HistoryServiceError('batch_already_committed', 'This checked batch was already committed with different merge or exclusion choices.', 409);
+      }
+      return { ...resultFor(resolved.question, resolved.history, { cached: true }),
+        events: (reservation.eventIds ?? []).map(id => resolved.history.events.find(item => item.id === id)).filter(Boolean), ripple: [] };
+    }
+    const selected = plan.suggestionIds.map(id => resolved.history.suggestions?.find(item => item.id === id));
+    if (selected.some(item => !item)) throw new HistoryServiceError('batch_plan_stale', 'A planned suggestion is no longer available. Check the current batch again.', 409);
+    const currentHistoryRevision = historyRevision(resolved.history);
+    const selectionRevision = batchSuggestionRevision(selected);
+    if (currentHistoryRevision !== plan.historyRevision || selectionRevision !== plan.selectionRevision) {
+      throw new HistoryServiceError('batch_plan_stale', 'History or selected suggestion content changed after review. Check the batch again.', 409);
+    }
+    const selectedIds = new Set(plan.suggestionIds);
+    if (acceptedMergeIds.some(id => !validId(id) || !plan.merges.some(merge => merge.id === id))
+        || excludedSuggestionIds.some(id => !selectedIds.has(id))
+        || new Set(acceptedMergeIds).size !== acceptedMergeIds.length || new Set(excludedSuggestionIds).size !== excludedSuggestionIds.length) {
+      throw new HistoryServiceError('invalid_batch_choice', 'Merge and exclusion choices must refer to this plan.', 400);
+    }
+    let projection;
+    try { projection = projectBatchPlan(plan, { acceptedMergeIds, excludedSuggestionIds }); }
+    catch (error) { throw new HistoryServiceError('invalid_batch_choice', error.message, 400, { cause: error }); }
+    if (projection.unresolvedConflicts.length) throw new HistoryServiceError('batch_conflicts_unresolved', 'Exclude or otherwise resolve every reported conflict before committing.', 409,
+      { conflicts: projection.unresolvedConflicts });
     const started = await mutateQuestion(questionId, () => {
       const { question, history } = resolve(store, questionId, historyId);
-      const alreadyWoven = new Map(history.events.map(item => [item.id, item]));
-      const selected = [];
-      for (const suggestionId of suggestionIds) {
-        if (alreadyWoven.has(suggestionId)) continue;
-        const suggestion = history.suggestions?.find(item => item.id === suggestionId);
-        if (!suggestion) throw new HistoryServiceError('not_found', 'Suggestion not found', 404);
-        if (suggestion.historyRevision !== historyRevision(history)) {
-          throw new HistoryServiceError('suggestion_recheck_pending', 'A selected suggestion changed during batch validation. Retry the batch.', 409, { suggestion });
-        }
-        if (suggestion.verdict !== 'fits') {
-          const conflict = suggestion.verdict === 'conflicts';
-          throw new HistoryServiceError(conflict ? 'suggestion_became_conflict' : 'invalid_suggestion',
-            conflict ? 'A selected suggestion conflicts with the current history. It remains available for What-if.' : 'A selected suggestion is not confirmed to fit.',
-            409, { ...(suggestion.conflictsWith ? { conflictsWith: suggestion.conflictsWith } : {}), reason: suggestion.reason, suggestion });
-        }
-        if (!isYear(suggestion.year) || !validId(suggestion.causeEventId)) throw new HistoryServiceError('invalid_suggestion', 'A selected suggestion cannot be woven', 409, { suggestion });
-        selected.push(suggestion);
+      if (historyRevision(history) !== plan.historyRevision) throw new HistoryServiceError('batch_plan_stale', 'History changed before commit.', 409);
+      const currentSuggestions = new Map((history.suggestions ?? []).map(item => [item.id, item]));
+      if (plan.suggestionIds.some(id => !currentSuggestions.has(id))
+          || batchSuggestionRevision(plan.suggestionIds.map(id => currentSuggestions.get(id))) !== plan.selectionRevision) {
+        throw new HistoryServiceError('batch_plan_stale', 'A planned suggestion changed before commit.', 409);
       }
-      const selectedById = new Map(selected.map(item => [item.id, item]));
-      for (const suggestion of selected) {
-        const cause = suggestion.causeEventId === question.id ? null
-          : history.events.find(event => event.id === suggestion.causeEventId) ?? selectedById.get(suggestion.causeEventId);
-        if (suggestion.causeEventId !== question.id && (!cause || cause.year >= suggestion.year)) {
-          throw new HistoryServiceError('invalid_cause', 'A selected suggestion cause is not earlier in this history or batch.', 409, { suggestion });
-        }
-      }
-      if (!selected.length) return { question, history, events: suggestionIds.map(id => alreadyWoven.get(id)), later: [], cached: true };
-
-      const wovenEvents = selected.map(suggestion => {
-        const event = { ...suggestion, id: suggestion.id };
-        for (const key of ['window', 'verdict', 'conflictsWith', 'reason', 'generatedAt', 'historyRevision', 'recheckStatus', 'recheckReason']) delete event[key];
-        return event;
-      });
-      const allEvents = sorted([...history.events, ...wovenEvents]);
-      const laterEvents = allEvents.filter(item => !selectedById.has(item.id) && wovenEvents.some(event => item.year > event.year));
+      const currentPlan = hydrateBatchPlan(plan, history);
+      const commitProjection = projectBatchPlan(currentPlan, { acceptedMergeIds, excludedSuggestionIds });
+      if (commitProjection.unresolvedConflicts.length) throw new HistoryServiceError('batch_conflicts_unresolved', 'Resolve conflicts before committing.', 409,
+        { conflicts: commitProjection.unresolvedConflicts });
+      const existingIds = new Set(history.events.map(item => item.id));
+      if (commitProjection.events.some(item => existingIds.has(item.id))) throw new HistoryServiceError('batch_plan_stale', 'A planned event already exists in this history.', 409);
+      const newEvents = commitProjection.events.map(item => ({ ...item }));
+      const selectedSet = new Set(plan.suggestionIds);
+      const allEvents = sorted([...history.events, ...newEvents]);
+      const later = allEvents.filter(item => !newEvents.some(event => event.id === item.id) && newEvents.some(event => item.year > event.year));
       const withPending = allEvents.map(item => {
-        if (selectedById.has(item.id)) return item;
-        const newlyEarlier = wovenEvents.filter(event => item.year > event.year);
+        if (newEvents.some(event => event.id === item.id)) return item;
+        const newlyEarlier = newEvents.filter(event => item.year > event.year);
         if (!newlyEarlier.length) return item;
         const flags = (item.checkFlags ?? []).filter(flag => !(flag?.kind === 'weave-ripple' && newlyEarlier.some(event => flag.wovenEventId === event.id)));
         for (const wovenEvent of newlyEarlier) {
           const date = wovenEvent.year < 0 ? `${Math.abs(wovenEvent.year)} BCE` : `${wovenEvent.year} CE`;
-          flags.push({ kind: 'weave-ripple', eventId: item.id, wovenEventId: wovenEvent.id, year: item.year, status: 'pending',
-            message: `Written before ${date} was woven in. Re-check pending.`, actions: ['keep', 'regenerate'] });
+          flags.push({ kind: 'weave-ripple', eventId: item.id, wovenEventId: wovenEvent.id, year: item.year,
+            status: 'pending', message: `Written before ${date} was woven in. Re-check pending.`, actions: ['keep', 'regenerate'] });
         }
         return { ...item, checkFlags: flags };
       });
       const nextHistory = { ...history, events: withPending,
-        suggestions: (history.suggestions ?? []).filter(item => !selectedById.has(item.id)) };
-      const savedQuestion = saveHistory(store, question, nextHistory);
+        suggestions: (history.suggestions ?? []).filter(item => !selectedSet.has(item.id) || excludedSuggestionIds.includes(item.id)) };
+      let savedQuestion;
+      let alreadyCommitted = false;
+      if (typeof store.commitBatchHistory === 'function') {
+        const committed = store.commitBatchHistory({ question: { ...question, histories: question.histories.map(item => item.id === history.id ? nextHistory : item) },
+          planKey: plan.planKey, planId, requestId: reservation.requestId, eventIds: newEvents.map(item => item.id),
+          acceptedMergeIds, excludedSuggestionIds });
+        if (committed.status !== 'committed') throw new HistoryServiceError('batch_commit_unavailable', 'The batch could not be committed atomically.', 409);
+        savedQuestion = committed.question;
+        alreadyCommitted = !!committed.alreadyCommitted;
+      } else savedQuestion = saveHistory(store, question, nextHistory);
       const savedHistory = savedQuestion.histories.find(item => item.id === historyId);
       return { question: savedQuestion, history: savedHistory,
-        events: wovenEvents.map(event => savedHistory.events.find(item => item.id === event.id)),
-        wovenEvents, later: laterEvents.map(event => savedHistory.events.find(item => item.id === event.id)), cached: false };
+        events: newEvents.map(event => savedHistory.events.find(item => item.id === event.id)), newEvents,
+        later: later.map(event => savedHistory.events.find(item => item.id === event.id)), planKey: plan.planKey, alreadyCommitted };
     });
-    if (started.cached) return { ...resultFor(started.question, started.history, { cached: true }), events: started.events, ripple: [] };
-
+    if (started.alreadyCommitted) return { ...resultFor(started.question, started.history, { cached: true }),
+      events: started.events, ripple: [] };
     let checks, checkError;
     if (started.later.length) {
-      try {
-        if (typeof agent.checkRippleBatch !== 'function') throw new Error('Combined ripple checking is unavailable');
-        checks = await agent.checkRippleBatch({ question: started.question, events: started.later, history: started.history,
-          wovenEvents: started.wovenEvents, signal });
-      } catch (error) { checkError = error; }
+      try { checks = await agent.checkRippleBatch({ question: started.question, events: started.later, history: started.history, wovenEvents: started.newEvents }); }
+      catch (error) { checkError = error; }
     } else checks = [];
     const final = await mutateQuestion(questionId, () => {
       const { question, history } = resolve(store, questionId, historyId);
       const checkByEvent = new Map((checks ?? []).map(item => [item.eventId, item]));
       const ripple = [];
       const updated = { ...history, events: history.events.map(event => {
-        const earlier = started.wovenEvents.filter(item => event.year > item.year && !started.wovenEvents.some(other => other.id === event.id));
+        const earlier = started.newEvents.filter(item => event.year > item.year && !started.newEvents.some(other => other.id === event.id));
         if (!earlier.length) return event;
         const result = checkByEvent.get(event.id);
         const flags = (event.checkFlags ?? []).map(flag => {
@@ -398,10 +499,15 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
       }) };
       const saved = saveHistory(store, question, updated);
       const savedHistory = saved.histories.find(item => item.id === historyId);
-      return { question: saved, history: savedHistory, events: started.events.map(item => savedHistory.events.find(event => event.id === item.id)), ripple };
+      const eventIds = started.events.map(item => item.id);
+      if (typeof store.completeBatchCommit === 'function' && typeof store.commitBatchHistory !== 'function') store.completeBatchCommit({ planKey: started.planKey, planId, requestId: reservation.requestId, eventIds });
+      else {
+        const entry = [...localBatchPlans.entries()].find(([, value]) => value.plan?.id === planId);
+        if (entry) localBatchPlans.set(entry[0], { ...entry[1], status: 'committed', eventIds });
+      }
+      return { question: saved, history: savedHistory, events: eventIds.map(id => savedHistory.events.find(item => item.id === id)), ripple };
     });
-    return { ...resultFor(final.question, final.history), events: final.events, ripple: final.ripple,
-      usage: store.usage?.(userId, sessionId) };
+    return { ...resultFor(final.question, final.history), events: final.events, ripple: final.ripple, usage: store.usage?.(userId, sessionId) };
   }
 
   async function fork({ questionId, historyId, eventId, suggestionId, userId, sessionId } = {}) {
@@ -489,6 +595,68 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
     return { ...resultFor(final.question, final.history, { event: final.event }), flag: final.flag, result };
   }
 
+  async function rippleCheckBatch({ questionId, historyId, eventIds, wovenEventIds, signal } = {}) {
+    if (!validId(questionId) || !validId(historyId) || !Array.isArray(eventIds) || !eventIds.length || eventIds.length > 32
+        || eventIds.some(id => !validId(id)) || new Set(eventIds).size !== eventIds.length
+        || !Array.isArray(wovenEventIds) || !wovenEventIds.length || wovenEventIds.length > 32
+        || wovenEventIds.some(id => !validId(id)) || new Set(wovenEventIds).size !== wovenEventIds.length) {
+      throw new HistoryServiceError('invalid_ripple_batch', 'Select valid later events and woven events to re-check.', 400);
+    }
+    const key = JSON.stringify([questionId, historyId, [...eventIds].sort(), [...wovenEventIds].sort()]);
+    if (rippleRetryFlights.has(key)) return rippleRetryFlights.get(key);
+    const task = (async () => {
+      const started = await mutateQuestion(questionId, () => {
+        const { question, history } = resolve(store, questionId, historyId);
+        const wovenEvents = wovenEventIds.map(id => history.events.find(item => item.id === id));
+        if (wovenEvents.some(item => !item)) throw new HistoryServiceError('not_found', 'A woven event is no longer in this history.', 404);
+        const events = eventIds.map(id => history.events.find(item => item.id === id));
+        if (events.some(item => !item)) throw new HistoryServiceError('not_found', 'A later event is no longer in this history.', 404);
+        const pairs = [];
+        for (const event of events) for (const wovenEvent of wovenEvents) {
+          if (event.year <= wovenEvent.year) continue;
+          const flag = (event.checkFlags ?? []).find(item => item?.kind === 'weave-ripple' && item.wovenEventId === wovenEvent.id && item.status !== 'kept');
+          if (flag) pairs.push([event.id, wovenEvent.id]);
+        }
+        if (!pairs.length) throw new HistoryServiceError('no_ripple_flag', 'These events have no unresolved batch ripple flags.', 409);
+        const pairKeys = new Set(pairs.map(pair => JSON.stringify(pair)));
+        const next = { ...history, events: history.events.map(event => ({ ...event, checkFlags: (event.checkFlags ?? []).map(flag =>
+          pairKeys.has(JSON.stringify([event.id, flag.wovenEventId])) && flag?.kind === 'weave-ripple' && flag.status !== 'kept'
+            ? { ...flag, status: 'pending', error: undefined, reason: undefined, updatedAt: new Date(now()).toISOString() } : flag) })) };
+        const saved = saveHistory(store, question, next);
+        const savedHistory = saved.histories.find(item => item.id === historyId);
+        const currentEvents = eventIds.map(id => savedHistory.events.find(item => item.id === id));
+        return { question: saved, history: savedHistory, events: currentEvents,
+          wovenEvents: wovenEventIds.map(id => savedHistory.events.find(item => item.id === id)), pairKeys };
+      });
+      let checks, error;
+      try {
+        if (typeof agent.checkRippleBatch !== 'function') throw new Error('Combined ripple checking is unavailable');
+        checks = await agent.checkRippleBatch({ question: started.question, events: started.events,
+          history: started.history, wovenEvents: started.wovenEvents, signal });
+      } catch (caught) { error = caught; }
+      return mutateQuestion(questionId, () => {
+        const { question, history } = resolve(store, questionId, historyId);
+        const byEvent = new Map((checks ?? []).map(item => [item.eventId, item]));
+        const ripple = [];
+        const updated = { ...history, events: history.events.map(event => ({ ...event, checkFlags: (event.checkFlags ?? []).map(flag => {
+          if (flag?.kind !== 'weave-ripple' || flag.status === 'kept' || !started.pairKeys.has(JSON.stringify([event.id, flag.wovenEventId]))) return flag;
+          const result = byEvent.get(event.id);
+          if (!error && result && !result.inconsistent) return null;
+          const replacement = { ...flag, status: error || !result ? 'unavailable' : 'review',
+            ...(error || !result ? { error: error?.message ?? 'No ripple result was returned.' } : { reason: result.reason }),
+            updatedAt: new Date(now()).toISOString() };
+          ripple.push(replacement);
+          return replacement;
+        }).filter(Boolean) })) };
+        const saved = saveHistory(store, question, updated);
+        const savedHistory = saved.histories.find(item => item.id === historyId);
+        return { ...resultFor(saved, savedHistory), events: eventIds.map(id => savedHistory.events.find(item => item.id === id)), ripple };
+      });
+    })();
+    rippleRetryFlights.set(key, task);
+    try { return await task; } finally { if (rippleRetryFlights.get(key) === task) rippleRetryFlights.delete(key); }
+  }
+
   async function regenerateEvent({ questionId, historyId, eventId, wovenEventId, userId, sessionId, signal } = {}) {
     const started = await mutateQuestion(questionId, () => {
       const { question, history } = resolve(store, questionId, historyId);
@@ -572,5 +740,5 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
     return store.setPreference({ userId, sessionId, autoSuggest });
   }
 
-  return { suggest, weave, weaveBatch, fork, rippleCheck, regenerateEvent, keepEvent, preference, setPreference };
+  return { suggest, weave, batchCheck, weaveBatch, fork, rippleCheck, rippleCheckBatch, regenerateEvent, keepEvent, preference, setPreference };
 }

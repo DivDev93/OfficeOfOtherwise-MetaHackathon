@@ -815,3 +815,32 @@ body:not(.invitation-open):has(.history-gallery-expanded) #history-timebar-host,
 .history-weave-tray .outline{min-height:32px;padding:4px 8px;font-size:10px}
 .history-weave-tray-notice{flex:1 1 100%;color:var(--gold);font-size:10px}
 .history-timeline-suggestion-content>input[data-batch-suggestion]{justify-self:start;inline-size:16px;block-size:16px;margin:0 0 2px;accent-color:var(--gold)}
+.history-batch-preview[hidden]{display:none!important}
+.history-batch-preview:not([hidden]){position:fixed;z-index:1001;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:8px;width:min(980px,calc(100vw - 32px));height:min(812px,calc(100dvh - 32px));max-height:none;overflow:hidden;padding:12px;border:1px solid #73aaa199;border-radius:12px;background:rgba(8,12,13,.99);box-shadow:0 18px 70px #000e}
+body:has(.history-batch-preview:not([hidden]))::before{content:"";position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.72)}
+.history-batch-preview-header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:6px;border-bottom:1px solid #73aaa144}
+.history-batch-preview-header h3,.history-batch-preview h4,.history-batch-preview h5,.history-batch-preview p{margin:0}
+.history-batch-preview-header .outline{min-height:36px}
+.history-batch-preview-body{display:grid;align-content:start;gap:7px;min-height:0;overflow:auto;overscroll-behavior:contain;padding:1px 4px 8px 1px}
+.history-batch-preview-chain{display:grid;gap:5px;margin:0;padding-left:23px}
+.history-batch-preview-event,.history-batch-preview-merge{display:grid;gap:2px;padding:4px 6px;border:1px solid #73aaa133;border-radius:6px;background:#0b1011}
+.history-batch-preview-event-head,.history-batch-preview-merge-head{display:flex;align-items:baseline;gap:6px;min-width:0}
+.history-batch-preview-event-title{flex:1 1 auto;min-width:0;font-weight:600;line-height:1.2;color:var(--parchment);overflow-wrap:anywhere}
+.history-batch-preview-merge-head h5{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.history-batch-preview-merge-summary,.history-batch-preview-conflict{color:var(--neutral-400);font-size:10px;line-height:1.3}
+.history-batch-preview-event .outline,.history-batch-preview-merge .outline,.history-batch-preview-body .outline{justify-self:start;min-height:30px;padding:3px 7px;font-size:10px}
+.history-batch-preview-event-summary,.history-batch-preview-merge-summary{display:inline-flex;flex:0 0 auto;margin:0;color:var(--neutral-400);font-size:9px;line-height:1.2}
+.history-batch-preview-event-summary>summary,.history-batch-preview-merge-summary>summary{display:inline-flex;align-items:center;min-height:30px;width:max-content;padding:0;cursor:pointer;color:var(--cyan);list-style:none;white-space:nowrap}
+.history-batch-preview-event-summary>summary::-webkit-details-marker,.history-batch-preview-merge-summary>summary::-webkit-details-marker{display:none}
+.history-batch-preview-event-summary[open],.history-batch-preview-merge-summary[open]{flex:1 0 100%;display:grid}
+.history-batch-preview-event-summary>p,.history-batch-preview-merge-summary>p{margin:3px 0 0;color:var(--neutral-400);font-size:10px;line-height:1.35}
+.history-batch-preview-cause-root{color:var(--neutral-400);font-size:10px;line-height:1.25}
+.history-batch-preview-event button[data-action="batch-preview-cause"]{justify-self:start;min-height:0;margin:0;padding:0;border:0;background:transparent;color:var(--cyan);font-size:9px;line-height:1.15;text-align:left;white-space:normal}
+.history-batch-preview-merges,.history-batch-preview-conflicts{display:grid;gap:6px;padding:8px;border:1px solid #73aaa133;border-radius:7px}
+.history-batch-preview-merges h4,.history-batch-preview-conflicts h4{color:var(--cyan);font-size:12px}
+.history-batch-preview-exclude{display:flex;align-items:center;gap:5px;color:var(--parchment);font-size:11px}
+.history-batch-preview-exclude input{accent-color:var(--gold)}
+.history-batch-preview-unresolved,.history-batch-preview-error{color:var(--gold);font-size:11px;line-height:1.4}
+.history-batch-preview-progress{color:var(--cyan);font-size:12px}
+.history-batch-preview>[data-action="batch-commit"]{justify-self:stretch;min-height:44px;background:rgba(8,12,13,.98)}
+@media(max-width:700px){.history-batch-preview:not([hidden]){left:0;right:0;top:auto;bottom:0;transform:none;width:100vw;height:min(812px,calc(100dvh - 12px));padding:10px 10px calc(10px + env(safe-area-inset-bottom));border-radius:14px 14px 0 0}.history-batch-preview-header .outline,.history-batch-preview-merge-head .outline,.history-batch-preview-body .outline,.history-batch-preview>[data-action="batch-commit"]{min-height:42px;font-size:12px}.history-batch-preview-event-summary>summary,.history-batch-preview-merge-summary>summary{min-height:40px}.history-batch-preview-event button[data-action="batch-preview-cause"]{min-height:0;font-size:10px}.history-batch-preview-event,.history-batch-preview-merge{padding:4px 5px;gap:1px}}

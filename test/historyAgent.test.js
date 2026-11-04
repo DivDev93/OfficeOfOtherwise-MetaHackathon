@@ -5,6 +5,7 @@ import { createHistoryAgent } from '../src/agents/historyAgent.js';
 import { migrateSavedTree } from '../web/historyModel.js';
 
 const fixture = JSON.parse(await readFile(new URL('./fixtures/history-conflicts.json', import.meta.url), 'utf8'));
+const arabiaBatch = JSON.parse(await readFile(new URL('./fixtures/history-arabia-weave-batch.json', import.meta.url), 'utf8'));
 const json = value => JSON.stringify(value);
 
 function agentFor(output, { policy } = {}) {
@@ -41,7 +42,54 @@ test('history agent checks all later events against one newly woven batch in a s
   assert.equal(calls.length, 1);
   assert.equal(calls[0].model, 'muse-spark-1.3');
   assert.equal(calls[0].label, 'history-agent:ripple-batch');
+  assert.deepEqual(calls[0].reasoning, { effort: 'minimal' });
+  assert.ok(calls[0].maxOutputTokens >= 2000, 'batch ripple check has visible output budget for its whole response');
   assert.match(calls[0].instructions, /combined effect of ALL supplied newly woven events/);
+});
+
+test('Muse Wonder batch planner sees all six cached Arabia suggestions and returns a validated causal chain', async () => {
+  const suggestions = arabiaBatch.history.suggestions;
+  const idFor = title => suggestions.find(item => item.title === title).id;
+  const response = { chain: [
+    { suggestionId: idFor('Red Sea Monks Reach Jeddah'), causeEventId: arabiaBatch.question.id },
+    { suggestionId: idFor("Buddhist Sailors' Shrine at Jeddah"), causeEventId: idFor('Red Sea Monks Reach Jeddah') },
+    { suggestionId: idFor('Lotus Carvings at Hegra'), causeEventId: idFor("Buddhist Sailors' Shrine at Jeddah") },
+    { suggestionId: idFor('Meccan Jataka Reliefs'), causeEventId: idFor("Buddhist Sailors' Shrine at Jeddah") },
+    { suggestionId: idFor('Vihara Healing Garden in Mecca'), causeEventId: idFor('Meccan Jataka Reliefs') },
+    { suggestionId: idFor('Buddhist Healing House at Hegra'), causeEventId: idFor('Lotus Carvings at Hegra') },
+  ], merges: [{ suggestionIds: [idFor('Vihara Healing Garden in Mecca'), idFor('Buddhist Healing House at Hegra')],
+    title: 'Arabian Healing Houses', summary: 'A Vihara Healing Garden in Mecca, Arabia and a Buddhist Healing House at Hegra, Arabia share healing methods.' }], conflicts: [] };
+  const { agent, calls } = agentFor(response);
+  const planned = await agent.planBatchWeave({ question: arabiaBatch.question,
+    history: { ...arabiaBatch.history, events: [] }, suggestions });
+  assert.equal(planned.chain.length, 6);
+  assert.equal(planned.chain[1].causeEventId, suggestions[0].id);
+  assert.deepEqual(planned.merges[0].suggestionIds, [suggestions[4].id, suggestions[5].id]);
+  const input = JSON.parse(calls[0].input);
+  assert.equal(input.history.events.length, 0);
+  assert.equal(input.selectedSuggestions.length, 6);
+  assert.equal(input.selectedSuggestions[0].title, suggestions[0].title);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].model, 'muse-wonder-1.0');
+  assert.equal(calls[0].label, 'history-agent:batch-plan');
+  assert.deepEqual(calls[0].reasoning, { effort: 'minimal' });
+  assert.ok(calls[0].maxOutputTokens >= 5000);
+  assert.match(calls[0].instructions, /actively look for optional consolidations/);
+  assert.match(calls[0].instructions, /different places and years/);
+  assert.match(calls[0].instructions, /Keep a cause and its later effect as separate events/);
+});
+
+test('batch planner rejects unknown conflicts and out-of-order selected causes', async () => {
+  const suggestions = arabiaBatch.history.suggestions.map((item, index) => ({ ...item, era: 'Late Antiquity',
+    geography: { version: 1, changes: [] }, verdict: 'fits', causeEventId: arabiaBatch.question.id }));
+  const chain = suggestions.map(item => ({ suggestionId: item.id, causeEventId: arabiaBatch.question.id }));
+  const badConflict = agentFor({ chain, merges: [], conflicts: [{ suggestionId: suggestions[0].id, conflictsWith: 'not-an-event',
+    reason: 'A concrete contradiction is described for this selected event.' }] }).agent;
+  await assert.rejects(badConflict.planBatchWeave({ question: arabiaBatch.question, history: { id: arabiaBatch.history.id, events: [] }, suggestions }), /Invalid batch cross-conflict/);
+  const badCause = [...chain];
+  badCause[0] = { suggestionId: suggestions[0].id, causeEventId: suggestions[1].id };
+  const causeAgent = agentFor({ chain: badCause, merges: [], conflicts: [] }).agent;
+  await assert.rejects(causeAgent.planBatchWeave({ question: arabiaBatch.question, history: { id: arabiaBatch.history.id, events: [] }, suggestions }), /earlier existing event or selected suggestion/);
 });
 
 test('new history question sends bounded verified parent as-of context without importing old causes', async () => {

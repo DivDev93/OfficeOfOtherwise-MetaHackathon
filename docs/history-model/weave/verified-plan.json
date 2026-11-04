@@ -1,0 +1,89 @@
+{
+  "date": "2026-11-03",
+  "question": "What if Buddhism Spread to Arabia",
+  "historyEventCountBeforeCommit": 0,
+  "selectedSuggestionCount": 6,
+  "plannerVersion": 2,
+  "chain": [
+    {
+      "id": "suggestion:a72c30f0a7e059e917bc8db705786eb86230b0eedd0101b077c3f87eca931256",
+      "year": -245,
+      "title": "Red Sea Monks Reach Jeddah",
+      "place": "Jeddah, Arabia",
+      "causeEventId": "question-895184fc-5cf0-4561-b3d4-324c007ca248",
+      "causeTitle": "Starting question"
+    },
+    {
+      "id": "suggestion:d2145ee80df3994157d448f55b6540c295fca4c7d2b1b470f649ca9b09a1dbad",
+      "year": -238,
+      "title": "Buddhist Sailors' Shrine at Jeddah",
+      "place": "Jeddah, Arabia",
+      "causeEventId": "suggestion:a72c30f0a7e059e917bc8db705786eb86230b0eedd0101b077c3f87eca931256",
+      "causeTitle": "Red Sea Monks Reach Jeddah"
+    },
+    {
+      "id": "suggestion:7a04084bdc22863df97a22743ad01e37bbabbc14cd78d542d1058bbc07be5ad3",
+      "year": -176,
+      "title": "Lotus Carvings at Hegra",
+      "place": "Hegra, Arabia",
+      "causeEventId": "suggestion:d2145ee80df3994157d448f55b6540c295fca4c7d2b1b470f649ca9b09a1dbad",
+      "causeTitle": "Buddhist Sailors' Shrine at Jeddah"
+    },
+    {
+      "id": "suggestion:14665b33c0b5b66789fe4ba63bbefdcb33332a2a596a890d35c512c6140ae4ef",
+      "year": -170,
+      "title": "Meccan Jataka Reliefs",
+      "place": "Mecca, Arabia",
+      "causeEventId": "suggestion:7a04084bdc22863df97a22743ad01e37bbabbc14cd78d542d1058bbc07be5ad3",
+      "causeTitle": "Lotus Carvings at Hegra"
+    },
+    {
+      "id": "suggestion:60a6f6c876ca8e74b2152709793e7c5be4fc89f2ec6a047d32b34b2e94555f36",
+      "year": -98,
+      "title": "Vihara Healing Garden in Mecca",
+      "place": "Mecca, Arabia",
+      "causeEventId": "suggestion:14665b33c0b5b66789fe4ba63bbefdcb33332a2a596a890d35c512c6140ae4ef",
+      "causeTitle": "Meccan Jataka Reliefs"
+    },
+    {
+      "id": "suggestion:35066f32d3a39a6120ed81c28b14d1775e798138a287f4d311021c072c1f7809",
+      "year": -75,
+      "title": "Buddhist Healing House at Hegra",
+      "place": "Hegra, Arabia",
+      "causeEventId": "suggestion:60a6f6c876ca8e74b2152709793e7c5be4fc89f2ec6a047d32b34b2e94555f36",
+      "causeTitle": "Vihara Healing Garden in Mecca"
+    }
+  ],
+  "merges": [
+    {
+      "id": "batch-merge:cead19ac273545933942a139",
+      "suggestionIds": [
+        "suggestion:7a04084bdc22863df97a22743ad01e37bbabbc14cd78d542d1058bbc07be5ad3",
+        "suggestion:14665b33c0b5b66789fe4ba63bbefdcb33332a2a596a890d35c512c6140ae4ef"
+      ],
+      "title": "Buddhist Rock Art Across Hegra, Arabia and Mecca, Arabia",
+      "summary": "Arabian artists adapt Buddhist imagery into local rock-cut traditions: stonemasons at Hegra, Arabia carve lotus, wheel, and stupa motifs into shrines, while caravan merchants at Mecca, Arabia commission Jataka reliefs in a South Arabian style with bilingual Prakrit and ancient Arabic inscriptions emphasizing compassion and generosity to travellers.",
+      "acceptedByDefault": false
+    },
+    {
+      "id": "batch-merge:3277b5b2e451f1817f83daf0",
+      "suggestionIds": [
+        "suggestion:60a6f6c876ca8e74b2152709793e7c5be4fc89f2ec6a047d32b34b2e94555f36",
+        "suggestion:35066f32d3a39a6120ed81c28b14d1775e798138a287f4d311021c072c1f7809"
+      ],
+      "title": "Buddhist Healing Network from Mecca, Arabia to Hegra, Arabia",
+      "summary": "A shared Buddhist-Arabian healing practice develops at Mecca, Arabia, where vihara monks cultivate medicinal herbs and teach breath meditation, dietary care, Ayurvedic remedies, and Arabian plant knowledge, and extends to Hegra, Arabia, where monks and herbalists maintain a caravan hospice combining meditation and breathing practices with Indian medicinal plants and frankincense-based remedies recorded on ostraca.",
+      "acceptedByDefault": false
+    }
+  ],
+  "conflicts": [],
+  "nativeChecks": {
+    "sixPreselected": true,
+    "selectAllNone": true,
+    "jeddahCauseEffect": true,
+    "healingMergePreviewCount": 5,
+    "keepSeparateCount": 6,
+    "mergeToggleRequests": 0,
+    "cancelReopenRequests": 0
+  }
+}

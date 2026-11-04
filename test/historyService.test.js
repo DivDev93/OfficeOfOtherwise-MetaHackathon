@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createHistoryService, HistoryServiceError } from '../src/demo/historyService.js';
+import { createHistoryStore } from '../src/demo/historyStore.js';
 import { migrateSavedTree, normalizeQuestionHistories } from '../web/historyModel.js';
 
 const question = normalizeQuestionHistories({ id: 'lake-chad', question: 'What if Lake Chad stayed larger?', histories: [{ id: 'history-1', events: [
@@ -195,12 +199,16 @@ test('batch weave validates all six candidates, saves them together, and runs on
   questionWithCandidates.histories[0].suggestions = suggestions;
   store.save(questionWithCandidates);
   const calls = [];
-  const service = createHistoryService({ store, agent: { async suggest() { return []; }, async checkRippleBatch(args) {
+  const service = createHistoryService({ store, agent: { async suggest() { return []; }, async planBatchWeave({ suggestions: selected }) {
+    return { chain: selected.map(item => ({ suggestionId: item.id, causeEventId: 'channels-2400' })), merges: [], conflicts: [] };
+  }, async checkRippleBatch(args) {
     calls.push(args);
     return [{ eventId: 'settlement-1800', inconsistent: true, reason: 'The later settlement now lacks sufficient water.' }];
   } } });
   const ids = suggestions.map(item => item.id);
-  const result = await service.weaveBatch({ questionId: 'lake-chad', historyId: 'history-1', suggestionIds: ids });
+  const checked = await service.batchCheck({ questionId: 'lake-chad', historyId: 'history-1', suggestionIds: ids, userId: 'u', sessionId: 's' });
+  const result = await service.weaveBatch({ questionId: 'lake-chad', historyId: 'history-1', planId: checked.plan.id,
+    acceptedMergeIds: [], excludedSuggestionIds: [], userId: 'u', sessionId: 's' });
   assert.deepEqual(result.events.map(item => item.id), ids);
   assert.deepEqual(result.history.events.map(item => item.id), ['channels-2400', ...ids, 'settlement-1800']);
   assert.equal(result.history.suggestions.length, 0);
@@ -212,7 +220,8 @@ test('batch weave validates all six candidates, saves them together, and runs on
   assert.equal(result.ripple.length, 6, 'the combined verdict is associated with each newly earlier woven event');
   assert.equal(result.ripple[0].status, 'review');
 
-  const replay = await service.weaveBatch({ questionId: 'lake-chad', historyId: 'history-1', suggestionIds: ids });
+  const replay = await service.weaveBatch({ questionId: 'lake-chad', historyId: 'history-1', planId: checked.plan.id,
+    acceptedMergeIds: [], excludedSuggestionIds: [], userId: 'u', sessionId: 's' });
   assert.equal(replay.cached, true);
   assert.equal(replay.history.events.filter(item => ids.includes(item.id)).length, 6);
   assert.equal(calls.length, 1, 'idempotent replay does not dispatch another Spark request');
@@ -225,10 +234,137 @@ test('batch weave rejects an invalid selection before inserting any selected eve
   questionWithCandidates.histories[0].suggestions = suggestions;
   store.save(questionWithCandidates);
   const service = createHistoryService({ store, agent: { async suggest() { return []; }, async checkRippleBatch() { throw new Error('should not dispatch'); } } });
-  await assert.rejects(service.weaveBatch({ questionId: 'lake-chad', historyId: 'history-1', suggestionIds: suggestions.map(item => item.id) }),
-    error => error.code === 'suggestion_became_conflict' && error.status === 409);
+  await assert.rejects(service.weaveBatch({ questionId: 'lake-chad', historyId: 'history-1', suggestionIds: suggestions.map(item => item.id), userId: 'u', sessionId: 's' }),
+    error => error.code === 'invalid_batch');
   assert.deepEqual(store.get('lake-chad').histories[0].events.map(item => item.id), ['channels-2400', 'settlement-1800']);
   assert.equal(store.get('lake-chad').histories[0].suggestions.length, 2);
+});
+
+test('batch check does not redispatch an uncertain Wonder request without its explicit retry receipt', async () => {
+  const store = memoryStore();
+  const item = candidate('batch-review', -2200);
+  const withSuggestion = store.get('lake-chad');
+  withSuggestion.histories[0].suggestions = [item];
+  store.save(withSuggestion);
+  let dispatches = 0;
+  const service = createHistoryService({ store, perSessionWindowCap: 3, agent: {
+    client: { dispatchCount: () => dispatches },
+    async suggest() { return []; },
+    async planBatchWeave({ question, suggestions }) {
+      dispatches++;
+      if (dispatches === 1) throw new Error('response lost after dispatch');
+      return { chain: [{ suggestionId: suggestions[0].id, causeEventId: question.id }], merges: [], conflicts: [] };
+    },
+  } });
+  const args = { questionId: 'lake-chad', historyId: 'history-1', suggestionIds: [item.id], userId: 'u', sessionId: 's' };
+  let receipt;
+  await assert.rejects(service.batchCheck(args), error => {
+    assert.equal(error.code, 'batch_plan_uncertain');
+    assert.equal(error.possibleCharge, true);
+    receipt = error.retryOf;
+    return !!receipt;
+  });
+  await assert.rejects(service.batchCheck(args), error => error.code === 'batch_plan_uncertain' && error.retryOf === receipt);
+  assert.equal(dispatches, 1);
+  const explicit = await service.batchCheck({ ...args, retryOf: receipt });
+  assert.equal(explicit.plan.chain[0].id, item.id);
+  assert.equal(dispatches, 2);
+});
+
+test('checked batch performs one Spark call for multiple later events and persists an unavailable result without replaying', async () => {
+  const store = memoryStore();
+  const questionWithCandidates = store.get('lake-chad');
+  questionWithCandidates.histories[0].events.push({ id: 'reed-craft-1500', year: -1500,
+    place: { name: 'Lake Chad', lat: 13, lon: 14 }, title: 'Reed craft travels the shore', summary: 'Shore communities exchange reed craft.',
+    causeEventId: 'settlement-1800' });
+  const suggestions = [candidate('checked-a', -2300), candidate('checked-b', -2200)];
+  questionWithCandidates.histories[0].suggestions = suggestions;
+  store.save(questionWithCandidates);
+  let rippleCalls = 0;
+  const service = createHistoryService({ store, agent: { async suggest() { return []; },
+    async planBatchWeave({ question, suggestions: selected }) { return { chain: selected.map(item => ({ suggestionId: item.id, causeEventId: question.id })), merges: [], conflicts: [] }; },
+    async checkRippleBatch({ events }) { rippleCalls++; assert.deepEqual(events.map(item => item.id), ['settlement-1800', 'reed-craft-1500']);
+      if (rippleCalls === 1) throw new Error('Spark unavailable');
+      return events.map(item => ({ eventId: item.id, inconsistent: false, reason: '' }));
+    },
+  } });
+  const args = { questionId: 'lake-chad', historyId: 'history-1', suggestionIds: suggestions.map(item => item.id), userId: 'u', sessionId: 's' };
+  const checked = await service.batchCheck(args);
+  const result = await service.weaveBatch({ questionId: args.questionId, historyId: args.historyId, planId: checked.plan.id,
+    acceptedMergeIds: [], excludedSuggestionIds: [], userId: 'u', sessionId: 's' });
+  assert.equal(rippleCalls, 1);
+  assert.equal(result.ripple.length, 4, 'each later event gets one flag per newly earlier event');
+  assert.ok(result.ripple.every(flag => flag.status === 'unavailable'));
+  const replay = await service.weaveBatch({ questionId: args.questionId, historyId: args.historyId, planId: checked.plan.id,
+    acceptedMergeIds: [], excludedSuggestionIds: [], userId: 'u', sessionId: 's' });
+  assert.equal(replay.cached, true);
+  assert.equal(rippleCalls, 1, 'idempotent commit does not automatically retry an uncertain Spark check');
+  const retried = await service.rippleCheckBatch({ questionId: args.questionId, historyId: args.historyId,
+    eventIds: ['settlement-1800', 'reed-craft-1500'], wovenEventIds: suggestions.map(item => item.id) });
+  assert.equal(rippleCalls, 2, 'the explicit retry makes one productive combined Spark call');
+  assert.deepEqual(retried.ripple, []);
+  assert.ok(['settlement-1800', 'reed-craft-1500'].every(id => store.get('lake-chad').histories[0].events
+    .find(item => item.id === id).checkFlags.every(flag => flag.kind !== 'weave-ripple' || flag.status === 'kept')));
+});
+
+test('durable batch commit receipt replays after restart before Spark finalization, preserving merge and exclusion choices', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'office-history-batch-commit-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sourceA = { ...candidate('durable-a', -2300), sceneRef: { status: 'complete', path: 'scenes/durable-a.png' } };
+  const sourceB = { ...candidate('durable-b', -2250), heroRef: { status: 'complete', path: 'scenes/durable-b.png' } };
+  const excluded = candidate('durable-excluded', -2200);
+  const initial = structuredClone(question);
+  initial.histories[0].suggestions = [sourceA, sourceB, excluded];
+  const firstStore = createHistoryStore(root);
+  firstStore.save(initial);
+  const enteredRipple = deferred();
+  const finishRipple = deferred();
+  let rippleCalls = 0;
+  const agent = { async suggest() { return []; },
+    async planBatchWeave({ question: currentQuestion, suggestions }) {
+      return { chain: suggestions.map(item => ({ suggestionId: item.id, causeEventId: 'channels-2400' })),
+        merges: [{ suggestionIds: [sourceA.id, sourceB.id], title: 'Combined lake practice',
+          summary: 'Lake Chad communities combine the shared water practices.' }], conflicts: [] };
+    },
+    async checkRippleBatch({ events }) {
+      rippleCalls++;
+      enteredRipple.resolve(events);
+      return finishRipple.promise;
+    } };
+  const firstService = createHistoryService({ store: firstStore, agent });
+  const args = { questionId: 'lake-chad', historyId: 'history-1', suggestionIds: [sourceA.id, sourceB.id, excluded.id], userId: 'durable-user', sessionId: 'durable-session' };
+  const checked = await firstService.batchCheck(args);
+  const mergeId = checked.plan.merges[0].id;
+  const commitPromise = firstService.weaveBatch({ ...args, planId: checked.plan.id, acceptedMergeIds: [mergeId], excludedSuggestionIds: [excluded.id] });
+  const laterEvents = await enteredRipple.promise;
+  assert.deepEqual(laterEvents.map(item => item.id), ['settlement-1800']);
+
+  const reopenedStore = createHistoryStore(root);
+  const receipt = reopenedStore.getBatchPlan(checked.plan.planKey);
+  assert.equal(receipt.status, 'committed', 'the plan receipt is durable in the same write as the changed history');
+  assert.deepEqual(receipt.acceptedMergeIds, [mergeId]);
+  assert.deepEqual(receipt.excludedSuggestionIds, [excluded.id]);
+  const reopenedService = createHistoryService({ store: reopenedStore, agent: {
+    async suggest() { return []; },
+    async planBatchWeave() { throw new Error('replay must not plan again'); },
+    async checkRippleBatch() { rippleCalls++; throw new Error('replay must not redispatch Spark'); },
+  } });
+  const replay = await reopenedService.weaveBatch({ ...args, planId: checked.plan.id, acceptedMergeIds: [mergeId], excludedSuggestionIds: [excluded.id] });
+  assert.equal(replay.cached, true);
+  assert.equal(replay.events.length, 1);
+  assert.equal(replay.events[0].id, mergeId);
+  assert.deepEqual(replay.events[0].sourceSuggestionIds, [sourceA.id, sourceB.id]);
+  assert.deepEqual(replay.events[0].sourceMediaRefs.map(item => item.suggestionId), [sourceA.id, sourceB.id]);
+  assert.equal(replay.history.events.filter(item => item.id === mergeId).length, 1);
+  assert.equal(replay.history.suggestions.some(item => item.id === excluded.id), true);
+  assert.equal(rippleCalls, 1, 'restart replay does not redispatch the in-flight combined Spark check');
+
+  finishRipple.resolve([{ eventId: 'settlement-1800', inconsistent: false, reason: '' }]);
+  await commitPromise;
+  const finishedStore = createHistoryStore(root);
+  assert.equal(finishedStore.get('lake-chad').histories[0].events.filter(item => item.id === mergeId).length, 1);
+  assert.equal(finishedStore.getBatchPlan(checked.plan.planKey).status, 'committed');
+  assert.equal(rippleCalls, 1);
 });
 
 test('conflicting suggestion forks with shared earlier prefix and leaves original history intact', async () => {

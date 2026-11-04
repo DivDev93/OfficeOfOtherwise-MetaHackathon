@@ -9,9 +9,13 @@ const windowFor = year => {
 export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setTimeout, clearTimer = clearTimeout,
   onChange = () => {}, debounceMs = 800 } = {}) {
   let context = null, timer = null, generation = 0, preferenceRequest = 0;
+  let batchCheckOwner = 0;
+  const batchPlanCache = new Map();
+  const batchPlanFlights = new Map();
+  const batchCheckUncertainCache = new Map();
   const listeners = new Set();
   const state = { autoSuggest: true, questionId: '', historyId: '', selectedEventId: '', date: null, window: null, question: null, questions: [], histories: [],
-    suggestions: [], status: '', paused: false, loading: false, busyIds: new Set(), history: null, windowCached: false, windowStatus: '' };
+    suggestions: [], status: '', paused: false, loading: false, busyIds: new Set(), history: null, windowCached: false, windowStatus: '', batchCheckUncertain:null };
   const emit = () => { const snapshot = { ...state, suggestions: [...state.suggestions], busyIds: new Set(state.busyIds) }; onChange(snapshot); for (const listener of listeners) listener(snapshot); };
   const isCurrent = (token, identity) => token === generation && context?.questionId === identity.questionId
     && (!identity.historyId || context?.historyId === identity.historyId);
@@ -89,6 +93,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
       if (!response.ok) throw new Error('Could not load saved history.');
       const data = await response.json();
       if (!isCurrent(token, identity)) return;
+      batchPlanCache.clear(); batchCheckUncertainCache.clear(); state.batchCheckUncertain = null;
       if (Array.isArray(data.questions)) state.questions = data.questions;
       const question = data.questions?.find(item => item.id === identity.questionId);
       const history = question?.histories?.find(item => item.id === identity.historyId)
@@ -163,6 +168,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
         return null;
       }
       const priorHistory = state.history;
+      batchPlanCache.clear(); batchCheckUncertainCache.clear(); state.batchCheckUncertain = null;
       const forkedHistory = !!(data.history?.id && data.history.id !== context.historyId && data.forkEventId);
       state.question = data.question || state.question;
       state.history = forkedHistory ? mergeWindows(data.history, null, null) : mergeWindows(data.history || state.history, priorHistory,
@@ -194,6 +200,61 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
       return data;
     } catch (error) { if (isCurrent(token, identity)) state.status = error.message || 'Could not update history.'; return null; }
     finally { if (token === generation && context?.questionId === identity.questionId) { state.busyIds.delete(busyId); emit(); } }
+  }
+  async function checkWeaveBatch(suggestionIds = [], { retryOf = '' } = {}) {
+    if (!context || !Array.isArray(suggestionIds) || !suggestionIds.length) return null;
+    const ids = [...new Set(suggestionIds.map(String))];
+    if (!ids.length || ids.length > 32) return null;
+    const identity = { ...context, window:{ ...state.window } }, token = generation;
+    const key = JSON.stringify([identity.questionId, identity.historyId, [...ids].sort()]);
+    if (!retryOf && batchPlanCache.has(key)) { state.batchCheckUncertain = null; return batchPlanCache.get(key); }
+    const uncertain = batchCheckUncertainCache.get(key);
+    if (uncertain && retryOf !== uncertain.retryOf) {
+      state.batchCheckUncertain = uncertain; state.status = uncertain.error || 'The batch check may have completed. Retry explicitly to reconcile its receipt.'; emit(); return null;
+    }
+    if (retryOf && (!uncertain || retryOf !== uncertain.retryOf)) return null;
+    const flight = batchPlanFlights.get(key);
+    if (flight?.token === token) return flight.promise;
+    if (state.busyIds.size) return null;
+    const promise = performWeaveBatchCheck(ids, identity, token, key, retryOf);
+    const ownerFlight = { token, promise }; batchPlanFlights.set(key, ownerFlight);
+    try { return await promise; }
+    finally { if (batchPlanFlights.get(key) === ownerFlight) batchPlanFlights.delete(key); }
+  }
+  async function performWeaveBatchCheck(ids, identity, token, key, retryOf) {
+    state.batchCheckUncertain = null;
+    const owner = ++batchCheckOwner;
+    state.busyIds.add('batch-check'); state.status = 'Checking selected suggestions…'; emit();
+    try {
+      const response = await fetchImpl('/api/history/batch-check', { method:'POST', headers:{'content-type':'application/json'},
+        body:JSON.stringify({ questionId:identity.questionId, historyId:identity.historyId, suggestionIds:ids, ...(retryOf ? {retryOf} : {}) }) });
+      const data = await response.json().catch(() => ({}));
+      if (!isCurrent(token, identity) || owner !== batchCheckOwner) return null;
+      if (!response.ok || !data.plan) {
+        if (data.code === 'batch_plan_uncertain' && typeof data.retryOf === 'string') {
+          const uncertainState = { key, retryOf:data.retryOf, possibleCharge:data.possibleCharge === true, error:data.error || '' };
+          batchCheckUncertainCache.set(key,uncertainState); state.batchCheckUncertain = uncertainState;
+        }
+        state.status = data.error || 'Could not prepare the selected suggestions.'; return null;
+      }
+      batchPlanCache.set(key, data.plan);
+      batchCheckUncertainCache.delete(key);
+      state.status = '';
+      return data.plan;
+    } catch (error) {
+      if (isCurrent(token, identity) && owner === batchCheckOwner) state.status = error.message || 'Could not prepare the selected suggestions.';
+      return null;
+    } finally {
+      if (owner === batchCheckOwner) { state.busyIds.delete('batch-check'); if (isCurrent(token, identity)) emit(); }
+    }
+  }
+  function commitWeaveBatch({ suggestionIds = [], planId, acceptedMergeIds = [], excludedSuggestionIds = [] } = {}) {
+    const key = context && JSON.stringify([context.questionId, context.historyId, [...new Set(suggestionIds.map(String))].sort()]);
+    const result = mutate('/api/history/weave-batch', { planId, acceptedMergeIds, excludedSuggestionIds }, 'weave-batch');
+    return Promise.resolve(result).then(data => {
+      if (data && key) batchPlanCache.delete(key);
+      return data;
+    });
   }
   function setContext({ questionId, historyId = '', eventId = '', date, readOnly = false } = {}) {
     if (!questionId || !Number.isSafeInteger(date) || date === 0) { clear(); return; }
@@ -330,6 +391,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   }
   function clear() {
     generation++; if (timer !== null) clearTimer(timer); timer = null; context = null;
+    batchCheckOwner++; batchPlanCache.clear(); batchPlanFlights.clear(); batchCheckUncertainCache.clear(); state.batchCheckUncertain = null;
     state.questionId = ''; state.historyId = ''; state.selectedEventId = ''; state.date = null; state.window = null; state.suggestions = [];
     state.status = ''; state.loading = false; state.paused = false; state.busyIds.clear(); state.history = null; state.question = null; state.histories = []; state.questions = []; state.windowCached = false; state.windowStatus = ''; emit();
   }
@@ -340,7 +402,8 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
      setContext, selectHistory, selectQuestion, openQuestion, setQuestions, updateMediaReference, selectEvent, selectSuggestion, selectRecord, selectSuggestionWindow, setDate, clear, hover, setAutoSuggest: persistPreference,
     suggest: () => requestSuggestions(false), more: () => requestSuggestions(true),
     weave: suggestionId => mutate('/api/history/weave', { suggestionId }, `suggestion:${suggestionId}`),
-    weaveBatch: suggestionIds => mutate('/api/history/weave-batch', { suggestionIds }, 'weave-batch'),
+    checkWeaveBatch, commitWeaveBatch,
+    retryRippleBatch: (eventIds, wovenEventIds) => mutate('/api/history/ripple-check-batch', { eventIds, wovenEventIds }, 'ripple-check-batch'),
     forkSuggestion: suggestionId => {
       const suggestion = [...(state.history?.suggestions || []),...(state.suggestions || [])].find(item => String(item.id) === String(suggestionId));
       return mutate('/api/history/fork', { eventId:suggestion?.conflictsWith, suggestionId }, `suggestion:${suggestionId}`);

@@ -1,0 +1,58 @@
+{
+  "comparison": "Offline deterministic call-count comparison. Legacy service source: git f223b59; current service: workspace checked-batch implementation.",
+  "fixture": {
+    "file": "test/fixtures/history-arabia-weave-batch.json",
+    "questionId": "question-895184fc-5cf0-4561-b3d4-324c007ca248",
+    "historyId": "history-3be909c6-af43-4778-a607-8edf9d8b7458",
+    "selectedSuggestionCount": 6,
+    "years": [
+      -245,
+      -238,
+      -176,
+      -170,
+      -98,
+      -75
+    ]
+  },
+  "laterEvents": [
+    {
+      "id": "comparison-later-1",
+      "year": 20
+    },
+    {
+      "id": "comparison-later-2",
+      "year": 40
+    }
+  ],
+  "assumptions": [
+    "Cached suggestions are preloaded; initial suggestion generation is excluded.",
+    "Model calls are offline mocks; each stale legacy suggestion receives one successful compatibility verdict and each ripple call succeeds.",
+    "The two later events at years 20 and 40 are deterministic comparison additions, not part of the saved six-suggestion fixture."
+  ],
+  "scenarios": {
+    "emptyHistory": {
+      "legacySequentialSingleWeaves": {
+        "suggestionRechecks": 5,
+        "rippleCalls": 0,
+        "wonderBatchChecks": 0
+      },
+      "checkedBatch": {
+        "suggestionRechecks": 0,
+        "rippleCalls": 0,
+        "wonderBatchChecks": 1
+      }
+    },
+    "withTwoLaterEvents": {
+      "legacySequentialSingleWeaves": {
+        "suggestionRechecks": 5,
+        "rippleCalls": 12,
+        "wonderBatchChecks": 0
+      },
+      "checkedBatch": {
+        "suggestionRechecks": 0,
+        "rippleCalls": 1,
+        "wonderBatchChecks": 1
+      }
+    }
+  }
+}

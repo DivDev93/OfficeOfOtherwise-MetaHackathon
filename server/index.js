@@ -435,7 +435,8 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       return json(res, status, { error: status === 500 ? 'History action could not be completed.' : error.message, code,
         ...(Number.isSafeInteger(error?.used) ? { used: error.used } : {}), ...(Number.isSafeInteger(error?.limit) ? { limit: error.limit } : {}),
         ...(error?.conflictsWith ? { conflictsWith: error.conflictsWith } : {}), ...(error?.reason ? { reason: error.reason } : {}),
-        ...(error?.suggestion ? { suggestion: clean(error.suggestion) } : {}) });
+        ...(error?.suggestion ? { suggestion: clean(error.suggestion) } : {}), ...(error?.conflicts ? { conflicts: clean(error.conflicts) } : {}),
+        ...(error?.retryOf ? { retryOf: error.retryOf } : {}), ...(error?.possibleCharge ? { possibleCharge: true } : {}) });
     }
   }
   async function readHistoryMediaSource(event, identity) {
@@ -795,7 +796,9 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       const historyActionNames = new Map([
         ['/api/history/suggest', ['POST', 'suggest']], ['/api/history/weave', ['POST', 'weave']],
         ['/api/history/weave-batch', ['POST', 'weaveBatch']],
+        ['/api/history/batch-check', ['POST', 'batchCheck']],
         ['/api/history/fork', ['POST', 'fork']], ['/api/history/ripple-check', ['POST', 'rippleCheck']],
+        ['/api/history/ripple-check-batch', ['POST', 'rippleCheckBatch']],
         ['/api/history/keep', ['POST', 'keepEvent']], ['/api/history/regenerate', ['POST', 'regenerateEvent']],
       ]);
       const historyActionRoute = historyActionNames.get(path);
@@ -810,13 +813,25 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         const input = await historyRequestBody(req, res);
         if (!input) return;
         const [method] = historyActionRoute.slice(1), actor = { userId: 'demo', sessionId };
+        if (method === 'batchCheck' && Object.keys(input).some(key => !['questionId', 'historyId', 'suggestionIds', 'retryOf'].includes(key))) {
+          return json(res, 400, { error: 'Unsupported batch check fields.', code: 'invalid_batch' });
+        }
+        if (method === 'rippleCheckBatch' && Object.keys(input).some(key => !['questionId', 'historyId', 'eventIds', 'wovenEventIds'].includes(key))) {
+          return json(res, 400, { error: 'Unsupported batch ripple fields.', code: 'invalid_ripple_batch' });
+        }
+        if (method === 'weaveBatch' && Object.keys(input).some(key => !['questionId', 'historyId', 'planId', 'acceptedMergeIds', 'excludedSuggestionIds'].includes(key))) {
+          return json(res, 400, { error: 'A checked batch plan is required.', code: 'invalid_batch' });
+        }
         if (method === 'suggest' && !hasMetaKey() && !injectedHistoryService) {
           const history = historyStore.get(input.questionId)?.histories?.find(item => item.id === input.historyId);
           const cached = history?.suggestions?.some(item => item.window?.fromYear === input.window?.fromYear && item.window?.toYear === input.window?.toYear)
             || historyStore.getWindow({ questionId: input.questionId, historyId: input.historyId, window: input.window }).status === 'ready';
           if (!cached || input.more === true) return json(res, 503, { error: 'Configure a Meta API key to generate new history suggestions.', code: 'meta_key_required' });
         }
-        if ((method === 'rippleCheck' || method === 'regenerateEvent') && !hasMetaKey() && !injectedHistoryService) {
+        if (method === 'batchCheck' && !hasMetaKey() && !injectedHistoryService) {
+          return json(res, 503, { error: 'Configure a Meta API key to check a batch of history suggestions.', code: 'meta_key_required' });
+        }
+        if ((method === 'rippleCheck' || method === 'rippleCheckBatch' || method === 'regenerateEvent') && !hasMetaKey() && !injectedHistoryService) {
           return json(res, 503, { error: 'Configure a Meta API key to run new history checks.', code: 'meta_key_required' });
         }
         const service = await getHistoryService();

@@ -1,4 +1,5 @@
 import { deriveEras } from './historyModel.js';
+import { projectBatchPlan } from './historyBatch.js';
 
 const labelYear = year => `${Math.abs(year).toLocaleString()} ${year < 0 ? 'BCE' : 'CE'}`;
 const make = (document, tag, text = null, className = '') => {
@@ -56,13 +57,17 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   const timeline = make(document, 'div', null, 'history-timeline-events');
   const suggestions = make(document, 'section', null, 'history-timeline-suggestions');
   suggestions.tabIndex = -1; suggestions.setAttribute('role','region'); suggestions.setAttribute('aria-label','Saved suggestions for the selected window');
+  const batchPreview = make(document,'section',null,'history-batch-preview'); batchPreview.hidden = true;
+  batchPreview.id = 'history-batch-preview';
+  batchPreview.tabIndex = -1; batchPreview.setAttribute('role','dialog'); batchPreview.setAttribute('aria-modal','true'); batchPreview.setAttribute('aria-label','Preview selected suggestions before weaving');
   const comparison = make(document, 'section', null, 'history-timeline-comparison'); comparison.hidden = true;
   comparison.setAttribute('aria-label','Compare saved timelines');
-  host.append(tabs, timeline, suggestions, comparison, status);
+  host.append(tabs, timeline, suggestions, batchPreview, comparison, status);
   const openEras = new Map();
   const batchSelections = new Map();
   const seenBatchSuggestions = new Map();
   let batchScope = '', batchNotice = '';
+  const batchPreviewState = { open:false, loading:false, error:'', plan:null, scope:'', selectionKey:'', selectedIds:[], acceptedMergeIds:new Set(), excludedSuggestionIds:new Set(), focusAction:'batch-cancel', focusId:'', requestId:0 };
   let galleryExpanded = false, lastRenderedHistoryId = '', lastRenderedSelectionId = '';
   let comparisonOpen = false, comparisonHasFocus = false, comparisonFocusAction = 'back-to-timeline', comparisonFocusHistoryId = '', comparisonCards = null, comparisonPreviousRail = null, comparisonPreviousScrollTop = null;
   const button = (label, action, id, extra = {}) => {
@@ -154,6 +159,9 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     else if (node.dataset.action === 'fork-event') await session?.forkEvent?.(node.dataset.id);
     else if (node.dataset.action === 'keep') await session?.keep?.(node.dataset.id, node.dataset.wovenId);
     else if (node.dataset.action === 'regenerate') await session?.regenerate?.(node.dataset.id, node.dataset.wovenId);
+    else if (node.dataset.action === 'retry-ripple-batch') {
+      await session?.retryRippleBatch?.(JSON.parse(node.dataset.eventIds || '[]'),JSON.parse(node.dataset.wovenEventIds || '[]'));
+    }
     else if (node.dataset.action === 'select-event') onEventSelect(node.dataset.id);
     else if (node.dataset.action === 'select-suggestion') onEventSelect(node.dataset.id);
   });
@@ -177,7 +185,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     else if (node.dataset.action === 'manual-more') await session?.more?.();
     else if (node.dataset.action === 'batch-select-all' || node.dataset.action === 'batch-select-none') {
       const selected = batchSelections.get(batchScope) || new Set();
-      const eligible = [...(suggestions.queryAll?.('input') || [])].filter(input => input.dataset?.batchSuggestion && !input.disabled);
+      const eligible = [...(suggestions.querySelectorAll?.('input[data-batch-suggestion]') || suggestions.queryAll?.('input') || [])]
+        .filter(input => input.dataset?.batchSuggestion && !input.disabled);
       for (const [index,input] of eligible.entries()) {
         input.checked = node.dataset.action === 'batch-select-all' && index < 32;
         if (input.checked) selected.add(input.dataset.batchSuggestion); else selected.delete(input.dataset.batchSuggestion);
@@ -185,14 +194,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       batchSelections.set(batchScope, selected); batchNotice = node.dataset.action === 'batch-select-all' && eligible.length > 32 ? 'Select up to 32 suggestions to weave at once.' : '';
       render(getState?.() || {});
     }
-    else if (node.dataset.action === 'weave-batch') {
-      const scope = batchScope, selected = [...(batchSelections.get(scope) || [])];
-      if (selected.length && selected.length <= 32) {
-        batchNotice = '';
-        const result = await session?.weaveBatch?.(selected);
-        if (result) for (const id of selected) batchSelections.get(scope)?.delete(id);
-      }
-    }
+    else if (node.dataset.action === 'batch-preview') await openBatchPreview();
   });
   suggestions.addEventListener('change', event => {
     const target = event.target;
@@ -204,21 +206,249 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       batchSelections.set(batchScope, selected); render(getState?.() || {});
     }
   });
+  batchPreview.addEventListener('click', async event => {
+    const node = event.target.closest?.('button[data-action]'); if (!node) return;
+    if (node.dataset.action === 'batch-cancel') { closeBatchPreview(); return; }
+    if (node.dataset.action === 'batch-retry') {
+      const retryOf = session?.getState?.().batchCheckUncertain?.retryOf || '';
+      await openBatchPreview(retryOf); return;
+    }
+    if (node.dataset.action === 'batch-preview-cause') { onEventSelect(node.dataset.id); return; }
+    if (node.dataset.action === 'batch-merge-toggle') {
+      if (batchPreviewState.acceptedMergeIds.has(node.dataset.id)) batchPreviewState.acceptedMergeIds.delete(node.dataset.id);
+      else {
+        const merge = (batchPreviewState.plan?.merges || []).find(item => String(item.id) === String(node.dataset.id));
+        const members = new Set((merge?.suggestionIds || []).map(String));
+        for (const other of batchPreviewState.plan?.merges || []) if (other.id !== merge?.id
+          && other.suggestionIds?.some(id => members.has(String(id)))) batchPreviewState.acceptedMergeIds.delete(String(other.id));
+        batchPreviewState.acceptedMergeIds.add(node.dataset.id);
+      }
+      batchPreviewState.focusAction = node.dataset.action; batchPreviewState.focusId = node.dataset.id; batchPreviewState.focusPending = true;
+      render(getState?.() || {}); return;
+    }
+    if (node.dataset.action === 'batch-commit') { await commitBatchPreview(); return; }
+  });
+  batchPreview.addEventListener('change', event => {
+    const target = event.target;
+    if (target?.dataset?.previewExclude) {
+      if (target.checked) batchPreviewState.excludedSuggestionIds.add(target.dataset.previewExclude);
+      else batchPreviewState.excludedSuggestionIds.delete(target.dataset.previewExclude);
+      if (target.checked) for (const merge of batchPreviewState.plan?.merges || []) {
+        if (merge.suggestionIds?.some(id => String(id) === target.dataset.previewExclude)) batchPreviewState.acceptedMergeIds.delete(String(merge.id));
+      }
+      batchPreviewState.focusAction = 'batch-exclude'; batchPreviewState.focusId = target.dataset.previewExclude; batchPreviewState.focusPending = true;
+      batchPreviewState.error = ''; render(getState?.() || {});
+    }
+  });
+  batchPreview.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault?.(); if (batchPreviewState.operation !== 'commit') closeBatchPreview(); }
+  });
+
+  async function openBatchPreview(retryOf = '') {
+    const selectedIds = [...(batchSelections.get(batchScope) || [])].sort();
+    if (!selectedIds.length || selectedIds.length > 32 || batchPreviewState.loading) return;
+    const requestId = ++batchPreviewState.requestId, scope = batchScope;
+    batchPreviewState.open = true; batchPreviewState.loading = true; batchPreviewState.operation = 'check'; batchPreviewState.error = '';
+    batchPreviewState.plan = null; batchPreviewState.scope = scope; batchPreviewState.selectedIds = selectedIds;
+    batchPreviewState.retryOf = retryOf;
+    batchPreviewState.selectionKey = `${scope}\u0000${selectedIds.join('\u0000')}`;
+    batchPreviewState.acceptedMergeIds = new Set(); batchPreviewState.excludedSuggestionIds = new Set();
+    batchPreviewState.focusAction = 'batch-cancel'; batchPreviewState.focusId = ''; batchPreviewState.focusPending = true;
+    portalBatchPreview(true);
+    render(getState?.() || {});
+    const plan = await session?.checkWeaveBatch?.(selectedIds,retryOf ? {retryOf} : {});
+    const currentIds = [...(batchSelections.get(batchScope) || [])].sort();
+    const currentKey = `${batchScope}\u0000${currentIds.join('\u0000')}`;
+    if (requestId !== batchPreviewState.requestId || scope !== batchScope || currentKey !== batchPreviewState.selectionKey) return;
+    batchPreviewState.loading = false; batchPreviewState.operation = '';
+    if (plan) { batchPreviewState.plan = plan; batchPreviewState.retryOf = ''; }
+    else {
+      const sessionState = session?.getState?.() || {}, uncertain = sessionState.batchCheckUncertain;
+      batchPreviewState.retryOf = uncertain?.retryOf || '';
+      batchPreviewState.error = `${sessionState.status || 'Could not prepare this preview.'}${uncertain?.possibleCharge ? ' A previous check may have incurred a charge; use Retry batch check to reconcile it.' : ''}`;
+    }
+    render(getState?.() || {});
+  }
+  function closeBatchPreview() {
+    if (!batchPreviewState.open) return;
+    batchPreviewState.requestId++;
+    batchPreviewState.open = false; batchPreviewState.loading = false; batchPreviewState.operation = '';
+    batchPreviewState.plan = null; batchPreviewState.error = '';
+    portalBatchPreview(false);
+    render(getState?.() || {});
+    findAction(suggestions,'batch-preview')?.focus?.({preventScroll:true});
+  }
+  async function commitBatchPreview() {
+    const plan = batchPreviewState.plan;
+    if (!plan || batchPreviewState.loading) return;
+    const acceptedMergeIds = [...batchPreviewState.acceptedMergeIds];
+    const excludedSuggestionIds = [...batchPreviewState.excludedSuggestionIds];
+    const projection = projectBatchPlan(plan,{acceptedMergeIds,excludedSuggestionIds});
+    if (projection.unresolvedConflicts?.length) {
+      batchPreviewState.error = 'Resolve each conflict by excluding one of its suggestions before weaving.';
+      render(getState?.() || {}); return;
+    }
+    batchPreviewState.loading = true; batchPreviewState.operation = 'commit'; batchPreviewState.error = '';
+    render(getState?.() || {});
+    const result = await session?.commitWeaveBatch?.({ suggestionIds:batchPreviewState.selectedIds, planId:plan.id, acceptedMergeIds, excludedSuggestionIds });
+    if (result) {
+      const scope = batchPreviewState.scope;
+      for (const id of batchPreviewState.selectedIds) batchSelections.get(scope)?.delete(id);
+      batchPreviewState.open = false; batchPreviewState.loading = false; batchPreviewState.operation = ''; batchPreviewState.plan = null;
+      portalBatchPreview(false);
+      render(getState?.() || {}); suggestions.focus?.({preventScroll:true});
+    } else {
+      batchPreviewState.loading = false; batchPreviewState.operation = '';
+      batchPreviewState.error = session?.getState?.().status || 'Could not weave this preview. Review the history and retry.';
+      render(getState?.() || {});
+    }
+  }
+  function portalBatchPreview(open) {
+    if (open && document.body && batchPreview.parentNode !== document.body) document.body.append(batchPreview);
+    else if (!open && batchPreview.parentNode && batchPreview.parentNode !== host) host.insertBefore(batchPreview,comparison);
+  }
+  function renderBatchPreview(state, active) {
+    batchPreview.setAttribute('aria-busy',String(batchPreviewState.loading));
+    const plan = batchPreviewState.plan;
+    const heading = make(document,'h3',plan ? `Preview ${batchPreviewState.selectedIds.length} selected suggestions` : 'Prepare selected suggestions');
+    heading.id = 'history-batch-preview-title';
+    const cancel = button('Cancel','batch-cancel','cancel'); cancel.disabled = batchPreviewState.operation === 'commit';
+    const panelHeader = make(document,'header',null,'history-batch-preview-header'); panelHeader.append(heading,cancel);
+    const body = make(document,'div',null,'history-batch-preview-body');
+    batchPreview.append(panelHeader,body); batchPreview.setAttribute('aria-labelledby',heading.id);
+    if (batchPreviewState.loading) {
+      const progress=make(document,'p',batchPreviewState.operation === 'commit' ? 'Saving the planned changes…' : 'Checking the selected possibilities…','history-batch-preview-progress');
+      progress.setAttribute('role','status'); body.append(progress);
+    }
+    if (batchPreviewState.error) {
+      const error = make(document,'p',batchPreviewState.error,'history-batch-preview-error'); error.setAttribute('role','alert'); body.append(error);
+    }
+    if (!plan) {
+      if (!batchPreviewState.loading) body.append(button(batchPreviewState.retryOf ? 'Retry batch check' : 'Retry check','batch-retry','retry'));
+      if (batchPreviewState.focusPending) { focusBatchPreviewAction(); }
+      return;
+    }
+    const acceptedMergeIds = [...batchPreviewState.acceptedMergeIds];
+    const excludedSuggestionIds = [...batchPreviewState.excludedSuggestionIds];
+    const projection = projectBatchPlan(plan,{acceptedMergeIds,excludedSuggestionIds});
+    const merges = plan.merges || [], conflicts = plan.conflicts || [];
+    const summary = make(document,'p',`${projection.events.length} resulting events · ${acceptedMergeIds.length} accepted merge${acceptedMergeIds.length === 1 ? '' : 's'} · ${projection.unresolvedConflicts?.length || 0} unresolved conflict${(projection.unresolvedConflicts?.length || 0) === 1 ? '' : 's'}`,'history-batch-preview-summary');
+    body.append(summary);
+    const historyEvents = new Map((active.events || []).map(item => [String(item.id),item]));
+    const chainEvents = new Map((plan.chain || []).map(item => [String(item.id),item]));
+    const projectedEvents = new Map((projection.events || []).map(item => [String(item.id),item]));
+    const question = state.question || state.questions?.find(item => String(item.id) === String(plan.questionId));
+    const questionId = String(state.questionId || question?.id || plan.questionId || '');
+    const list = make(document,'ol',null,'history-batch-preview-chain');
+    for (const item of projection.events || []) {
+      const row = make(document,'li',null,'history-batch-preview-event');
+      row.dataset.eventId = String(item.id);
+      const eventHead = make(document,'div',null,'history-batch-preview-event-head');
+      eventHead.append(make(document,'div',`${item.year ? labelYear(item.year) : 'Year not saved'} · ${item.title || 'Untitled event'}`,'history-batch-preview-event-title'));
+      if (item.summary) {
+        const summaryDetails = make(document,'details',null,'history-batch-preview-event-summary');
+        summaryDetails.append(make(document,'summary','Summary'),make(document,'p',item.summary)); eventHead.append(summaryDetails);
+      }
+      row.append(eventHead);
+      const causeId = item.causeEventId;
+      if (causeId) {
+        const cause = projectedEvents.get(String(causeId)) || chainEvents.get(String(causeId)) || historyEvents.get(String(causeId));
+        if (String(causeId) === questionId) row.append(make(document,'span',`because ← ${question?.title || question?.question || 'Starting question'}`,'history-batch-preview-cause-root'));
+        else if (cause) row.append(button(`because ← ${cause.title || 'Untitled event'} · ${labelYear(cause.year)}`,'batch-preview-cause',causeId));
+        else row.append(make(document,'span','because ← Earlier event','history-batch-preview-cause-root'));
+      }
+      list.append(row);
+    }
+    body.append(list);
+    if (merges.length) {
+      const mergeSection = make(document,'section',null,'history-batch-preview-merges');
+      mergeSection.append(make(document,'h4','Proposed merges'));
+      for (const merge of merges) {
+        const accepted = batchPreviewState.acceptedMergeIds.has(String(merge.id));
+        const memberTitles = (merge.suggestionIds || []).map(id => chainEvents.get(String(id))?.title || String(id)).join(' + ');
+        const row = make(document,'article',null,'history-batch-preview-merge');
+        const mergeHead = make(document,'div',null,'history-batch-preview-merge-head');
+        mergeHead.append(make(document,'h5',merge.title || memberTitles || 'Combined event'));
+        if (merge.summary) {
+          const summaryDetails=make(document,'details',null,'history-batch-preview-merge-summary');
+          summaryDetails.append(make(document,'summary','Summary'),make(document,'p',merge.summary)); mergeHead.append(summaryDetails);
+        }
+        const toggle = button(accepted ? 'Keep separate' : 'Accept merge','batch-merge-toggle',String(merge.id));
+        toggle.setAttribute('aria-pressed',String(accepted)); mergeHead.append(toggle); row.append(mergeHead);
+        mergeSection.append(row);
+      }
+      body.append(mergeSection);
+    }
+    if (conflicts.length) {
+      const conflictSection = make(document,'section',null,'history-batch-preview-conflicts');
+      conflictSection.append(make(document,'h4',`Conflicts · ${projection.unresolvedConflicts?.length || 0} unresolved`));
+      const affected = new Set();
+      for (const conflict of conflicts) {
+        affected.add(String(conflict.suggestionId));
+        if (chainEvents.has(String(conflict.conflictsWith))) affected.add(String(conflict.conflictsWith));
+        const suggestion = chainEvents.get(String(conflict.suggestionId));
+        const other = chainEvents.get(String(conflict.conflictsWith)) || historyEvents.get(String(conflict.conflictsWith));
+        conflictSection.append(make(document,'p',`${suggestion?.title || conflict.suggestionId} conflicts with ${other?.title || conflict.conflictsWith || 'another event'}${conflict.reason ? ` · ${conflict.reason}` : ''}`,'history-batch-preview-conflict'));
+      }
+      for (const id of affected) {
+        const suggestion = chainEvents.get(id);
+        const label = make(document,'label',null,'history-batch-preview-exclude');
+        const checkbox = make(document,'input'); checkbox.type = 'checkbox'; checkbox.dataset.previewExclude = id;
+        checkbox.checked = batchPreviewState.excludedSuggestionIds.has(id);
+        checkbox.setAttribute('aria-label',`Exclude ${suggestion?.title || id} from this weave`);
+        label.append(checkbox,document.createTextNode(` Exclude ${suggestion?.title || id}`)); conflictSection.append(label);
+      }
+      body.append(conflictSection);
+    }
+    if (projection.unresolvedConflicts?.length) {
+      const unresolved = make(document,'p','Unresolved conflicts must be removed from the preview before weaving.','history-batch-preview-unresolved');
+      unresolved.setAttribute('role','status'); body.append(unresolved);
+    }
+    const busy = batchPreviewState.loading || state.busyIds?.has?.('weave-batch');
+    const commit = button(busy ? 'Weaving…' : `Weave ${projection.events.length} events into history`,'batch-commit','commit');
+    commit.disabled = !!busy || !!projection.unresolvedConflicts?.length;
+    batchPreview.append(commit);
+    if (batchPreviewState.focusPending) focusBatchPreviewAction();
+  }
+  function focusBatchPreviewAction() {
+    let target = null;
+    if (batchPreviewState.focusAction === 'batch-exclude') {
+      target = [...(batchPreview.querySelectorAll?.('input[data-preview-exclude]') || batchPreview.queryAll?.('input') || [])]
+        .find(input => input.dataset?.previewExclude === batchPreviewState.focusId);
+    } else target = findAction(batchPreview,batchPreviewState.focusAction,batchPreviewState.focusId);
+    target?.focus?.({preventScroll:true}); batchPreviewState.focusPending = false;
+  }
 
   function render(state = getState?.() || {}) {
+    const focusedPreviewNode = batchPreview.contains?.(document.activeElement) ? document.activeElement : null;
+    if (focusedPreviewNode) {
+      batchPreviewState.focusAction = focusedPreviewNode.dataset?.previewExclude ? 'batch-exclude' : focusedPreviewNode.dataset?.action || batchPreviewState.focusAction;
+      batchPreviewState.focusId = focusedPreviewNode.dataset?.previewExclude || focusedPreviewNode.dataset?.id || batchPreviewState.focusId;
+      batchPreviewState.focusPending = true;
+    }
     const question = state.question || null;
     const histories = state.histories || question?.histories || [];
     const active = state.history || state.activeHistory || histories.find(item => item.id === state.historyId) || histories[0] || null;
     const nextBatchScope = `${String(state.questionId || question?.id || '')}\u0000${String(active?.id || '')}`;
     if (nextBatchScope !== batchScope) { batchScope = nextBatchScope; batchNotice = ''; }
+    if (batchPreviewState.open && batchPreviewState.scope !== nextBatchScope) {
+      batchPreviewState.requestId++; batchPreviewState.open = false; batchPreviewState.loading = false; batchPreviewState.operation = '';
+      batchPreviewState.plan = null; batchPreviewState.error = '';
+      portalBatchPreview(false);
+    }
     const activeDate = state.date ?? state.asOfYear;
     if (active && lastRenderedHistoryId && lastRenderedHistoryId !== String(active.id)) galleryExpanded = false;
     host.classList?.toggle('history-gallery-expanded',galleryExpanded);
     host.hidden = !state.questionId;
-    tabs.replaceChildren(); timeline.replaceChildren(); suggestions.replaceChildren(); comparison.replaceChildren(); comparison.hidden = true; tabs.hidden = true;
+    tabs.replaceChildren(); timeline.replaceChildren(); suggestions.replaceChildren(); batchPreview.replaceChildren(); batchPreview.hidden = true; comparison.replaceChildren(); comparison.hidden = true; tabs.hidden = true;
     status.hidden = !!active || !state.questionId || !state.status;
     status.textContent = state.status || (state.loading ? 'Loading saved histories…' : '');
     if (!active) return;
+    if (batchPreviewState.open) {
+      tabs.hidden = true; timeline.hidden = true; suggestions.hidden = true; batchPreview.hidden = false;
+      renderBatchPreview(state, active);
+      return;
+    }
     if (histories.length > 1) {
       tabs.hidden = false;
       const activeIndex = Math.max(0,histories.findIndex(item => String(item.id) === String(active.id)));
@@ -275,6 +505,17 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const timelineSuggestionCount = new Set([...(active.suggestions || []),...(state.suggestions || [])]
       .filter(item=>item?.id!=null&&!wovenSuggestionIds.has(String(item.id))).map(item => String(item.id))).size;
     if (timelineSuggestionCount) timeline.append(button(`View all suggestions · ${timelineSuggestionCount}`,'jump-suggestions','suggestions'));
+    const retryableRippleFlags = (active.events || []).flatMap(item => (item.checkFlags || [])
+      .filter(flag => flag?.kind === 'weave-ripple' && ['pending','unavailable','unknown'].includes(flag.status) && flag.wovenEventId)
+      .map(flag => ({eventId:String(item.id),wovenEventId:String(flag.wovenEventId)})));
+    if (retryableRippleFlags.length) {
+      const eventIds = [...new Set(retryableRippleFlags.map(item => item.eventId))];
+      const wovenEventIds = [...new Set(retryableRippleFlags.map(item => item.wovenEventId))];
+      const retryBatch = button(state.busyIds?.has?.('ripple-check-batch') ? `Re-checking ${retryableRippleFlags.length} ripple flags…` : `Retry combined re-check · ${retryableRippleFlags.length}`,
+        'retry-ripple-batch','retry-ripple-batch',{eventIds:JSON.stringify(eventIds),wovenEventIds:JSON.stringify(wovenEventIds)});
+      retryBatch.disabled = !!state.busyIds?.size;
+      timeline.append(retryBatch);
+    }
     for (const era of erasFor(active.events)) {
       const eraKey = `${active.id}:${era.events[0]?.id || era.label}`;
       const details = make(document, 'details', null, 'history-era');
@@ -337,7 +578,9 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     if (!state.windowCached && !(state.suggestions || []).length) controls.append(button(state.autoSuggest === false ? `Suggest events around ${dateText}` : `Suggest events now around ${dateText}`, 'manual-suggest', 'current-window'));
     controls.queryAll?.('button').forEach(node => { node.disabled = !!state.loading || !!state.paused; });
     suggestions.append(controls);
-    const batchBusy = state.busyIds?.has?.('weave-batch') || false;
+    const batchBusy = (state.busyIds?.size || 0) > 0;
+    const batchChecking = state.busyIds?.has?.('batch-check') || false;
+    const batchWeaving = state.busyIds?.has?.('weave-batch') || false;
     const selectedCount = selectedSuggestionIds.size;
     const tray = make(document,'div',null,'history-weave-tray');
     const selectAll = button('Select all','batch-select-all','batch-all');
@@ -345,7 +588,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     selectAll.disabled = !!state.loading || !!state.paused || !!batchBusy || selectedCount >= 32;
     selectNone.disabled = !!state.loading || !!state.paused || !!batchBusy || selectedCount === 0;
     tray.append(selectAll,selectNone);
-    const weaveBatch = button(batchBusy ? 'Weaving…' : `Weave ${selectedCount} into history`,'weave-batch','batch-weave');
+    const weaveBatch = button(batchChecking ? 'Checking…' : batchWeaving ? 'Weaving…' : `Weave ${selectedCount} into history`,'batch-preview','batch-weave');
+    weaveBatch.setAttribute('aria-controls',batchPreview.id); weaveBatch.setAttribute('aria-expanded',String(batchPreviewState.open));
     weaveBatch.disabled = !!state.loading || !!state.paused || !!batchBusy || selectedCount === 0;
     tray.append(weaveBatch);
     if (state.windowCached) {
@@ -452,7 +696,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   }
   const unsubscribe = subscribe?.(render);
   render();
-  return { element: host, render, destroy() { unsubscribe?.(); root.replaceChildren(); } };
+  return { element: host, render, destroy() { unsubscribe?.(); portalBatchPreview(false); root.replaceChildren(); } };
 }
 
 export { erasFor as groupHistoryEras, historyForkYear };

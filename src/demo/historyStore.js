@@ -112,6 +112,7 @@ export function createHistoryStore(root, now = Date.now) {
     if (value.schemaVersion !== 1 || !value.questions || typeof value.questions !== 'object' || Array.isArray(value.questions)) {
       throw new Error('Unsupported or invalid durable history state');
     }
+    value.batchPlans ??= {};
     return value;
   }
   const usageKey = (userId, sessionId) => createHash('sha256').update(JSON.stringify([String(userId ?? ''), String(sessionId ?? '')])).digest('hex');
@@ -203,6 +204,18 @@ export function createHistoryStore(root, now = Date.now) {
     }
     if (changed) saveState(current);
   }
+  function recoverPendingBatchPlans() {
+    const current = state();
+    let changed = false;
+    for (const entry of Object.values(current.batchPlans ?? {})) {
+      if (entry.status !== 'pending') continue;
+      entry.status = 'unknown';
+      entry.reason = 'server-restarted-during-batch-check';
+      entry.retryOf = randomUUID();
+      changed = true;
+    }
+    if (changed) saveState(current);
+  }
   function recalculateCounts(questions) {
     return {
       questions: questions.length,
@@ -212,7 +225,7 @@ export function createHistoryStore(root, now = Date.now) {
     };
   }
   // A pending paid request cannot safely be retried after a process restart.
-  try { recoverPendingWindows(); } catch { /* defer corrupt/unsupported state errors to the requested store operation */ }
+  try { recoverPendingWindows(); recoverPendingBatchPlans(); } catch { /* defer corrupt/unsupported state errors to the requested store operation */ }
   return {
     get(id) {
       const questions = validId(id) ? state().questions : null;
@@ -241,7 +254,8 @@ export function createHistoryStore(root, now = Date.now) {
         if (original?.status === 'failed') return { status: 'failed', requestId: original.requestId, reason: original.reason };
       }
       const userSessionKey = usageKey(userId, sessionId);
-      const attempts = Object.values(current.windowBatches ?? {}).filter(entry => entry.userSessionKey === userSessionKey).length;
+      const attempts = Object.values(current.windowBatches ?? {}).filter(entry => entry.userSessionKey === userSessionKey).length
+        + Object.values(current.batchPlans ?? {}).filter(entry => entry.userSessionKey === userSessionKey).reduce((sum, entry) => sum + (entry.attempts ?? 1), 0);
       if (attempts >= cap) return { status: 'capped', used: attempts, limit: cap };
       const baseKey = windowKey(identity);
       const batchId = more ? `${baseKey}:${requestId}` : baseKey;
@@ -276,6 +290,107 @@ export function createHistoryStore(root, now = Date.now) {
       entry.failedAt = new Date(now()).toISOString();
       saveState(current);
       return { status: entry.status };
+    },
+    reserveBatchPlan({ planKey, requestId, questionId, historyId, userId, sessionId, cap, retryOf, now: reservedAt } = {}) {
+      if (!validId(planKey) || !validId(requestId) || !validId(questionId) || !validId(historyId)
+          || !validId(userId) || !validId(sessionId) || !Number.isSafeInteger(cap) || cap < 1) return { status: 'invalid' };
+      const current = state();
+      current.batchPlans ??= {};
+      const existing = current.batchPlans[planKey];
+      if (existing && ['ready', 'committed'].includes(existing.status)) return { status: 'cached', plan: structuredClone(existing.plan), requestId: existing.requestId };
+      if (existing && existing.status === 'pending') return { status: 'pending', requestId: existing.requestId };
+      if (existing && existing.status === 'unknown' && (!retryOf || retryOf !== existing.retryOf)) {
+        return { status: 'unknown', requestId: existing.requestId, retryOf: existing.retryOf };
+      }
+      if (existing?.status === 'unknown' && retryOf === existing.retryOf) existing.retryOf = undefined;
+      const userSessionKey = usageKey(userId, sessionId);
+      const windowAttempts = Object.values(current.windowBatches ?? {}).filter(entry => entry.userSessionKey === userSessionKey).length;
+      const planAttempts = Object.values(current.batchPlans).filter(entry => entry.userSessionKey === userSessionKey)
+        .reduce((sum, entry) => sum + (entry.attempts ?? 1), 0);
+      const used = windowAttempts + planAttempts;
+      if (used >= cap) return { status: 'capped', used, limit: cap };
+      current.batchPlans[planKey] = { planKey, questionId, historyId, requestId, userSessionKey,
+        attempts: (existing?.attempts ?? 0) + 1, status: 'pending', createdAt: reservedAt ?? new Date(now()).toISOString() };
+      saveState(current);
+      return { status: 'reserved', requestId, used: used + 1, limit: cap };
+    },
+    completeBatchPlan({ planKey, requestId, plan } = {}) {
+      if (!validId(planKey) || !validId(requestId) || !plan || typeof plan !== 'object') return { status: 'invalid' };
+      const current = state(), entry = current.batchPlans?.[planKey];
+      if (!entry || entry.requestId !== requestId || entry.status !== 'pending') return { status: entry?.status ?? 'missing' };
+      entry.status = 'ready';
+      entry.plan = structuredClone(plan);
+      entry.completedAt = new Date(now()).toISOString();
+      saveState(current);
+      return { status: 'ready', plan: structuredClone(entry.plan) };
+    },
+    failBatchPlan({ planKey, requestId, uncertain = false, reason = 'generation-failed' } = {}) {
+      if (!validId(planKey) || !validId(requestId)) return { status: 'invalid' };
+      const current = state(), entry = current.batchPlans?.[planKey];
+      if (!entry || entry.requestId !== requestId || entry.status !== 'pending') return { status: entry?.status ?? 'missing' };
+      entry.status = uncertain ? 'unknown' : 'failed';
+      entry.reason = reason;
+      entry.retryOf = randomUUID();
+      entry.failedAt = new Date(now()).toISOString();
+      saveState(current);
+      return { status: entry.status, retryOf: entry.retryOf };
+    },
+    getBatchPlan(planKey) {
+      if (!validId(planKey)) return { status: 'missing' };
+      const entry = state().batchPlans?.[planKey];
+      return entry ? { status: entry.status, requestId: entry.requestId,
+        ...(['ready', 'committed'].includes(entry.status) ? { plan: structuredClone(entry.plan) } : {}),
+        ...(entry.retryOf ? { retryOf: entry.retryOf } : {}),
+        ...(entry.status === 'committed' ? { eventIds: [...(entry.eventIds ?? [])],
+          acceptedMergeIds: [...(entry.acceptedMergeIds ?? [])], excludedSuggestionIds: [...(entry.excludedSuggestionIds ?? [])] } : {}) } : { status: 'missing' };
+    },
+    getBatchPlanById({ planId, questionId, historyId, userId, sessionId } = {}) {
+      if (!validId(planId) || !validId(questionId) || !validId(historyId) || !validId(userId) || !validId(sessionId)) return { status: 'missing' };
+      const userSessionKey = usageKey(userId, sessionId);
+      const entry = Object.values(state().batchPlans ?? {}).find(item => item.plan?.id === planId && item.questionId === questionId
+        && item.historyId === historyId && item.userSessionKey === userSessionKey);
+      return entry ? { status: entry.status, requestId: entry.requestId,
+        ...(['ready', 'committed'].includes(entry.status) ? { plan: structuredClone(entry.plan) } : {}),
+        ...(entry.status === 'committed' ? { eventIds: [...(entry.eventIds ?? [])],
+          acceptedMergeIds: [...(entry.acceptedMergeIds ?? [])], excludedSuggestionIds: [...(entry.excludedSuggestionIds ?? [])] } : {}) } : { status: 'missing' };
+    },
+    completeBatchCommit({ planKey, planId, requestId, eventIds = [] } = {}) {
+      if (!validId(planKey) || !validId(planId) || !validId(requestId) || !Array.isArray(eventIds)) return { status: 'invalid' };
+      const current = state(), entry = current.batchPlans?.[planKey];
+      if (!entry || entry.requestId !== requestId || entry.plan?.id !== planId || !['ready', 'committed'].includes(entry.status)) return { status: entry?.status ?? 'missing' };
+      entry.status = 'committed';
+      entry.eventIds = [...eventIds];
+      entry.committedAt ??= new Date(now()).toISOString();
+      saveState(current);
+      return { status: 'committed', eventIds: [...entry.eventIds] };
+    },
+    commitBatchHistory({ question, planKey, planId, requestId, eventIds = [], acceptedMergeIds = [], excludedSuggestionIds = [] } = {}) {
+      if (!question || !validId(question.id) || !validId(planKey) || !validId(planId) || !validId(requestId)
+          || !Array.isArray(eventIds) || eventIds.some(id => !validId(id))
+          || !Array.isArray(acceptedMergeIds) || acceptedMergeIds.some(id => !validId(id))
+          || !Array.isArray(excludedSuggestionIds) || excludedSuggestionIds.some(id => !validId(id))) return { status: 'invalid' };
+      const normalized = normalizeQuestionHistories(question);
+      const current = state(), entry = current.batchPlans?.[planKey];
+      if (!entry || entry.requestId !== requestId || entry.plan?.id !== planId || entry.questionId !== normalized.id
+          || !['ready', 'committed'].includes(entry.status)) return { status: entry?.status ?? 'missing' };
+      if (entry.status === 'committed') {
+        const sameChoices = (left = [], right = []) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
+        if (!sameChoices(acceptedMergeIds, entry.acceptedMergeIds ?? [])
+            || !sameChoices(excludedSuggestionIds, entry.excludedSuggestionIds ?? [])) return { status: 'choice-mismatch' };
+        return { status: 'committed', alreadyCommitted: true, question: current.questions[normalized.id],
+          eventIds: [...(entry.eventIds ?? [])], acceptedMergeIds: [...(entry.acceptedMergeIds ?? [])],
+          excludedSuggestionIds: [...(entry.excludedSuggestionIds ?? [])] };
+      }
+      setQuestion(current.questions, normalized.id, normalized);
+      syncWindowSuggestions(current, normalized);
+      entry.status = 'committed';
+      entry.eventIds = [...eventIds];
+      entry.acceptedMergeIds = [...acceptedMergeIds];
+      entry.excludedSuggestionIds = [...excludedSuggestionIds];
+      entry.committedAt = new Date(now()).toISOString();
+      saveState(current);
+      return { status: 'committed', alreadyCommitted: false, question: normalized, eventIds: [...entry.eventIds],
+        acceptedMergeIds: [...entry.acceptedMergeIds], excludedSuggestionIds: [...entry.excludedSuggestionIds] };
     },
     getWindow(identity) {
       if (!validId(identity?.questionId) || !validId(identity?.historyId) || !identity?.window) return { status: 'missing', suggestions: [] };

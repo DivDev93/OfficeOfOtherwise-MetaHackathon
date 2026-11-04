@@ -43,7 +43,7 @@ test('history actions are authorized, cached, weave with ripple flags, and suppo
   const liveRunsDir = await mkdtemp(join(tmpdir(), 'office-history-actions-'));
   t.after(() => rm(liveRunsDir, { recursive: true, force: true }));
   const { store } = seed(liveRunsDir);
-  let suggestionCalls = 0, rippleCalls = 0, regenerateCalls = 0;
+  let suggestionCalls = 0, rippleCalls = 0, combinedRippleCalls = 0, regenerateCalls = 0;
   const agent = {
     client: { dispatchCount: () => suggestionCalls + rippleCalls + regenerateCalls },
     async suggest() {
@@ -53,6 +53,7 @@ test('history actions are authorized, cached, weave with ripple flags, and suppo
         geography: { version: 1, changes: [] }, verdict: 'fits', conflictsWith: null, reason: '' }];
     },
     async checkRipple() { rippleCalls++; return { inconsistent: true, reason: 'Later gardens assume the canals were never woven.' }; },
+    async checkRippleBatch({ events }) { combinedRippleCalls++; return events.map(item => ({ eventId: item.id, inconsistent: false, reason: '' })); },
     async regenerateEvent({ event: target }) { regenerateCalls++; return { title: 'Updated river gardens', summary: target.summary, causeEventId: 'suggestion-one', era: target.era, geography: target.geography }; },
   };
   const service = createHistoryService({ store, agent, perSessionWindowCap: 1 });
@@ -99,6 +100,14 @@ test('history actions are authorized, cached, weave with ripple flags, and suppo
   assert.equal(regeneratedEvent.checkFlags.some(flag => flag.wovenEventId === 'root-event' && flag.status === 'kept'), true,
     'Regenerate preserves unrelated ripple flags');
   assert.equal(regenerateCalls, 1);
+  const deniedRetry = await fetch(`${url}/api/history/ripple-check-batch`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ questionId: 'question-one', historyId: 'history-one', eventIds: ['later-event-two'], wovenEventIds: ['suggestion-one'] }) });
+  assert.equal(deniedRetry.status, 403);
+  const retried = await fetch(`${url}/api/history/ripple-check-batch`, { method: 'POST', headers,
+    body: JSON.stringify({ questionId: 'question-one', historyId: 'history-one', eventIds: ['later-event-two'], wovenEventIds: ['suggestion-one'] }) });
+  assert.equal(retried.status, 200);
+  assert.equal((await retried.json()).events[0].checkFlags.some(flag => flag.wovenEventId === 'suggestion-one'), false);
+  assert.equal(combinedRippleCalls, 1, 'explicit batch retry uses one combined Spark call');
 });
 
 test('batch weave route uses existing history authorization and returns one atomic batch result', async t => {
@@ -111,15 +120,21 @@ test('batch weave route uses existing history authorization and returns one atom
     causeEventId: 'root-event', era: 'Green Sahara', geography: { version: 1, changes: [] }, verdict: 'fits', conflictsWith: null, reason: '' }));
   store.save(question);
   let combinedCalls = 0;
-  const service = createHistoryService({ store, agent: { async suggest() { return []; }, async checkRippleBatch({ events }) {
+  const service = createHistoryService({ store, agent: { async suggest() { return []; }, async planBatchWeave({ suggestions }) {
+    return { chain: suggestions.map(item => ({ suggestionId: item.id, causeEventId: 'root-event' })), merges: [], conflicts: [] };
+  }, async checkRippleBatch({ events }) {
     combinedCalls++;
     return events.map(event => ({ eventId: event.id, inconsistent: false, reason: '' }));
   } } });
   const { url, headers } = await start(t, { liveRunsDir, service });
   const input = { questionId: 'question-one', historyId: 'history-one', suggestionIds: ['batch-a', 'batch-b'] };
-  const denied = await fetch(`${url}/api/history/weave-batch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) });
+  const denied = await fetch(`${url}/api/history/batch-check`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) });
   assert.equal(denied.status, 403);
-  const response = await fetch(`${url}/api/history/weave-batch`, { method: 'POST', headers, body: JSON.stringify(input) });
+  const checked = await fetch(`${url}/api/history/batch-check`, { method: 'POST', headers, body: JSON.stringify(input) });
+  assert.equal(checked.status, 200);
+  const { plan } = await checked.json();
+  const response = await fetch(`${url}/api/history/weave-batch`, { method: 'POST', headers,
+    body: JSON.stringify({ questionId: input.questionId, historyId: input.historyId, planId: plan.id, acceptedMergeIds: [], excludedSuggestionIds: [] }) });
   assert.equal(response.status, 200);
   const result = await response.json();
   assert.deepEqual(result.events.map(event => event.id), input.suggestionIds);

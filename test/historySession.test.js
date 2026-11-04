@@ -212,22 +212,116 @@ test('last-suggestion weave preserves its cached window and never auto-generates
   assert.deepEqual(session.getState().window,cachedWindow); assert.equal(clock.size,0);
 });
 
-test('batch weave posts one history-scoped request and applies the returned history once', async () => {
+test('an explicit batch check from a reopened read-only history is cached and commit applies its resolved plan', async () => {
   const clock=timers(), window={fromYear:1503,toYear:2503};
   const first=suggestion('batch-a',window), second=suggestion('batch-b',window);
   const original={...history('h',[first,second]),suggestionWindows:[{window,status:'ready',batches:1,suggestionCount:2}]};
   const updated={...original,suggestions:[],events:[...original.events,{id:'woven-batch',year:1978,title:'Combined event',checkFlags:[]}]};
+  const requests=[], plan={id:'plan-1',questionId:'q',historyId:'h',suggestionIds:['batch-a','batch-b'],chain:[],merges:[],conflicts:[]};
+  const session=createHistorySession({setTimer:clock.setTimer,clearTimer:clock.clearTimer,fetchImpl:async(url,init={})=>{
+    if(url==='/api/history/preferences')return response({autoSuggest:false});
+    if(url.startsWith('/api/histories'))return response({questions:[{id:'q',histories:[original]}]});
+    if(url==='/api/history/batch-check'){requests.push([url,JSON.parse(init.body)]);return response({plan});}
+    if(url==='/api/history/weave-batch'){requests.push([url,JSON.parse(init.body)]);return response({question:{id:'q',histories:[updated]},history:updated,events:[updated.events.at(-1)],ripple:[],cached:false});}
+    throw new Error(url);
+  }});
+  session.setContext({questionId:'q',historyId:'h',eventId:'event-1',date:1978,readOnly:true}); await tick();
+  session.hover('batch-a');
+  assert.equal(requests.length,0,'passive reopen and hover do not run a batch check');
+  assert.equal(clock.size,0,'passive reopen does not schedule suggestion generation');
+  const prepared=await session.checkWeaveBatch(['batch-a','batch-b']);
+  assert.equal(prepared.id,'plan-1');
+  assert.equal((await session.checkWeaveBatch(['batch-a','batch-b'])).id,'plan-1');
+  assert.deepEqual(requests,[['/api/history/batch-check',{questionId:'q',historyId:'h',suggestionIds:['batch-a','batch-b']}]],'cancel/reopen with the same selection reuses the cached plan');
+  await session.commitWeaveBatch({suggestionIds:['batch-a','batch-b'],planId:'plan-1',acceptedMergeIds:[],excludedSuggestionIds:[]});
+  assert.deepEqual(requests.at(-1),['/api/history/weave-batch',{questionId:'q',historyId:'h',planId:'plan-1',acceptedMergeIds:[],excludedSuggestionIds:[]}]);
+  assert.equal(session.getState().history.events.at(-1).id,'woven-batch');
+  assert.equal(session.getState().busyIds.size,0);
+});
+
+test('batch-check response from a changed history cannot become the active cached plan', async () => {
+  const clock=timers(), firstWindow={fromYear:1503,toYear:2503}, secondWindow={fromYear:2504,toYear:3504};
+  const first={...history('h1',[suggestion('first-suggestion',firstWindow)]),suggestionWindows:[{window:firstWindow,status:'ready'}]};
+  const second={...history('h2',[suggestion('second-suggestion',secondWindow)]),suggestionWindows:[{window:secondWindow,status:'ready'}]};
+  let finishCheck;
+  const session=createHistorySession({setTimer:clock.setTimer,clearTimer:clock.clearTimer,fetchImpl:async(url,init={})=>{
+    if(url==='/api/history/preferences')return response({autoSuggest:false});
+    if(url.startsWith('/api/histories'))return response({questions:[{id:'q',histories:[first,second]}]});
+    if(url==='/api/history/batch-check')return new Promise(resolve=>{finishCheck=()=>resolve(response({plan:{id:'stale-plan',questionId:'q',historyId:'h1',suggestionIds:['first-suggestion'],chain:[],merges:[],conflicts:[]}}));});
+    throw new Error(url);
+  }});
+  session.setContext({questionId:'q',historyId:'h1',eventId:'event-1',date:1978}); await tick();
+  const pending=session.checkWeaveBatch(['first-suggestion']); await tick();
+  session.setContext({questionId:'q',historyId:'h2',eventId:'event-1',date:2600}); await tick();
+  finishCheck();
+  assert.equal(await pending,null);
+  assert.equal(session.getState().history.id,'h2');
+  assert.equal(session.getState().busyIds.has('batch-check'),false);
+});
+
+test('cancel and reopen can share the same in-flight batch check without a second request', async () => {
+  const clock=timers(), window={fromYear:1503,toYear:2503}, candidate=suggestion('flight-suggestion',window);
+  const original={...history('h',[candidate]),suggestionWindows:[{window,status:'ready'}]};
+  let resolveCheck, requests=0;
+  const plan={id:'flight-plan',questionId:'q',historyId:'h',suggestionIds:[candidate.id],chain:[],merges:[],conflicts:[]};
+  const session=createHistorySession({setTimer:clock.setTimer,clearTimer:clock.clearTimer,fetchImpl:async(url)=>{
+    if(url==='/api/history/preferences')return response({autoSuggest:false});
+    if(url.startsWith('/api/histories'))return response({questions:[{id:'q',histories:[original]}]});
+    if(url==='/api/history/batch-check'){requests++;return new Promise(resolve=>{resolveCheck=()=>resolve(response({plan}));});}
+    throw new Error(url);
+  }});
+  session.setContext({questionId:'q',historyId:'h',eventId:'event-1',date:1978,readOnly:true});await tick();
+  const firstOpen=session.checkWeaveBatch([candidate.id]);await tick();
+  const reopened=session.checkWeaveBatch([candidate.id]);
+  assert.equal(requests,1,'reopen joins the existing plan request instead of starting another');
+  resolveCheck();
+  assert.equal((await firstOpen).id,'flight-plan');
+  assert.equal((await reopened).id,'flight-plan');
+  assert.equal(session.getState().busyIds.has('batch-check'),false);
+});
+
+test('uncertain batch-checks require an explicit receipt retry and do not redispatch on reopen', async () => {
+  const clock=timers(), window={fromYear:1503,toYear:2503}, candidate=suggestion('uncertain-candidate',window);
+  const original={...history('h',[candidate]),suggestionWindows:[{window,status:'ready'}]}, requests=[];
+  const plan={id:'resolved-plan',questionId:'q',historyId:'h',suggestionIds:[candidate.id],chain:[],merges:[],conflicts:[]};
+  const session=createHistorySession({setTimer:clock.setTimer,clearTimer:clock.clearTimer,fetchImpl:async(url,init={})=>{
+    if(url==='/api/history/preferences')return response({autoSuggest:false});
+    if(url.startsWith('/api/histories'))return response({questions:[{id:'q',histories:[original]}]});
+    if(url==='/api/history/batch-check'){
+      const body=JSON.parse(init.body);requests.push(body);
+      if(!body.retryOf)return {ok:false,status:409,json:async()=>({code:'batch_plan_uncertain',retryOf:'receipt-1',possibleCharge:true,error:'Prior batch check may have completed.'})};
+      return response({plan});
+    }
+    throw new Error(url);
+  }});
+  session.setContext({questionId:'q',historyId:'h',eventId:'event-1',date:1978});await tick();
+  assert.equal(await session.checkWeaveBatch([candidate.id]),null);
+  assert.equal(session.getState().batchCheckUncertain.retryOf,'receipt-1');
+  assert.equal(await session.checkWeaveBatch([candidate.id]),null,'reopening without explicit retry does not redispatch');
+  assert.equal(requests.length,1);
+  assert.equal((await session.checkWeaveBatch([candidate.id],{retryOf:'receipt-1'})).id,'resolved-plan');
+  assert.deepEqual(requests,[{questionId:'q',historyId:'h',suggestionIds:[candidate.id]},{questionId:'q',historyId:'h',suggestionIds:[candidate.id],retryOf:'receipt-1'}]);
+});
+
+test('combined ripple retry sends selected event pairs through one history-scoped request', async () => {
+  const clock=timers(), window={fromYear:1503,toYear:2503};
+  const original={...history('h'),events:[{id:'event-1',year:100,title:'Anchor',checkFlags:[]},{id:'later',year:200,title:'Later',checkFlags:[
+    {kind:'weave-ripple',wovenEventId:'woven',status:'unavailable'}]}],suggestionWindows:[{window,status:'ready'}]};
+  const updated={...original,events:[original.events[0],{...original.events[1],checkFlags:[]} ]};
   const requests=[];
   const session=createHistorySession({setTimer:clock.setTimer,clearTimer:clock.clearTimer,fetchImpl:async(url,init={})=>{
     if(url==='/api/history/preferences')return response({autoSuggest:false});
     if(url.startsWith('/api/histories'))return response({questions:[{id:'q',histories:[original]}]});
-    if(url==='/api/history/weave-batch'){requests.push([url,JSON.parse(init.body)]);return response({question:{id:'q',histories:[updated]},history:updated,events:[updated.events.at(-1)],ripple:[],cached:false});}
+    if(url==='/api/history/ripple-check-batch'){
+      requests.push([url,JSON.parse(init.body)]);
+      return response({question:{id:'q',histories:[updated]},history:updated,events:[updated.events[1]],ripple:[]});
+    }
     throw new Error(url);
   }});
-  session.setContext({questionId:'q',historyId:'h',eventId:'event-1',date:1978}); await tick();
-  await session.weaveBatch(['batch-a','batch-b']);
-  assert.deepEqual(requests,[['/api/history/weave-batch',{questionId:'q',historyId:'h',suggestionIds:['batch-a','batch-b'] }]]);
-  assert.equal(session.getState().history.events.at(-1).id,'woven-batch');
+  session.setContext({questionId:'q',historyId:'h',eventId:'event-1',date:100});await tick();
+  await session.retryRippleBatch(['later'],['woven']);
+  assert.deepEqual(requests,[['/api/history/ripple-check-batch',{questionId:'q',historyId:'h',eventIds:['later'],wovenEventIds:['woven']}]]);
+  assert.equal(session.getState().history.events[1].checkFlags.length,0);
   assert.equal(session.getState().busyIds.size,0);
 });
 

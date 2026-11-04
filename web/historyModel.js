@@ -98,6 +98,16 @@ function normalizeEvent(event, { questionId, previousEventId, fallbackId, identi
   if (!title || !summary) throw new Error('History event requires a title and summary');
   const causeEventId = text(event.causeEventId) || previousEventId || questionId;
   if (!causeEventId) throw new Error('History event requires a causeEventId');
+  const sourceSuggestionIds = event.sourceSuggestionIds;
+  if (sourceSuggestionIds !== undefined && (!Array.isArray(sourceSuggestionIds) || sourceSuggestionIds.length > 32
+      || sourceSuggestionIds.some(value => !text(value) || text(value).length > 240)
+      || new Set(sourceSuggestionIds.map(text)).size !== sourceSuggestionIds.length)) throw new Error('Invalid history event source suggestion IDs');
+  const sourcePlaces = event.sourcePlaces;
+  if (sourcePlaces !== undefined && (!Array.isArray(sourcePlaces) || sourcePlaces.length > 32
+      || sourcePlaces.some(item => !item || !text(item.suggestionId) || item.suggestionId.length > 240))) throw new Error('Invalid history event source places');
+  const sourceMediaRefs = event.sourceMediaRefs;
+  if (sourceMediaRefs !== undefined && (!Array.isArray(sourceMediaRefs) || sourceMediaRefs.length > 32
+      || sourceMediaRefs.some(item => !item || !text(item.suggestionId) || item.suggestionId.length > 240))) throw new Error('Invalid history event source media refs');
   return {
     id, year: event.year, place: normalizePlace(event.place), title, summary,
     causeEventId,
@@ -105,6 +115,10 @@ function normalizeEvent(event, { questionId, previousEventId, fallbackId, identi
     ...(event.geography && typeof event.geography === 'object' ? { geography: structuredClone(event.geography) } : {}),
     ...normalizeMediaRefs(event, {}, identity),
     ...(text(event.scene) ? { scene: text(event.scene) } : {}),
+    ...(sourceSuggestionIds ? { sourceSuggestionIds: [...new Set(sourceSuggestionIds.map(text))] } : {}),
+    ...(sourcePlaces ? { sourcePlaces: sourcePlaces.map(item => ({ suggestionId: text(item.suggestionId), place: normalizePlace(item.place) })) } : {}),
+    ...(sourceMediaRefs ? { sourceMediaRefs: sourceMediaRefs.map(item => ({ suggestionId: text(item.suggestionId),
+      ...normalizeMediaRefs(item, {}, identity) })) } : {}),
     ...Object.fromEntries(['checkFlags', 'checks', 'origin', 'forkEventId', 'forkedFromEventId', 'forkReason']
       .filter(key => event[key] !== undefined).map(key => [key, structuredClone(event[key])])),
   };

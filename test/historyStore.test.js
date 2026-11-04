@@ -57,6 +57,27 @@ test('deterministically migrates a realistic saved tree without rewriting its le
   assert.deepEqual(restarted.list(), [question]);
 });
 
+test('batch plan reservations persist ready plans and require their receipt for an uncertain explicit retry', async t => {
+  const root = await fixture(t), store = createHistoryStore(root, () => Date.UTC(2026, 10, 3));
+  const base = { planKey: 'a'.repeat(64), questionId: 'q', historyId: 'h', userId: 'u', sessionId: 's', cap: 5 };
+  const first = store.reserveBatchPlan({ ...base, requestId: 'request-1' });
+  assert.equal(first.status, 'reserved');
+  store.failBatchPlan({ planKey: base.planKey, requestId: 'request-1', uncertain: true });
+  const unknown = store.reserveBatchPlan({ ...base, requestId: 'request-2' });
+  assert.equal(unknown.status, 'unknown');
+  assert.ok(unknown.retryOf);
+  const retry = store.reserveBatchPlan({ ...base, requestId: 'request-2', retryOf: unknown.retryOf });
+  assert.equal(retry.status, 'reserved', 'only the matching explicit receipt permits redispatch');
+  const plan = { id: 'batch-plan:test', questionId: 'q', historyId: 'h', suggestionIds: [] };
+  assert.equal(store.completeBatchPlan({ planKey: base.planKey, requestId: 'request-2', plan }).status, 'ready');
+  const interrupted = { ...base, planKey: 'b'.repeat(64), requestId: 'request-pending' };
+  store.reserveBatchPlan(interrupted);
+  const restarted = createHistoryStore(root);
+  assert.deepEqual(restarted.getBatchPlan(base.planKey).plan, plan);
+  assert.equal(restarted.getBatchPlan(interrupted.planKey).status, 'unknown');
+  assert.ok(restarted.getBatchPlan(interrupted.planKey).retryOf, 'restart recovery exposes a receipt-bound retry instead of automatic dispatch');
+});
+
 test('migration reruns are stable and preserve questions already edited by later phases', async t => {
   const root = await fixture(t), store = createHistoryStore(root);
   const legacy = [{ runId: 'saved-q', run: { id: 'saved-q', divergence: 'A preserved astronomy archive', branches: [branch('b1', 100, 'Star charts guide seasonal travel')] } }];
