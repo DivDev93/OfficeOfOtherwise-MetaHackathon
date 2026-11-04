@@ -53,11 +53,11 @@ function erasFor(events) {
 }
 
 /** Render the event timeline and current suggestion window without owning app navigation. */
-export function mountHistoryTimeline(root, { getState, subscribe, session, onHistoryChange = () => {}, onEventSelect = () => {}, onWindowSelect = () => {}, isCompact = () => false, onCompactInspect = () => {}, document = globalThis.document } = {}) {
+export function mountHistoryTimeline(root, { getState, subscribe, session, onHistoryChange = () => {}, onEventSelect = () => {}, onWindowSelect = () => {}, onClose = () => {}, onWeaveComplete = () => {}, isCompact = () => false, onCompactInspect = () => {}, document = globalThis.document } = {}) {
   const host = make(document, 'section', null, 'history-timeline');
   host.setAttribute('aria-label', 'History timeline'); root.replaceChildren(host);
   const status = make(document, 'p', null, 'history-timeline-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
-  const tabs = make(document, 'div', null, 'history-timeline-histories');
+  const tabs = make(document, 'header', null, 'history-chronicle-header');
   const timeline = make(document, 'div', null, 'history-timeline-events');
   const suggestions = make(document, 'section', null, 'history-timeline-suggestions');
   suggestions.tabIndex = -1; suggestions.setAttribute('role','region'); suggestions.setAttribute('aria-label','Saved suggestions for the selected window');
@@ -77,18 +77,32 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   let suggestionMoreOpen = false;
   const seenBatchSuggestions = new Map();
   const deckState = createHistoryDeckState();
-  const deckViews = new Map(), deckCurrentIds = new Map(), deckEmptyPrompted = new Map(), deckPassedExpanded = new Map();
-  let deckContext = null, deckScope = '';
+  const deckViews = new Map(), deckCurrentIds = new Map(), deckEmptyPrompted = new Map(), deckPassedExpanded = new Map(), deckWindowKeys = new Map();
+  let deckContext = null, deckScope = '', deckAnchorRect = null;
   function updatePhoneDeckClass(view) {
     const compact=(document.defaultView?.innerWidth||0)<=700 || (typeof isCompact==='function'&&isCompact());
-    document.body?.classList?.toggle?.('history-phone-deck-active',Boolean(view==='deck'&&compact));
+    document.body?.classList?.toggle?.('history-phone-deck-active',Boolean((view==='deck'||view==='list')&&compact));
+    document.body?.classList?.toggle?.('history-deck-row-anchored',Boolean(view==='deck'&&compact&&deckAnchorRect));
   }
   function positionDeckPortal() {
     if (!deckPortal.style) return;
     const view=document.defaultView, rail=host.closest?.('.exploration-rail'), railRect=rail?.getBoundingClientRect?.();
     const compact=(view?.innerWidth||0)<=700 || (typeof isCompact==='function'&&isCompact());
-    if (compact) { deckPortal.style.left='8px'; deckPortal.style.right='8px'; deckPortal.style.top='auto'; deckPortal.style.bottom='84px'; deckPortal.style.width='auto'; }
-    else { const left=railRect?Math.min(Math.max(8,railRect.right+12),Math.max(8,(view?.innerWidth||1280)-380)):350; deckPortal.style.left=`${left}px`; deckPortal.style.right='auto'; deckPortal.style.top=`${Math.max(16,Math.min((railRect?.top||60)+120,(view?.innerHeight||900)-430))}px`; deckPortal.style.bottom='auto'; deckPortal.style.width='360px'; }
+    if (compact) {
+      const height=view?.innerHeight||812, maxHeight=Math.min(height*.48,390);
+      const top=deckAnchorRect ? Math.max(8,Math.min((deckAnchorRect.top||60)-maxHeight-8,height-maxHeight-8)) : null;
+      deckPortal.style.left='8px'; deckPortal.style.right='8px'; deckPortal.style.top=top==null?'auto':`${top}px`;
+      if (top!=null) deckPortal.style['--history-deck-anchor-top']=`${top}px`;
+      deckPortal.style.bottom=top==null?'84px':'auto'; deckPortal.style.width='auto';
+    }
+    else {
+      const left=railRect?Math.min(Math.max(8,railRect.right+12),Math.max(8,(view?.innerWidth||1280)-380)):350;
+      const anchorTop=deckAnchorRect?.bottom ?? (railRect?.top||60)+120;
+      const viewportHeight=view?.innerHeight||900;
+      const portalHeight=deckPortal.getBoundingClientRect?.().height||430;
+      const maxTop=Math.max(16,viewportHeight-portalHeight-16);
+      deckPortal.style.left=`${left}px`; deckPortal.style.right='auto'; deckPortal.style.top=`${Math.max(16,Math.min(anchorTop,maxTop))}px`; deckPortal.style.bottom='auto'; deckPortal.style.width='360px';
+    }
   }
   document.defaultView?.addEventListener?.('resize',positionDeckPortal);
   let batchScope = '', batchNotice = '';
@@ -108,6 +122,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   };
   tabs.addEventListener('click', event => {
     const action = event.target.closest?.('button[data-action]');
+    if (action?.dataset.action === 'close-chronicle') { onClose(); return; }
     if (action?.dataset.action === 'compare-timelines') { openComparison(); return; }
     const target = event.target.closest?.('button[data-history-id]');
     if (target) onHistoryChange(target.dataset.historyId, target.dataset.historyIndex);
@@ -118,8 +133,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     if (open) suggestions.scrollIntoView?.({block:'nearest'});
     if (open) findAction(suggestions,'toggle-gallery')?.focus?.({preventScroll:true});
     else {
-      const moreSummary=suggestions.querySelector?.('.history-suggestion-more > summary')
-        || suggestions.queryAll?.('summary').find(item=>item.parentNode?.className==='history-suggestion-more');
+      const nativeSummary=suggestions.querySelector?.('.history-suggestion-more > summary');
+      const moreSummary=nativeSummary || suggestions.queryAll?.('summary').find(item=>item.parentNode?.className==='history-suggestion-more');
       moreSummary?.focus?.({preventScroll:true});
     }
   };
@@ -139,9 +154,20 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     if (next.length === current.length && next.every((id,index) => id === current[index])) return;
     session.setHeldSuggestionIds(next);
   }
+  function syncAllHeldSuggestionIds(state,active) {
+    const owner=deckOwner(state,active), woven=new Set((active?.events||[]).map(item=>String(item.id))), all=new Map();
+    for (const item of [...(active?.suggestions||[]),...(state?.suggestions||[])]) if (item?.id!=null&&!woven.has(String(item.id))) all.set(String(item.id),{...all.get(String(item.id)),...item});
+    const review=deckState.review({...owner,suggestions:[...all.values()]});
+    syncHeldSuggestionIds(state,active,review.keptIds);
+  }
   function focusDeckCard() {
-    const card = deckPortal.querySelector?.('[data-swipe-card]') || deckPortal.queryAll?.('article').find(item => item.dataset?.swipeCard === 'true');
+    const nativeCard=deckPortal.querySelector?.('[data-swipe-card]');
+    const card = nativeCard || deckPortal.queryAll?.('article').find(item => item.dataset?.swipeCard === 'true');
     card?.focus?.({preventScroll:true});
+  }
+  function selectTimelineEvent(id,year) {
+    if (Number.isSafeInteger(year) && year !== 0) session?.setDate?.(year);
+    onEventSelect(id,Number.isSafeInteger(year) && year !== 0 ? {date:year} : undefined);
   }
   function decideDeckSuggestion(suggestionId,disposition,source='button') {
     const context = deckContext;
@@ -154,7 +180,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const scope = context.scope;
     const currentIndex = before.unreviewedIds.indexOf(String(suggestionId));
     deckCurrentIds.set(scope,after.unreviewedIds[currentIndex] || after.unreviewedIds[0] || '');
-    syncHeldSuggestionIds(context.state,context.active,after.keptIds);
+    syncAllHeldSuggestionIds(context.state,context.active);
     const emptied = context.deckView === 'deck' && before.unreviewedIds.length > 0 && after.unreviewedIds.length === 0
       && !deckEmptyPrompted.get(scope);
     if (emptied) deckEmptyPrompted.set(scope,true);
@@ -172,6 +198,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   }
   deckPortal.addEventListener('click',async event=>{
     const node=event.target.closest?.('button[data-action]'); if (!node) return;
+    deckScope=batchScope;
     if (node.dataset.action==='deck-keep' || node.dataset.action==='deck-pass') {
       const card=node.closest?.('[data-swipe-card]'), keep=node.dataset.action==='deck-keep';
       deckSwipe?.decide?.(card,keep?1:-1,event,'button');
@@ -183,12 +210,14 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const current=deckContext; if (!current) return;
       deckState.keep({ ...current.owner,suggestionId:node.dataset.id,suggestions:current.suggestions });
       const review=deckState.review({ ...current.owner,suggestions:current.suggestions });
-      syncHeldSuggestionIds(current.state,current.active,review.keptIds); render(getState?.() || {});
+      syncAllHeldSuggestionIds(current.state,current.active); render(getState?.() || {});
     }
     else if (node.dataset.action==='deck-passed-toggle') {
       deckPassedExpanded.set(deckScope,!deckPassedExpanded.get(deckScope)); render(getState?.() || {});
     }
     else if (node.dataset.action==='deck-list') { deckViews.set(deckScope,'list'); render(getState?.() || {}); }
+    else if (node.dataset.action==='deck-mode-deck') { deckViews.set(deckScope,'deck'); render(getState?.() || {}); focusDeckCard(); }
+    else if (node.dataset.action==='deck-close') { deckViews.set(deckScope,'timeline'); render(getState?.() || {}); }
     else if (node.dataset.action==='deck-review-kept') {
       const ids=deckContext?.review.keptIds || []; if (ids.length) await openBatchPreview('',ids,'deck');
     }
@@ -196,7 +225,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const current=deckContext; if (!current?.owner.questionId || !current.owner.historyId) return;
       const result=deckState.keepAllFits({ ...current.owner,suggestions:current.suggestions });
       const review=deckState.review({ ...current.owner,suggestions:current.suggestions });
-      syncHeldSuggestionIds(current.state,current.active,review.keptIds);
+      syncAllHeldSuggestionIds(current.state,current.active);
       batchNotice=result.skippedIds.length?`${result.skippedIds.length} fitting suggestions were not kept because the ${result.limit} item deck is full.`:'';
       const emptied=result.keptIds.length>0&&review.unreviewedIds.length===0;
       if (emptied) deckEmptyPrompted.set(current.scope,true);
@@ -210,12 +239,12 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const review=deckState.review({ ...owner,suggestions:deckContext.suggestions });
       const restored=review.unreviewedIds.find(id=>!prior.unreviewedIds.includes(id));
       if (restored) deckCurrentIds.set(deckScope,restored);
-      syncHeldSuggestionIds(deckContext.state,deckContext.active,review.keptIds);
+      syncAllHeldSuggestionIds(deckContext.state,deckContext.active);
       render(getState?.() || {}); focusDeckCard();
     }
   });
   deckPortal.addEventListener('keydown',event=>{
-    if (event.key==='Escape' && deckPortal.hidden===false) { event.preventDefault?.(); deckViews.set(deckScope,'list'); render(getState?.() || {}); findAction(suggestions,'deck-mode-list')?.focus?.({preventScroll:true}); }
+    if (event.key==='Escape' && deckPortal.hidden===false) { event.preventDefault?.(); deckViews.set(deckScope,'list'); render(getState?.() || {}); findAction(deckPortal,'deck-mode-deck')?.focus?.({preventScroll:true}); }
   });
   tabs.addEventListener('change', event => {
     const target = event.target;
@@ -273,19 +302,39 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   timeline.addEventListener('click', async event => {
     const node = event.target.closest?.('button[data-action]'); if (!node) return;
     if (node.dataset.action === 'jump-suggestions') { setGalleryExpanded(true); return; }
-    if (node.dataset.action === 'cause') onEventSelect(node.dataset.id);
+    if (node.dataset.action === 'open-window-deck') {
+      deckAnchorRect=node.getBoundingClientRect?.() || null;
+      deckScope=batchScope; deckWindowKeys.set(batchScope,node.dataset.windowKey || ''); deckViews.set(batchScope,'deck');
+      deckCurrentIds.delete(batchScope); render(getState?.() || {}); focusDeckCard(); return;
+    }
+    if (node.dataset.action==='deck-list') { deckScope=batchScope; deckViews.set(batchScope,'list'); render(getState?.() || {}); return; }
+    if (node.dataset.action === 'manual-suggest') { await session?.suggest?.(); return; }
+    if (node.dataset.action === 'manual-more') { await session?.more?.(); return; }
+    if (node.dataset.action==='batch-select-all'||node.dataset.action==='batch-select-none') {
+      const selected=batchSelections.get(batchScope)||new Set();
+      const nativeInputs=suggestions.querySelectorAll?.('input[data-batch-suggestion]');
+      const eligible=[...(nativeInputs?.length?nativeInputs:suggestions.queryAll?.('input')||[])].filter(input=>input.dataset?.batchSuggestion&&!input.disabled);
+      for (const [index,input] of eligible.entries()) {
+        input.checked=node.dataset.action==='batch-select-all'&&index<32;
+        if (input.checked) selected.add(input.dataset.batchSuggestion); else selected.delete(input.dataset.batchSuggestion);
+      }
+      batchSelections.set(batchScope,selected);
+      batchNotice=node.dataset.action==='batch-select-all'&&eligible.length>32?'Select up to 32 suggestions to weave at once.':'';
+      render(getState?.()||{}); return;
+    }
+    if (node.dataset.action === 'cause') selectTimelineEvent(node.dataset.id,Number(node.dataset.year));
     else if (node.dataset.action === 'fork-event') await session?.forkEvent?.(node.dataset.id);
     else if (node.dataset.action === 'keep') await session?.keep?.(node.dataset.id, node.dataset.wovenId);
     else if (node.dataset.action === 'regenerate') await session?.regenerate?.(node.dataset.id, node.dataset.wovenId);
     else if (node.dataset.action === 'retry-ripple-batch') {
       await session?.retryRippleBatch?.(JSON.parse(node.dataset.eventIds || '[]'),JSON.parse(node.dataset.wovenEventIds || '[]'));
     }
-    else if (node.dataset.action === 'select-event') onEventSelect(node.dataset.id);
+    else if (node.dataset.action === 'select-event') selectTimelineEvent(node.dataset.id,Number(node.dataset.year));
     else if (node.dataset.action === 'select-suggestion') onEventSelect(node.dataset.id);
     else if (node.dataset.action === 'remove-pending-event') await session?.removePendingEvent?.(node.dataset.batchId,node.dataset.id);
     else if (node.dataset.action === 'finalize-pending-batch') await session?.finalizePendingBatch?.(node.dataset.id);
   });
-  suggestions.addEventListener('click', async event => {
+  async function handleSuggestionListClick(event) {
     if (event.target?.dataset?.batchSuggestion) return;
     if (event.target.closest?.('details.history-suggestion-details')?.tagName?.toLowerCase() === 'details') return;
     const node = event.target.closest?.('button[data-action]');
@@ -316,7 +365,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const before=deckState.review({ ...current.owner,suggestions:current.suggestions });
       const result=deckState.keepAllFits({ ...current.owner,suggestions:current.suggestions });
       const review=deckState.review({ ...current.owner,suggestions:current.suggestions });
-      syncHeldSuggestionIds(current.state,current.active,review.keptIds);
+      syncAllHeldSuggestionIds(current.state,current.active);
       batchNotice=result.skippedIds.length?`${result.skippedIds.length} fitting suggestions were not kept because the ${result.limit} item deck is full.`:'';
       const emptied=result.keptIds.length>0&&review.unreviewedIds.length===0;
       if (emptied) deckEmptyPrompted.set(current.scope,true);
@@ -333,19 +382,21 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const review=deckState.review({ ...current.owner,suggestions:current.suggestions });
       const restored=review.unreviewedIds.find(id=>!prior.unreviewedIds.includes(id));
       if (restored) deckCurrentIds.set(current.scope,restored);
-      syncHeldSuggestionIds(current.state,current.active,review.keptIds);
+      syncAllHeldSuggestionIds(current.state,current.active);
       render(getState?.() || {});
     }
     else if (node.dataset.action === 'deck-rekeep') {
       const current=deckContext; if (!current) return;
       deckState.keep({ ...current.owner,suggestionId:node.dataset.id,suggestions:current.suggestions });
       const review=deckState.review({ ...current.owner,suggestions:current.suggestions });
-      syncHeldSuggestionIds(current.state,current.active,review.keptIds); render(getState?.() || {});
+      syncAllHeldSuggestionIds(current.state,current.active); render(getState?.() || {});
     }
     else if (node.dataset.action === 'weave') await weaveSuggestion(node.dataset.id);
     else if (node.dataset.action === 'fork-suggestion') await session?.forkSuggestion?.(node.dataset.id);
     else if (node.dataset.action === 'suggest-window') {
-      const group = (suggestions.queryAll?.('section') || []).find(item => item.dataset.windowKey === `${node.dataset.fromYear}:${node.dataset.toYear}`);
+      const nativeGroups=suggestions.querySelectorAll?.('section');
+      const groups=nativeGroups?.length ? [...nativeGroups] : suggestions.queryAll?.('section') || [];
+      const group = groups.find(item => item.dataset.windowKey === `${node.dataset.fromYear}:${node.dataset.toYear}`);
       group?.scrollIntoView?.({block:'nearest'}); group?.focus?.({preventScroll:true});
     }
     else if (node.dataset.action === 'toggle-gallery') setGalleryExpanded(!galleryExpanded);
@@ -364,7 +415,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       render(getState?.() || {});
     }
     else if (node.dataset.action === 'batch-preview') await openBatchPreview();
-  });
+  }
+  suggestions.addEventListener('click', event => handleSuggestionListClick(event));
   suggestions.addEventListener('change', event => {
     const target = event.target;
     if (target?.dataset?.autoSuggest === 'true') session?.setAutoSuggest?.(target.checked);
@@ -375,6 +427,11 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       else { if (target.checked) selected.add(target.dataset.batchSuggestion); else selected.delete(target.dataset.batchSuggestion); batchNotice = ''; }
       batchSelections.set(batchScope, selected); render(getState?.() || {});
     }
+  });
+  timeline.addEventListener('change', event => {
+    const target=event.target;
+    if (target?.dataset?.autoSuggest==='true') session?.setAutoSuggest?.(target.checked);
+    else if (target?.dataset?.autoWeave==='true') session?.setAutoWeave?.(target.checked);
   });
   batchPreview.addEventListener('click', async event => {
     const node = event.target.closest?.('button[data-action]'); if (!node) return;
@@ -483,7 +540,9 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const result = await session?.commitWeaveBatch?.({ suggestionIds:batchPreviewState.selectedIds, planId:plan.id, acceptedMergeIds, excludedSuggestionIds });
     if (result) {
       const scope = batchPreviewState.scope;
+      onWeaveComplete({scope,source:batchPreviewState.source,selectedIds:[...batchPreviewState.selectedIds]});
       if (batchPreviewState.source==='list') for (const id of batchPreviewState.selectedIds) batchSelections.get(scope)?.delete(id);
+      deckViews.set(scope,'timeline'); deckAnchorRect=null;
       batchPreviewState.open = false; batchPreviewState.loading = false; batchPreviewState.operation = ''; batchPreviewState.plan = null;
       portalBatchPreview(false);
       render(getState?.() || {}); suggestions.focus?.({preventScroll:true});
@@ -619,15 +678,17 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const question = state.question || null;
     const histories = state.histories || question?.histories || [];
     const active = state.history || state.activeHistory || histories.find(item => item.id === state.historyId) || histories[0] || null;
-    for (const details of suggestions.queryAll?.('details') || []) {
+    const nativeSuggestionDetails=suggestions.querySelectorAll?.('details');
+    const suggestionDetails=nativeSuggestionDetails?.length ? [...nativeSuggestionDetails] : suggestions.queryAll?.('details') || [];
+    for (const details of suggestionDetails) {
       if (details.className?.split?.(/\s+/).includes('history-suggestion-details') && details.open) {
         suggestionDetailOpen.set(suggestionDetailKey(details.dataset.historyId,details.dataset.suggestionId),true);
       }
     }
     const nextBatchScope = `${String(state.questionId || question?.id || '')}\u0000${String(active?.id || '')}`;
-    if (nextBatchScope !== batchScope) { batchScope = nextBatchScope; batchNotice = ''; deckSwipe?.cancelGesture?.(); }
+    if (nextBatchScope !== batchScope) { batchScope = nextBatchScope; batchNotice = ''; deckAnchorRect=null; deckSwipe?.cancelGesture?.(); }
     deckScope = batchScope;
-    updatePhoneDeckClass(deckViews.get(batchScope)||'list');
+    updatePhoneDeckClass(deckViews.get(batchScope)||'timeline');
     if (batchPreviewState.open && batchPreviewState.scope !== nextBatchScope) {
       batchPreviewState.requestId++; batchPreviewState.open = false; batchPreviewState.loading = false; batchPreviewState.operation = '';
       batchPreviewState.plan = null; batchPreviewState.error = '';
@@ -637,7 +698,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     if (active && lastRenderedHistoryId && lastRenderedHistoryId !== String(active.id)) galleryExpanded = false;
     host.classList?.toggle('history-gallery-expanded',galleryExpanded);
     host.hidden = !state.questionId;
-    tabs.replaceChildren(); timeline.replaceChildren(); suggestions.replaceChildren(); batchPreview.replaceChildren(); batchPreview.hidden = true; comparison.replaceChildren(); comparison.hidden = true; tabs.hidden = true; deckPortal.hidden = true;
+    if (suggestions.parentNode !== host) host.insertBefore(suggestions,batchPreview.parentNode === host ? batchPreview : comparison);
+    tabs.replaceChildren(); timeline.replaceChildren(); suggestions.replaceChildren(); suggestions.hidden = true; batchPreview.replaceChildren(); batchPreview.hidden = true; comparison.replaceChildren(); comparison.hidden = true; tabs.hidden = true; deckPortal.hidden = true;
     status.hidden = !!active || !state.questionId || !state.status;
     status.textContent = state.status || (state.loading ? 'Loading saved histories…' : '');
     if (!active) return;
@@ -646,19 +708,31 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       renderBatchPreview(state, active);
       return;
     }
+    tabs.hidden = false;
+    tabs.replaceChildren();
+    const activeIndex = Math.max(0,histories.findIndex(item => String(item.id) === String(active.id)));
+    const name = active.name || active.title || `History ${activeIndex + 1}`;
+    const chronicleTitle = make(document,'div',null,'history-chronicle-title');
+    chronicleTitle.append(make(document,'span','CHRONICLE','history-chronicle-kicker'),
+      make(document,'h2',question?.title || question?.question || 'History','history-chronicle-question'),
+      make(document,'strong',name,'history-chronicle-name'),
+      make(document,'span',`As of ${activeDate != null ? labelYear(activeDate) : 'Date not set'} · ${active.events?.length || 0} events`,'history-chronicle-meta'));
+    if (isCompact()) {
+      const close = button('×','close-chronicle','close');
+      close.className += ' history-chronicle-close'; close.setAttribute('aria-label','Close Chronicle'); close.setAttribute('title','Close Chronicle');
+      chronicleTitle.append(close);
+    }
+    tabs.append(chronicleTitle);
     if (histories.length > 1) {
-      tabs.hidden = false;
-      const activeIndex = Math.max(0,histories.findIndex(item => String(item.id) === String(active.id)));
-      const identity = timelineIdentity(active,histories);
-      const summary = make(document,'div',null,'history-timeline-current');
-      const primaryEvent = identity.distinguishing || identity.latest;
-      const primaryName = primaryEvent?.title || 'No saved events yet';
-      const year = primaryEvent ? `${labelYear(primaryEvent.year)} · ` : '';
-      summary.append(make(document,'strong',primaryName,'history-timeline-current-title'),
-        make(document,'span',`Timeline ${activeIndex + 1} of ${histories.length} · ${year}${identity.events.length} event${identity.events.length === 1 ? '' : 's'}`,'history-timeline-current-meta'));
-      const compare = button(`Compare ${histories.length} timelines`,'compare-timelines','compare');
-      compare.setAttribute('aria-expanded',String(comparisonOpen)); compare.setAttribute('aria-controls','history-timeline-comparison');
-      tabs.append(summary,compare);
+      const historyTabs = make(document,'nav',null,'history-chronicle-tabs');
+      historyTabs.setAttribute('aria-label','Histories');
+      histories.forEach((history,index) => {
+        const tab = button(history.name || history.title || `History ${index + 1}`,'choose-history',history.id,
+          {historyId:String(history.id),historyIndex:String(index)});
+        tab.setAttribute('aria-current',String(String(history.id) === String(active.id)));
+        historyTabs.append(tab);
+      });
+      tabs.append(historyTabs);
     }
     if (comparisonOpen && histories.length > 1) {
       galleryExpanded = false; host.classList?.remove('history-gallery-expanded');
@@ -694,7 +768,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       if (comparisonHasFocus) findAction(comparison,comparisonFocusAction,comparisonFocusHistoryId)?.focus?.();
       return;
     }
-    comparison.hidden = true; tabs.hidden = histories.length <= 1; timeline.hidden = false; suggestions.hidden = false;
+    comparison.hidden = true; tabs.hidden = false; timeline.hidden = false; suggestions.hidden = false;
+    timeline.classList?.toggle('history-timeline-long',(active.events || []).length>12);
     const causes = new Map(active.events.map(item => [item.id, item]));
     const wovenSuggestionIds = new Set((active.events || []).map(item=>String(item.id)));
     const quietSuggestions = new Map();
@@ -703,11 +778,11 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const key=String(item.inspiredByEventId), ids=quietSuggestions.get(key)||new Set(); ids.add(String(item.id)); quietSuggestions.set(key,ids);
     }
     const selected = state.selectedEventId;
-    const weaveFeedbackIds = new Set((state.weaveFeedback?.eventIds || []).map(String));
+    const weaveFeedbackActive = Number(state.weaveFeedback?.expiresAt) > Date.now();
+    const weaveFeedbackIds = new Set(weaveFeedbackActive ? (state.weaveFeedback?.eventIds || []).map(String) : []);
     const selectionChanged = String(active.id) !== lastRenderedHistoryId || String(selected ?? '') !== lastRenderedSelectionId;
     const timelineSuggestionCount = new Set([...(active.suggestions || []),...(state.suggestions || [])]
       .filter(item=>item?.id!=null&&!wovenSuggestionIds.has(String(item.id))).map(item => String(item.id))).size;
-    if (timelineSuggestionCount) timeline.append(button(`View all suggestions · ${timelineSuggestionCount}`,'jump-suggestions','suggestions'));
     const retryableRippleFlags = (active.events || []).flatMap(item => (item.checkFlags || [])
       .filter(flag => flag?.kind === 'weave-ripple' && ['pending','unavailable','unknown'].includes(flag.status) && flag.wovenEventId)
       .map(flag => ({eventId:String(item.id),wovenEventId:String(flag.wovenEventId)})));
@@ -731,9 +806,11 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       keepAll.disabled = !!state.autoWeaveRunning || !!state.busyIds?.has?.('weave-batch') || !!state.busyIds?.has?.(`pending-finalize:${batchId}`);
       timeline.append(keepAll);
     }
+    const shortTimeline = active.events.length <= 12 ? make(document,'ol',null,'history-era-events history-short-timeline') : null;
+    if (shortTimeline) timeline.append(shortTimeline);
     for (const era of erasFor(active.events)) {
       const singleton = era.events.length === 1;
-      const eraNode = singleton ? null : make(document, 'details', null, 'history-era');
+      const eraNode = active.events.length > 12 && !singleton ? make(document, 'details', null, 'history-era') : null;
       if (eraNode) {
         const eraKey = `${active.id}:${era.events[0]?.id || era.label}`;
         if (selectionChanged && era.events.some(item => String(item.id) === String(selected))) openEras.set(eraKey,true);
@@ -743,13 +820,22 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
         summary.append(make(document, 'strong', era.label), make(document, 'small', `${labelYear(era.events[0].year)}–${labelYear(era.events.at(-1).year)} · ${era.events.length} events`));
         eraNode.append(summary);
       }
-      const list = make(document, 'ol', null, 'history-era-events');
+      const list = shortTimeline || make(document, 'ol', null, 'history-era-events');
+      if (!shortTimeline) { list.dataset.year = String(era.events[0]?.year ?? 0); list.dataset.endYear=String(era.events.at(-1)?.year ?? 0); }
+      if (active.events.length <= 12) {
+        const range = era.events.length > 1 ? ` · ${labelYear(era.events[0].year)}–${labelYear(era.events.at(-1).year)}` : ` · ${labelYear(era.events[0].year)}`;
+        list.append(make(document,'li',`${era.label}${range}`,'history-era-divider'));
+      }
       for (const item of era.events) {
-        const row = make(document, 'li', null, 'history-event-row'); row.dataset.eventId = item.id;
+        const row = make(document, 'li', null, 'history-event-row'); row.dataset.eventId = item.id; row.dataset.year = String(item.year);
         if (weaveFeedbackIds.has(String(item.id))) row.className += ' history-event-woven-feedback';
         if (item.pending === true) { row.dataset.pending = 'true'; row.className += ' history-event-pending'; }
         if (item.id === selected) row.dataset.selected = 'true';
-        const select = button(`${labelYear(item.year)} · ${item.title}`, 'select-event', item.id); select.setAttribute('aria-current', String(item.id === selected));
+        const select = button(`${labelYear(item.year)} · ${item.title}`, 'select-event', item.id,{year:String(item.year)}); select.setAttribute('aria-current', String(item.id === selected));
+        const imageUrl = [item.sceneRef,item.heroRef].map(ref => typeof ref === 'string' ? ref : ref?.url)
+          .find(url => typeof url === 'string' && url.startsWith('/') && !url.startsWith('//'));
+        if (imageUrl) { const image = make(document,'img',null,'history-event-thumbnail'); image.src = imageUrl; image.alt = ''; image.loading = 'lazy'; row.append(image); }
+        else row.append(make(document,'span','·','history-event-thumbnail-placeholder'));
         row.append(select);
         const quietCount=quietSuggestions.get(String(item.id))?.size||0;
         if (quietCount) { const quiet=make(document,'span',`+${quietCount} unwoven`,'history-event-quiet-suggestions'); quiet.setAttribute('aria-label',`${quietCount} unwoven suggestions inspired by this event`); row.append(quiet); }
@@ -762,11 +848,15 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
           row.append(pendingTag);
         }
         const cause = causes.get(item.causeEventId);
+        const context = make(document,'details',null,'history-event-context');
+        const contextSummary = make(document,'summary','', 'history-event-context-summary');
+        contextSummary.setAttribute('aria-label',`Because and what if details for ${item.title}`);
         const because = make(document, 'div', null, 'history-event-cause');
         because.append(document.createTextNode('because ← '));
-        if (cause) because.append(button(`${labelYear(cause.year)} · ${cause.title}`, 'cause', cause.id));
+        if (cause) because.append(button(`${labelYear(cause.year)} · ${cause.title}`, 'cause', cause.id,{year:String(cause.year)}));
         else because.append(make(document, 'span', question?.title || question?.question || 'the question'));
-        row.append(because);
+        context.append(contextSummary,because,button('What if instead…', 'fork-event', item.id));
+        row.append(context);
         for (const flag of item.checkFlags || []) {
           if (flag.kind !== 'weave-ripple' || flag.status === 'kept') continue;
           const flagNode = make(document, 'div', null, 'history-event-flag');
@@ -783,10 +873,22 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
             || !!state.busyIds?.has?.(`pending-finalize:${item.pendingBatchId}`);
           row.append(removePending);
         }
-        row.append(button('What if instead…', 'fork-event', item.id)); list.append(row);
+        list.append(row);
       }
-      if (eraNode) { eraNode.append(list); timeline.append(eraNode); }
-      else timeline.append(list);
+      if (eraNode) { eraNode.dataset.year = String(era.events[0]?.year ?? 0); eraNode.dataset.endYear=String(era.events.at(-1)?.year ?? 0); eraNode.append(list); timeline.append(eraNode); }
+      else if (!shortTimeline) timeline.append(list);
+    }
+    if (activeDate != null) {
+      const marker=make(document,shortTimeline?'li':'div',`You are here · ${labelYear(activeDate)}`,'history-timeline-date-marker'); marker.dataset.year=String(activeDate);
+      if (shortTimeline) {
+        const nativeRows=shortTimeline.querySelectorAll?.('li');
+        const rows=nativeRows?.length ? [...nativeRows] : shortTimeline.queryAll?.('li') || [];
+        const next=rows.find(node=>node.dataset.eventId&&Number(node.dataset.year)>=Number(activeDate));
+        if (next) shortTimeline.insertBefore(marker,next); else shortTimeline.append(marker);
+      } else {
+        const next=[...(timeline.children||[])].find(node=>Number.isFinite(Number(node.dataset?.year))&&Number(node.dataset.endYear||node.dataset.year)>=Number(activeDate));
+        if (next) timeline.insertBefore(marker,next); else timeline.append(marker);
+      }
     }
     const dateText = activeDate ? labelYear(activeDate) : 'this date';
     const wovenIds = new Set((active.events || []).map(item=>String(item.id)));
@@ -795,12 +897,16 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const savedById = new Map();
     for (const item of active.suggestions || []) if (item?.id != null && !wovenIds.has(String(item.id))) savedById.set(String(item.id), item);
     for (const item of state.suggestions || []) if (item?.id != null && !wovenIds.has(String(item.id))) savedById.set(String(item.id), { ...savedById.get(String(item.id)), ...item });
-    const savedSuggestions = [...savedById.values()].sort((a,b) => a.year - b.year || String(a.id).localeCompare(String(b.id)));
+    const allSavedSuggestions = [...savedById.values()].sort((a,b) => a.year - b.year || String(a.id).localeCompare(String(b.id)));
+    const activeWindowKey = deckWindowKeys.get(batchScope) || '';
+    const savedSuggestions = allSavedSuggestions.filter(item => !activeWindowKey ||
+      (item.window && `${item.window.fromYear}:${item.window.toYear}` === activeWindowKey));
     const owner = deckOwner(state,active);
     const deckReview = owner.questionId && owner.historyId
       ? deckState.review({ ...owner,suggestions:savedSuggestions })
       : { unreviewedIds:savedSuggestions.map(item=>String(item.id)),keptIds:[],passedIds:[],dispositions:{} };
-    const deckView = deckViews.get(batchScope) || 'list';
+    const deckView = deckViews.get(batchScope) || 'timeline';
+    suggestions.hidden = true;
     updatePhoneDeckClass(deckView);
     deckContext = { owner, active, state, suggestions:savedSuggestions, review:deckReview, scope:batchScope, deckView };
     if (deckReview.unreviewedIds.length) deckEmptyPrompted.set(batchScope,false);
@@ -819,10 +925,6 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const subheading = make(document,'p',`Browse every saved suggestion in this timeline. The date remains ${dateText} until you move the timebar.`,'history-timeline-suggestions-context');
     suggestions.setAttribute('aria-label', startingPoints ? `Starting points · ${savedSuggestions.length} in this timeline` : `All ${savedSuggestions.length} saved suggestions in this timeline`); suggestions.append(heading,subheading);
     const controls = make(document, 'div', null, 'history-suggestion-controls');
-    const listMode = button('List','deck-mode-list','list'); listMode.setAttribute('aria-pressed',String(deckView==='list'));
-    const deckMode = button('Deck','deck-mode-deck','deck'); deckMode.setAttribute('aria-pressed',String(deckView==='deck'));
-    deckMode.setAttribute('aria-label',`Review ${deckReview.unreviewedIds.length} unreviewed suggestions as a deck`);
-    controls.append(listMode,deckMode);
     const selectedCount = selectedSuggestionIds.size;
     const batchBusy = (state.busyIds?.size || 0) > 0;
     const weaveBatch = button(state.busyIds?.has?.('batch-check') ? 'Checking…' : state.busyIds?.has?.('weave-batch') ? 'Weaving…' : `Weave selected (${selectedCount})`,'batch-preview','batch-weave');
@@ -830,29 +932,12 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     weaveBatch.setAttribute('aria-controls',batchPreview.id); weaveBatch.setAttribute('aria-expanded',String(batchPreviewState.open));
     weaveBatch.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size || selectedCount === 0;
     controls.append(weaveBatch);
-    const moreDate = button(`More around ${dateText}`,state.windowCached ? 'manual-more' : 'manual-suggest','current-window');
-    moreDate.setAttribute('aria-label',`Find more suggestions around ${dateText}`);
-    moreDate.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size;
-    controls.append(moreDate);
     const moreMenu = make(document,'details',null,'history-suggestion-more');
     moreMenu.open = suggestionMoreOpen;
     moreMenu.addEventListener('toggle',()=>{ suggestionMoreOpen=moreMenu.open; });
     const moreSummary = make(document,'summary','⋯'); moreSummary.setAttribute('aria-label','More suggestion controls');
     moreMenu.append(moreSummary);
     const moreActions = make(document,'div',null,'history-suggestion-more-actions'); moreMenu.append(moreActions);
-    const keepAllFits = button('Keep all fits','deck-keep-all-fits','keep-all');
-    keepAllFits.hidden=deckView==='deck';
-    keepAllFits.disabled = !savedSuggestions.some(item=>!deckReview.keptIds.includes(String(item.id))&&item.verdict==='fits'&&!item.conflictsWith)
-      || deckReview.keptIds.length>=deckState.maxKept;
-    moreActions.append(keepAllFits);
-    const reviewKept = button(`Review ${deckReview.keptIds.length} kept`,'deck-review-kept','review-kept');
-    reviewKept.hidden=deckView==='deck';
-    reviewKept.disabled = !deckReview.keptIds.length || !!state.busyIds?.size;
-    moreActions.append(reviewKept);
-    const undoDeck = button('Undo last','deck-undo','undo');
-    undoDeck.hidden=deckView==='deck';
-    undoDeck.disabled = !owner.questionId || !owner.historyId || !savedSuggestions.length || !deckState.canUndo(owner);
-    moreActions.append(undoDeck);
     const autoLabel = make(document, 'label', null, 'history-auto-label');
     const autoToggle = make(document, 'input'); autoToggle.type = 'checkbox'; autoToggle.checked = state.autoSuggest !== false; autoToggle.dataset.autoSuggest = 'true';
     autoToggle.setAttribute('aria-label', 'Automatically suggest events after changing date');
@@ -861,13 +946,17 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const autoWeaveToggle = make(document,'input'); autoWeaveToggle.type = 'checkbox'; autoWeaveToggle.checked = state.autoWeave === true; autoWeaveToggle.dataset.autoWeave = 'true';
     autoWeaveToggle.setAttribute('aria-label','Automatically weave new fitting suggestions after they are checked');
     autoWeaveLabel.append(autoWeaveToggle,document.createTextNode(' Auto-weave what fits')); moreActions.append(autoWeaveLabel);
+    const listView=button('List view','deck-list','list'); listView.disabled=savedSuggestions.length===0;
+    moreActions.append(listView);
     const selectAll = button('Select all','batch-select-all','batch-all');
     const selectNone = button('Select none','batch-select-none','batch-none');
     selectAll.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size || selectedCount >= 32;
     selectNone.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size || selectedCount === 0;
-    moreActions.append(selectAll,selectNone);
+    controls.append(selectAll,selectNone);
     controls.append(moreMenu);
-    controls.queryAll?.('button').forEach(node => { node.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size; });
+    const nativeControlButtons=controls.querySelectorAll?.('button');
+    const controlButtons=nativeControlButtons?.length ? [...nativeControlButtons] : controls.queryAll?.('button') || [];
+    controlButtons.forEach(node => { node.disabled = !!state.loading || !!state.paused || !!state.busyIds?.size; });
     suggestions.append(controls);
     if (batchNotice) suggestions.append(make(document,'p',batchNotice,'history-weave-tray-notice'));
     const cachedWindows = new Map();
@@ -884,29 +973,35 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     for (const item of cachedWindows.values()) item.count=savedSuggestions.filter(suggestion=>
       suggestion.window?.fromYear===item.window.fromYear&&suggestion.window?.toYear===item.window.toYear).length;
     const visibleWindows=[...cachedWindows.values()].filter(item=>item.count>0);
-    if (visibleWindows.length && !galleryExpanded) {
-      const jumps = make(document, 'div', null, 'history-window-jumps');
-      for (const item of visibleWindows.sort((a,b) => a.window.fromYear - b.window.fromYear || a.window.toYear - b.window.toYear)) {
-        const from = item.window.fromYear, to = item.window.toYear;
-        const currentWindow = state.window?.fromYear === from && state.window?.toYear === to;
-        const chip = button(`${currentWindow ? 'Current date · ' : ''}${item.count} · ${labelYear(from)} to ${labelYear(to)}`, 'suggest-window', `${from}:${to}`, { fromYear:String(from), toYear:String(to) });
-        chip.setAttribute('aria-pressed','false'); chip.setAttribute('aria-current',currentWindow ? 'true' : 'false');
-        chip.setAttribute('aria-label', `Jump to ${currentWindow ? 'current preparation window' : 'saved suggestions'}: ${item.count} for ${labelYear(from)} to ${labelYear(to)}`);
-        if (currentWindow) chip.className += ' is-active-window';
-        jumps.append(chip);
+    for (const item of visibleWindows) {
+      const members=allSavedSuggestions.filter(suggestion=>suggestion.window?.fromYear===item.window.fromYear&&suggestion.window?.toYear===item.window.toYear);
+      if (!members.length) continue;
+      const anchor=[...members].sort((a,b)=>a.year-b.year)[Math.floor((members.length-1)/2)].year;
+      const row=make(document,shortTimeline?'li':'div',null,'history-possibility-row'); row.dataset.year=String(anchor);
+      const thumbUrl=members.map(suggestion=>[suggestion.sceneRef,suggestion.heroRef].map(ref=>typeof ref==='string'?ref:ref?.url).find(url=>typeof url==='string'&&url.startsWith('/')&&!url.startsWith('//'))).find(Boolean);
+      if (thumbUrl) { const image=make(document,'img',null,'history-event-thumbnail'); image.src=thumbUrl; image.alt=''; image.loading='lazy'; row.append(image); }
+      else row.append(make(document,'span','✦','history-event-thumbnail-placeholder'));
+      const key=`${item.window.fromYear}:${item.window.toYear}`;
+      const possibilityLabel=members.length===1?'possibility':'possibilities';
+      const open=button(`✦ ${members.length} ${possibilityLabel} around ${labelYear(anchor)}`,'open-window-deck',key,{windowKey:key});
+      open.setAttribute('aria-label',`Review ${members.length} ${possibilityLabel} around ${labelYear(anchor)}`); row.append(open);
+      if (shortTimeline) {
+        const nativeRows=shortTimeline.querySelectorAll?.('li');
+        const rows=nativeRows?.length ? [...nativeRows] : shortTimeline.queryAll?.('li') || [];
+        const next=rows.find(node=>node.dataset.year!=null&&Number(node.dataset.year)>=anchor&&node.className!=='history-era-divider');
+        if (next) shortTimeline.insertBefore(row,next); else shortTimeline.append(row);
+      } else {
+        const next=[...(timeline.children||[])].find(node=>Number.isFinite(Number(node.dataset?.year))&&Number(node.dataset.endYear||node.dataset.year)>=anchor);
+        if (next) timeline.insertBefore(row,next); else timeline.append(row);
       }
-      moreActions.append(jumps);
     }
+    const footer=make(document,'footer',null,'history-timeline-footer');
+    const suggestMore=button(`Suggest more around ${dateText}`,state.windowCached?'manual-more':'manual-suggest','suggest-more');
+    suggestMore.disabled=!!state.loading||!!state.paused||!!state.busyIds?.size;
+    footer.append(suggestMore,moreMenu); timeline.append(footer);
     const visibleSuggestions = savedSuggestions;
     if (!visibleSuggestions.length) suggestions.append(make(document, 'p', savedSuggestions.length ? 'No saved suggestions in this window.' : state.status || (state.autoSuggest ? 'No saved suggestions yet.' : `Use “Suggest events around ${dateText}” to explore this timeline.`), 'history-session-status'));
     else if (state.status) suggestions.append(make(document, 'p', state.status, 'history-session-status'));
-    const expandGallery = button(galleryExpanded ? 'Close expanded gallery' : 'Expand gallery','toggle-gallery','gallery');
-    expandGallery.setAttribute('aria-expanded',String(galleryExpanded));
-    expandGallery.setAttribute('aria-label',galleryExpanded ? 'Close expanded suggestion gallery' : 'Expand suggestions into a comparison board');
-    if (galleryExpanded) {
-      const galleryActions=make(document,'div',null,'history-gallery-actions');
-      galleryActions.append(expandGallery); suggestions.append(galleryActions);
-    } else moreActions.append(expandGallery);
     const groups = new Map();
     for (const item of cachedWindows.values()) groups.set(`${item.window.fromYear}:${item.window.toYear}`,{window:item.window,items:[]});
     for (const item of visibleSuggestions) {
@@ -1011,7 +1106,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       portalUndo.disabled=!owner.questionId||!owner.historyId||!savedSuggestions.length||!deckState.canUndo(owner);
       portalMoreActions.append(portalKeepAll,portalReview,portalUndo);
       deckHeader.append(portalMore);
-      deckHeader.append(button('Back to list','deck-list','list'));
+      deckHeader.append(button('List view','deck-list','list'));
       deckPortal.append(deckHeader);
       const currentId=deckCurrentIds.get(batchScope);
       const currentItem=savedSuggestions.find(item=>String(item.id)===currentId&&deckReview.unreviewedIds.includes(String(item.id)))
@@ -1060,19 +1155,31 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
           deckPortal.append(passedGroup);
         }
       }
+    } else if (deckView === 'list') {
+      suggestions.classList?.remove('history-deck-active'); deckPortal.replaceChildren(); deckPortal.hidden=false; positionDeckPortal();
+      const listHeader=make(document,'div',null,'history-deck-header');
+      listHeader.append(make(document,'strong',`Possibilities · ${savedSuggestions.length}`),button('Timeline','deck-close','timeline'),button('Deck','deck-mode-deck','deck'));
+      deckPortal.append(listHeader); suggestions.hidden=false; suggestions.classList?.add('history-deck-list'); deckPortal.append(suggestions);
     } else {
       suggestions.classList?.remove('history-deck-active'); deckPortal.replaceChildren();
     }
+    if (!deckPortal.hidden) positionDeckPortal();
     if (selectionChanged) {
-      const selectedEra = timeline.queryAll?.('details').find(details => details.queryAll?.('button').some(button => button.dataset.action === 'select-event' && button.dataset.id === state.selectedEventId));
-      const selectedRow = timeline.queryAll?.('li').find(item => String(item.dataset.eventId) === String(state.selectedEventId));
+      const details = timeline.querySelectorAll ? [...timeline.querySelectorAll('details')] : timeline.queryAll?.('details') || [];
+      const selectedEra = details.find(era => {
+        const buttons = era.querySelectorAll ? [...era.querySelectorAll('button[data-action="select-event"]')] : era.queryAll?.('button') || [];
+        return buttons.some(item => item.dataset.action === 'select-event' && String(item.dataset.id) === String(state.selectedEventId));
+      });
+      const rows = timeline.querySelectorAll ? [...timeline.querySelectorAll('[data-event-id]')] : timeline.queryAll?.('li') || [];
+      const selectedRow = rows.find(item => String(item.dataset.eventId) === String(state.selectedEventId));
       if (selectedEra) {
         selectedEra.open = true;
         selectedRow?.scrollIntoView?.({block:'nearest'});
       } else if (selectedRow) {
         selectedRow.scrollIntoView?.({block:'nearest'});
       } else {
-        const card = suggestions.queryAll?.('article').find(item => item.dataset.suggestionId === state.selectedEventId);
+        const cards = suggestions.querySelectorAll ? [...suggestions.querySelectorAll('[data-suggestion-id]')] : suggestions.queryAll?.('article') || [];
+        const card = cards.find(item => String(item.dataset.suggestionId) === String(state.selectedEventId));
         card?.scrollIntoView?.({block:'nearest'});
       }
       lastRenderedSelectionId = String(state.selectedEventId ?? '');
@@ -1080,9 +1187,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     }
     const actionHistoryId = String(active.id || '');
     if (actionHistoryId && actionHistoryId !== lastSuggestionActionHistoryId && actionHistoryId !== pendingSuggestionActionHistoryId) {
-      const firstSuggestionAction = findAction(suggestions, 'weave') || findAction(deckPortal, 'deck-weave');
-      // The suggestion tray and rail both clip their contents. Keep the first primary
-      // action reachable when a history opens, without changing the user's later scroll.
+      const firstSuggestionAction = (!suggestions.hidden && findAction(suggestions,'weave'))
+        || (!deckPortal.hidden && findAction(deckPortal,'deck-weave'));
       if (firstSuggestionAction) {
         pendingSuggestionActionHistoryId = actionHistoryId;
         const revealAction = () => {
@@ -1090,7 +1196,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
           pendingSuggestionActionHistoryId = '';
           const current = getState?.() || {};
           if (String(current.history?.id || current.historyId || '') !== actionHistoryId) return;
-          const action = findAction(suggestions, 'weave') || findAction(deckPortal, 'deck-weave');
+          const action = (!suggestions.hidden && findAction(suggestions,'weave'))
+            || (!deckPortal.hidden && findAction(deckPortal,'deck-weave'));
           action?.scrollIntoView?.({block:'nearest'});
           lastSuggestionActionHistoryId = actionHistoryId;
         };
@@ -1100,7 +1207,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     }
     // Session setters emit synchronously. Run after the complete outer render so a nested
     // render replaces a finished tree instead of interleaving duplicate tray children.
-    syncHeldSuggestionIds(state,active,deckReview.keptIds);
+    syncAllHeldSuggestionIds(state,active);
   }
   const unsubscribe = subscribe?.(render);
   render();

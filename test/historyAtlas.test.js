@@ -57,11 +57,15 @@ test('weave feedback tags only newly woven canonical pins and expires without re
   source.weaveFeedback = { eventIds:['marsh', 'not-in-this-history'], expiresAt:Date.now() + 2000 };
   const projected = projectHistoryAtlas(source, { historyId:'history-main', asOfYear:-2500,
     window:{ fromYear:-3000, toYear:-2001 } });
-  assert.equal(projected.pins.find(pin => pin.id === 'marsh').wovenFeedbackExpiresAt, source.weaveFeedback.expiresAt);
-  assert.equal(projected.pins.find(pin => pin.id === 'wetlands').wovenFeedbackExpiresAt, undefined);
-  assert.equal(historyWeaveFeedbackIntensity(source.weaveFeedback.expiresAt, Date.now(), false) > 0, true);
-  assert.equal(historyWeaveFeedbackIntensity(source.weaveFeedback.expiresAt, Date.now(), true), 0.28);
-  assert.equal(historyWeaveFeedbackIntensity(source.weaveFeedback.expiresAt, source.weaveFeedback.expiresAt, false), 0);
+  const feedbackPin = projected.pins.find(pin => pin.id === 'marsh');
+  assert.equal(feedbackPin.wovenFeedback, source.weaveFeedback);
+  assert.equal(projected.pins.find(pin => pin.id === 'wetlands').wovenFeedback, undefined);
+  assert.equal(historyWeaveFeedbackIntensity(source.weaveFeedback, Date.now(), false) > 0, true);
+  assert.equal(historyWeaveFeedbackIntensity(source.weaveFeedback, Date.now(), true), 0.28);
+  source.weaveFeedback.expiresAt = Date.now() + 2000;
+  assert.equal(historyWeaveFeedbackIntensity(feedbackPin.wovenFeedback, Date.now(), false) > 0, true,
+    'the renderer reads the updated deadline through the live feedback handle');
+  assert.equal(historyWeaveFeedbackIntensity(source.weaveFeedback, source.weaveFeedback.expiresAt, false), 0);
 });
 
 test('pending canonical events retain provenance and use normal as-of date and geography', () => {

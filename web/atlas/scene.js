@@ -543,6 +543,7 @@ export function createAtlasScene(container, {
   const domListeners = [];
   let worlds = [], questions = [], entries = [], currentId = null, arrivalFromId = null, zoom = 0, surfaceDetailZoom = 0, rotation = 0;
   let historyProjection = null, historyGeometry = null, historyOrbitEnabled = false, legacySnapshot = null;
+  const renderedWeaveFeedback = new WeakSet();
   let surfaceFacingAngle = 0, surfaceFacingPitch = 0, rotationPitch = 0;
   let orbitNeighborhoodIds = new Set();
   let liveCameraDistance = altitudeForZoom(zoom);
@@ -1368,7 +1369,7 @@ export function createAtlasScene(container, {
     const surfaceMarkerDiagnostics = [];
     const canvasRect = renderer.domElement.getBoundingClientRect();
     flatEntries.forEach((entry, index) => {
-      const weavePulse = historyWeaveFeedbackIntensity(entry.world?.wovenFeedbackExpiresAt, Date.now(), motionReduced);
+      const weavePulse = historyWeaveFeedbackIntensity(entry.world?.wovenFeedback, Date.now(), motionReduced);
       dummy.position.copy(surfacePinAnchorPosition(entry, state, timestamp));
       dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), surfacePoint(entry).normalize());
       dummy.scale.setScalar(surfacePinInstanceScale(entry, dummy.position));
@@ -1413,7 +1414,7 @@ export function createAtlasScene(container, {
       mesh.count = groupEntries.length;
       groupEntries.forEach((entry, index) => {
         instanceIds.push(entry.id);
-        const weavePulse = historyWeaveFeedbackIntensity(entry.world?.wovenFeedbackExpiresAt, Date.now(), motionReduced);
+        const weavePulse = historyWeaveFeedbackIntensity(entry.world?.wovenFeedback, Date.now(), motionReduced);
         const scale = historyProjection
           ? historyOrbitMarkerScale(markerScale, entry.world) : markerScale;
         const point = worldPosition(entry, state, timestamp, markerRadius);
@@ -3392,6 +3393,18 @@ export function createAtlasScene(container, {
         applyZoom(zoom, false, timestamp);
       }
     } else if (!travelState) applySurfaceOrientation(1 - presentationForZoom(zoom).state.lift, timestamp);
+    if (historyProjection?.pins?.length) {
+      const now = Date.now(), feedbackHandles = new Set(historyProjection.pins
+        .map(pin => pin.wovenFeedback).filter(handle => handle && typeof handle === 'object'));
+      const activeHandles = new Set([...feedbackHandles].filter(handle =>
+        historyWeaveFeedbackIntensity(handle, now, motionReduced) > 0));
+      const needsPulseUpdate = activeHandles.size > 0 || [...feedbackHandles].some(handle => renderedWeaveFeedback.has(handle));
+      if (needsPulseUpdate) {
+        if (!travelState && !axisTransition) applyZoom(zoom, false, timestamp);
+        for (const handle of activeHandles) renderedWeaveFeedback.add(handle);
+        for (const handle of feedbackHandles) if (!activeHandles.has(handle)) renderedWeaveFeedback.delete(handle);
+      }
+    }
     renderer.render(scene, camera);
     const level = stageForZoom(zoom);
     const frameWindow = appendContinuousFrame(stageFrameWindow, stageFrameLevel, level, timestamp);

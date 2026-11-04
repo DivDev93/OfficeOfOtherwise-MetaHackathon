@@ -23,12 +23,18 @@ test('history marker colors keep event and suggestion roles stable through hover
 });
 
 test('woven event feedback pulses only from its absolute expiry and respects reduced motion', () => {
-  assert.match(scene, /historyWeaveFeedbackIntensity\(entry\.world\?\.wovenFeedbackExpiresAt, Date\.now\(\), motionReduced\)/,
-    'each rendered event samples transient feedback against wall-clock expiry');
+  assert.match(scene, /historyWeaveFeedbackIntensity\(entry\.world\?\.wovenFeedback, Date\.now\(\), motionReduced\)/,
+    'each rendered event samples the live transient feedback deadline against wall-clock time');
   assert.match(scene, /dummy\.scale\.multiplyScalar\(1 \+ weavePulse \* 0\.34\)/,
     'Surface pins receive the pulse scale');
   assert.match(scene, /\.lerp\(HISTORY_GOLD_LATEST, weavePulse \* 0\.55\)/,
     'both Surface and lifted pins brighten gold while pulsing');
+  assert.match(scene, /const needsPulseUpdate = activeHandles\.size > 0 \|\| \[\.\.\.feedbackHandles\]\.some\(handle => renderedWeaveFeedback\.has\(handle\)\)/,
+    'the stationary frame loop refreshes matrices during feedback and once more to restore their base size');
+  assert.match(scene, /if \(!travelState && !axisTransition\) applyZoom\(zoom, false, timestamp\)/,
+    'pulse refresh runs during idle frames without rebuilding the history projection');
+  assert.match(scene, /renderedWeaveFeedback\.delete\(handle\)/,
+    'expired feedback stops requesting frame updates after the settling frame');
 });
 
 test('surface history focus uses only canonical pin centroids and landing targets Afro-Eurasia', () => {

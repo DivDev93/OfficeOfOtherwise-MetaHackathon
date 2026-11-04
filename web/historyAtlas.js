@@ -25,7 +25,8 @@ export function isPendingHistoryEvent(world = {}) {
 
 /** Return a time-based pulse strength without storing animation state on the history record. */
 export function historyWeaveFeedbackIntensity(expiresAt, now = Date.now(), reducedMotion = false) {
-  const expires = Number(expiresAt), time = Number(now);
+  const expires = Number(typeof expiresAt === 'object' && expiresAt !== null ? expiresAt.expiresAt : expiresAt);
+  const time = Number(now);
   if (!Number.isFinite(expires) || !Number.isFinite(time) || expires <= time) return 0;
   if (reducedMotion) return 0.28;
   const remaining = expires - time;
@@ -258,15 +259,14 @@ export function projectHistoryAtlas(question, {
 
   const dateWindow = checkedWindow(window, asOfYear);
   const weaveFeedbackIds = new Set((question.weaveFeedback?.eventIds || []).map(String));
-  const weaveFeedbackExpiresAt = Number(question.weaveFeedback?.expiresAt) || 0;
+  const weaveFeedback = question.weaveFeedback || null;
   const pastEvents = eventsAsOf(activeHistory, asOfYear);
   const latestEvent = pastEvents.at(-1) ?? null;
   const pins = pastEvents.map(event => ({
     ...event,
     historyId: activeHistory.id,
     visualKind: 'history-event',
-    ...(weaveFeedbackIds.has(String(event.id)) && weaveFeedbackExpiresAt > Date.now()
-      ? { wovenFeedbackExpiresAt:weaveFeedbackExpiresAt } : {}),
+    ...(weaveFeedbackIds.has(String(event.id)) ? { wovenFeedback:weaveFeedback } : {}),
     highlighted: event.id === latestEvent?.id,
     selectionEventId: event.id,
   }));

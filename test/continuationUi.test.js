@@ -39,7 +39,9 @@ test('causal arcs follow actual ancestry and selected parent, never join sibling
 function element(tagName = 'div') {
   const classes = new Set(), attributes = new Map(), listeners = new Map();
   return { tagName, children: [], value: '', hidden: false, textContent: '', dataset: {}, style: {}, classList: { add(...names) { names.forEach(name => classes.add(name)); }, remove(...names) { names.forEach(name => classes.delete(name)); }, contains(name) { return classes.has(name); }, toggle(name, enabled = !classes.has(name)) { enabled ? classes.add(name) : classes.delete(name); return enabled; } },
-    append(...nodes) { this.children.push(...nodes); }, replaceChildren(...nodes) { this.children = nodes; }, add(node) { this.children.push(node); },
+    append(...nodes) { for (const node of nodes) { if (node.parentNode?.children) { const oldIndex=node.parentNode.children.indexOf(node); if (oldIndex>=0) node.parentNode.children.splice(oldIndex,1); } node.parentNode=this; this.children.push(node); } },
+    replaceChildren(...nodes) { for (const child of this.children) if (child.parentNode===this) child.parentNode=null; this.children=[]; this.append(...nodes); }, add(node) { this.append(node); },
+    insertBefore(node, reference) { if (node.parentNode?.children) { const oldIndex=node.parentNode.children.indexOf(node); if (oldIndex>=0) node.parentNode.children.splice(oldIndex,1); } const index=this.children.indexOf(reference); node.parentNode=this; this.children.splice(index<0?this.children.length:index,0,node); return node; },
     setAttribute(key, value) { attributes.set(key, value); }, getAttribute(key) { return attributes.get(key); }, addEventListener(type, callback) { listeners.set(type, callback); }, dispatch(type) { return listeners.get(type)?.({target:this,currentTarget:this}); }, dispatchWithTarget(type,target,extra={}) { return listeners.get(type)?.({target,currentTarget:this,...extra}); }, click() { return listeners.get('click')?.({target:this,currentTarget:this}); }, keydown(key) { const event = {key,preventDefault(){this.prevented=true;},stopPropagation(){}}; listeners.get('keydown')?.(event); return event; }, matches(selector) { return selector === ':popover-open' && !!this.popoverOpen; }, hidePopover() { this.popoverOpen = false; this.hidePopoverCalls = (this.hidePopoverCalls || 0) + 1; }, scrollIntoView() {}, focus() { this.focused = true; listeners.get('focus')?.({target:this}); },
     querySelector(selector) { const className=selector.startsWith('.')?selector.slice(1):''; const search=node=>node?.className===className?node:(node?.children||[]).map(search).find(Boolean)||null; return search(this)|| (this.copy ||= element()); }, contains(node) { return node===this || this.children.some(child=>child===node||child.contains?.(node)); }, querySelectorAll() { return this.children.filter(child => child.dataset?.branchId); }, queryAll(tag) { return [...(this.tagName === tag ? [this] : []), ...this.children.flatMap(child => child.queryAll?.(tag) || [])]; }, closest(selector) { if (selector === 'button[data-action]' && this.tagName === 'button' && this.dataset?.action) return this; if (selector === 'button[data-id]' && this.tagName === 'button' && this.dataset?.id) return this; if (selector === '#chronicle' && this.id === 'chronicle') return this; if (selector === '#history-timeline-host' && this.id === 'history-timeline-host') return this; if (selector === 'button[data-history-id]' && this.tagName === 'button' && this.dataset?.historyId) return this; if (selector === 'button[data-year]' && this.tagName === 'button' && this.dataset?.year) return this; return null; }, removeAttribute(key) { attributes.delete(key); },
     pointerenter() { listeners.get('pointerenter')?.({target:this}); }, pointerleave() { listeners.get('pointerleave')?.({target:this}); },
@@ -481,7 +483,7 @@ test('same-count saved content and media updates refresh Atlas while retaining t
   assert.equal(app.get('hero-image').src,'/event-scenes/'+'c'.repeat(64)+'.png','the selected sheet adopts the refreshed saved media');
 });
 
-test('saved-window chips focus the active batch and open exact overlapping cached windows', async () => {
+test('saved-window timeline rows open exact overlapping window-scoped deck and List views', async () => {
   const first={fromYear:-3000,toYear:-2001}, second={fromYear:-2800,toYear:-1801};
   const selected={id:'selected-rock-paintings',year:-2950,title:'Wetland Rock Paintings',summary:'Inspected cached suggestion',suggestionForEventId:'canonical-event',window:first,sceneRef:'/event-scenes/'+'d'.repeat(64)+'.png'};
   const windowOne=[selected,{id:'first-window-two',year:-2700,title:'First batch two',window:first},{id:'first-window-three',year:-2400,title:'First batch three',window:first}];
@@ -499,69 +501,34 @@ test('saved-window chips focus the active batch and open exact overlapping cache
   for(let i=0;i<10&&!app.ui.state().history.history;i++) await tick();
   assert.equal(app.ui.state().history.selectedEventId,selected.id);
   assert.equal(app.get('hero-tag').textContent,'SELECTED SUGGESTION','the selected suggestion is visibly committed before window navigation');
-  const panel=app.get('history-timeline-host').children[0].children[2];
+  const timeline=findNode(app.get('history-timeline-host'),node=>node?.className==='history-timeline-events');
   const initialDate=app.ui.state().history.date, initialHash=app.location.hash;
-  const allCards=findNodes(panel,node=>node?.dataset?.suggestionId);
-  assert.deepEqual(allCards.map(node=>node.dataset.suggestionId),['selected-rock-paintings','first-window-two','first-window-three','overlap-batch'],'the default gallery shows every cached suggestion in chronological order');
-  assert.equal(findNodes(panel,node=>node?.className==='history-timeline-suggestion-group').length,2,'suggestions are grouped by their saved windows');
-  assert.equal(findNode(panel,node=>node?.dataset?.suggestionId===selected.id)?.children[0]?.src,selected.sceneRef,'saved thumbnails are reused from canonical refs');
-  const findWindow=(from,to)=>findNode(panel,node=>node?.dataset?.action==='suggest-window'&&node.dataset.fromYear===String(from)&&node.dataset.toYear===String(to));
-  const firstChip=findWindow(first.fromYear,first.toYear), secondChip=findWindow(second.fromYear,second.toYear);
-  assert.ok(firstChip&&secondChip,'both overlapping cached batches have their own navigation chip');
-  assert.equal(firstChip.getAttribute('aria-current'),'true','the active preparation batch is visibly marked');
-  assert.match(firstChip.textContent,/Current date/,'the active batch has a visible current label');
-  panel.dispatchWithTarget('click',firstChip);
-  assert.equal(app.ui.state().history.date,initialDate,'jumping to a cached window does not change the as-of date');
-  assert.equal(app.ui.state().history.selectedEventId,selected.id,'reselecting the current batch preserves selection');
-  assert.equal(findNode(panel,node=>node?.dataset?.windowKey===`${first.fromYear}:${first.toYear}`).focused,true,'the current chip scrolls and focuses its group');
-  panel.dispatchWithTarget('click',secondChip);
+  const rowButtons=findNodes(timeline,node=>node?.dataset?.action==='open-window-deck');
+  const findWindow=(from,to)=>rowButtons.find(node=>node.dataset.windowKey===`${from}:${to}`);
+  const firstRow=findWindow(first.fromYear,first.toYear), secondRow=findWindow(second.fromYear,second.toYear);
+  assert.ok(firstRow&&secondRow,'each saved window has its own timeline review row');
+  const portal=findNode(app.document.body,node=>node?.className==='history-suggestion-deck-portal');
+  timeline.dispatchWithTarget('click',firstRow);
+  assert.equal(portal.hidden,false);
+  assert.ok(findNode(portal,node=>node?.className==='history-deck-header'));
+  assert.equal(findNode(portal,node=>node?.dataset?.swipeCard==='true')?.dataset.suggestionId,selected.id,'the first window opens its own first possibility');
+  const list= findNode(portal,node=>node?.dataset?.action==='deck-list');
+  portal.dispatchWithTarget('click',list);
+  const listPanel=findNode(portal,node=>node?.className==='history-timeline-suggestions');
+  assert.equal(findNodes(listPanel,node=>node?.className==='history-timeline-suggestion').length,3,'List is scoped to the selected window');
+  assert.equal(findNode(listPanel,node=>node?.dataset?.suggestionId===selected.id)?.children[0]?.src,selected.sceneRef,'saved thumbnails are reused from canonical refs');
+  portal.dispatchWithTarget('click',findNode(portal,node=>node?.dataset?.action==='deck-close'));
+  timeline.dispatchWithTarget('click',secondRow);
   const switched=app.ui.state().history;
-  assert.deepEqual(switched.window,first,'jumping between groups leaves the current preparation window intact');
+  assert.equal(findNode(portal,node=>node?.dataset?.swipeCard==='true')?.dataset.suggestionId,'overlap-batch','the overlapping row opens only its own possibility');
   assert.equal(switched.date,initialDate,'browsing another batch does not move the as-of date');
   assert.equal(switched.selectedEventId,selected.id,'window navigation keeps the selected suggestion even outside the active batch');
-  assert.equal(app.get('hero-tag').textContent,'SELECTED SUGGESTION');
-  assert.equal(app.get('hero-title').textContent,'2950 BCE · Wetland Rock Paintings');
-  assert.deepEqual(findNodes(panel,node=>node?.dataset?.suggestionId).map(node=>node.dataset.suggestionId),['selected-rock-paintings','first-window-two','first-window-three','overlap-batch'],'jumping between group anchors leaves every suggestion visible');
-  assert.equal(findNode(panel,node=>node?.dataset?.windowKey===`${second.fromYear}:${second.toYear}`).focused,true,'the selected group receives focus without filtering');
-  const inactiveTitle=findNode(panel,node=>node?.dataset?.action==='select-suggestion'&&node.dataset.id==='overlap-batch');
-  const postsBeforeGalleryHover=app.posts.length;
-  app.get('history-timeline-host').dispatchWithTarget('pointerover',inactiveTitle);
-  assert.equal(app.get('hero-title').textContent,'2300 BCE · Overlapping cached batch','hovering a card title previews its canonical inactive-window suggestion');
-  assert.equal(app.get('hero-tag').textContent,'SUGGESTION PREVIEW');
-  assert.equal(app.ui.state().history.selectedEventId,selected.id);
-  app.get('history-timeline-host').dispatchWithTarget('pointerout',inactiveTitle);
-  assert.equal(app.get('hero-title').textContent,'2950 BCE · Wetland Rock Paintings','leaving the card restores the committed suggestion');
-  assert.equal(app.get('hero-tag').textContent,'SELECTED SUGGESTION');
-  assert.equal(app.posts.length,postsBeforeGalleryHover,'preview hover does not generate images');
-  const dateAfterSwitch=switched.date, hashAfterSwitch=app.location.hash;
-  panel.dispatchWithTarget('click',findWindow(second.fromYear,second.toYear));
-  assert.equal(app.ui.state().history.date,dateAfterSwitch,'repeating a jump does not reset the as-of date');
-  assert.equal(app.ui.state().history.selectedEventId,selected.id);
-  assert.equal(app.location.hash,hashAfterSwitch);
-  assert.equal(app.location.hash,initialHash,'gallery browsing does not rewrite the native history URL');
-  for(let i=0;i<10&&app.posts.length<2;i++) await tick();
-  assert.deepEqual(app.posts.map(post=>post.url),['/api/history/scene','/api/history/scene'],'gallery browsing does not generate images for inactive-window suggestions');
-  assert.deepEqual(app.posts.map(post=>post.body.eventId).sort(),['first-window-two','first-window-three'].sort());
-  const expand=findNode(panel,node=>node?.dataset?.action==='toggle-gallery');
-  panel.dispatchWithTarget('click',expand);
-  assert.equal(findNode(panel,node=>node?.dataset?.action==='toggle-gallery').getAttribute('aria-expanded'),'true');
-  const expandedCards=findNodes(panel,node=>node?.dataset?.suggestionId);
-  assert.deepEqual(expandedCards.map(node=>node.dataset.suggestionId),['selected-rock-paintings','first-window-two','first-window-three','overlap-batch'],'the expanded board compares every cached suggestion in chronological order across windows');
-  assert.equal(findNodes(panel,node=>node?.className==='history-timeline-suggestion-group').length,1,'expanded board is one flat comparison grid across windows');
-  panel.dispatchWithTarget('click',findNode(panel,node=>node?.dataset?.action==='toggle-gallery'));
-  assert.equal(findNode(panel,node=>node?.dataset?.action==='toggle-gallery').getAttribute('aria-expanded'),'false','the board has a direct close action');
-  app.window.matchMedia=query=>({matches:query.includes('max-width: 700px')});
-  panel.dispatchWithTarget('click',findNode(panel,node=>node?.dataset?.action==='toggle-gallery'));
-  const postsBeforeMobileInspect=app.posts.length;
-  app.get('atlas-close-details').hidden=true;
-  const mobileInspect=findNode(panel,node=>node?.dataset?.action==='select-suggestion'&&node.dataset.id==='first-window-three');
-  panel.dispatchWithTarget('click',mobileInspect);
-  assert.equal(app.ui.state().history.selectedEventId,'first-window-three','compact title activation commits the inspected cached suggestion');
-  assert.equal(app.ui.state().history.date,initialDate,'compact inspection keeps the as-of date');
-  assert.equal(app.get('history-timeline-host').children[0].classList.contains('history-gallery-expanded'),false,'compact inspection closes the full-screen board so its result is visible');
-  assert.equal(app.document.body.classList.contains('atlas-details-open'),true,'compact inspection opens the selected-event details sheet');
-  assert.equal(app.get('hero-title').focused,true,'Surface inspection focuses the revealed heading when its close control is hidden');
-  assert.equal(app.posts.length,postsBeforeMobileInspect,'compact inspection remains read-only');
+  portal.dispatchWithTarget('click',findNode(portal,node=>node?.dataset?.action==='deck-list'));
+  const secondList=findNode(portal,node=>node?.className==='history-timeline-suggestions');
+  assert.deepEqual(findNodes(secondList,node=>node?.className==='history-timeline-suggestion').map(node=>node.dataset.suggestionId),['overlap-batch'],'the List pane shows only the active window');
+  assert.equal(app.ui.state().history.date,initialDate,'switching windows preserves the as-of date');
+  assert.equal(app.ui.state().history.selectedEventId,selected.id,'switching windows preserves the committed selection');
+  assert.equal(app.location.hash,initialHash,'window review does not rewrite the native history URL');
 });
 
 test('new history creation after selecting a suggestion attaches to its canonical event, not the suggestion or hover', async () => {
@@ -858,7 +825,9 @@ test('Earth surface card stays collapsed until its chip is activated', () => {
 
 test('canceling a new-history draft returns to the selected saved event without changing date, hash or media', async () => {
   const event={id:'preserved-event',year:1883,title:'Buried Oaks',summary:'Existing saved event.',sceneRef:'/event-scenes/'+'a'.repeat(64)+'.png',cutoutRef:'/event-cutouts/'+'b'.repeat(64)+'.png'};
-  const history={id:'preserved-history',events:[event],suggestions:[],suggestionWindows:[]};
+  const window={fromYear:1800,toYear:2000};
+  const savedSuggestion={id:'draft-suggestion',year:1900,title:'A saved possibility',verdict:'fits',window,sceneRef:'/event-scenes/'+'c'.repeat(64)+'.png'};
+  const history={id:'preserved-history',events:[event],suggestions:[savedSuggestion],suggestionWindows:[{window,status:'ready',suggestionCount:1}]};
   const question={id:'preserved-question',title:'Existing question',histories:[history]};
   const app=harness({},async url=>{
     if(url==='/api/history/questions') return Response.json({error:'Safe fixture request failure.',code:'question_creation_failed'},{status:503});
@@ -871,12 +840,16 @@ test('canceling a new-history draft returns to the selected saved event without 
   await tick(); app.ui.setHistoryContextForTest({questionId:question.id,historyId:history.id,eventId:event.id,date:1883});
   for(let i=0;i<10&&!app.ui.state().history.history;i++) await tick();
   const galleryHost=app.get('history-timeline-host');
-  const timelineRoot=galleryHost.children[0];
-  const suggestionsPanel=galleryHost.children[0].children[2];
-  const expandGallery=findNode(suggestionsPanel,node=>node?.dataset?.action==='toggle-gallery');
-  assert.ok(expandGallery,'a saved-history draft can be opened while the all-suggestions board is available');
-  suggestionsPanel.dispatchWithTarget('click',expandGallery);
-  assert.equal(timelineRoot.classList.contains('history-gallery-expanded'),true);
+  const timeline=findNode(galleryHost,node=>node?.className==='history-timeline-events');
+  const possibility=findNode(timeline,node=>node?.dataset?.action==='open-window-deck');
+  assert.ok(possibility,'the saved-history draft can be opened while a suggestion review is available');
+  timeline.dispatchWithTarget('click',possibility);
+  const deck=findNode(app.document.body,node=>node?.className==='history-suggestion-deck-portal');
+  assert.equal(deck.hidden,false);
+  const listButton=findNode(deck,node=>node?.dataset?.action==='deck-list');
+  deck.dispatchWithTarget('click',listButton);
+  const suggestionsPanel=findNode(deck,node=>node?.className==='history-timeline-suggestions');
+  assert.equal(suggestionsPanel.parentNode,deck,'the saved List remains inside the review overlay');
   app.get('cutout-view').click();
   assert.equal(app.ui.state().activeView,'cutout');
   assert.equal(app.get('workspace').classList.contains('hero-focus'),true,'a selected saved cutout uses the focused hero view');
@@ -885,7 +858,7 @@ test('canceling a new-history draft returns to the selected saved event without 
   app.document.body.classList.add('atlas-focused');
   app.get('show-invitation').click();
   assert.equal(app.document.body.classList.contains('invitation-open'),true);
-  assert.equal(timelineRoot.classList.contains('history-gallery-expanded'),true,'opening a draft suspends the expanded layout without discarding its gallery state');
+  assert.equal(deck.hidden,false,'opening a draft preserves the active suggestion review');
   assert.equal(app.get('workspace').classList.contains('hero-focus'),false,'opening the draft suspends hero focus so the form remains visible');
   assert.equal(app.get('cancel-new-exploration').hidden,false,'an existing story exposes a clear draft-cancel action');
   app.get('prompt').value='A draft that should not replace this history';
@@ -897,7 +870,7 @@ test('canceling a new-history draft returns to the selected saved event without 
   assert.equal(app.get('history-creation-status').hidden,true,'Cancel clears inline draft feedback');
   assert.equal(app.ui.state().activeView,'cutout','Cancel restores the previously selected media tab');
   assert.equal(app.get('workspace').classList.contains('hero-focus'),true,'Cancel restores the selected cutout presentation');
-  assert.equal(timelineRoot.classList.contains('history-gallery-expanded'),true,'Cancel returns to the expanded gallery without changing its selection');
+  assert.equal(findNode(deck,node=>node?.className==='history-timeline-suggestions'),suggestionsPanel,'Cancel restores the same List review');
   assert.equal(app.document.body.classList.contains('atlas-focused'),true,'Cancel restores the Atlas navigation mode that opened the draft');
   assert.equal(app.location.hash,hash);
   assert.equal(app.ui.state().history.questionId,before.questionId);
@@ -925,12 +898,9 @@ test('canceling a new-history draft returns to the selected saved event without 
   assert.equal(app.get('history-creation-status').hidden,true);
 
   const css=readFileSync(new URL('../web/style.css',import.meta.url),'utf8');
-  assert.match(css,/body:not\(\.invitation-open\):has\(\.history-gallery-expanded\) \.exploration-rail\s*\{/,'the mobile gallery drawer is suspended while the draft form is open');
-  assert.match(css,/body:not\(\.invitation-open\):has\(\.history-gallery-expanded\) \.site-header\s*\{/,'mobile gallery chrome no longer covers the draft header');
-  assert.match(css,/@media\(min-width:701px\) and \(max-width:1199px\)\{body:not\(\.invitation-open\) \.history-gallery-expanded \.history-timeline-suggestion-groups\{grid-template-columns:minmax\(0,1fr\)\}\}/,'intermediate tablet and laptop widths use one gallery column beside the right event sheet');
-  assert.match(css,/@media\(min-width:701px\) and \(max-width:799px\)\{body:not\(\.invitation-open\) \.history-gallery-expanded \.history-timeline-suggestion\{grid-template-columns:minmax\(0,1fr\)\}body:not\(\.invitation-open\) \.history-gallery-expanded \.history-timeline-suggestion-image,body:not\(\.invitation-open\) \.history-gallery-expanded \.history-timeline-suggestion-image-placeholder,body:not\(\.invitation-open\) \.history-gallery-expanded \.history-timeline-suggestion-content\{grid-column:1\}\}/,'the narrow 701–799px gallery stacks its thumbnail above full-width text');
-  assert.match(css,/body:not\(\.invitation-open\) \.history-gallery-expanded \.history-timeline-suggestion-groups\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/,'desktop gallery keeps two columns above the intermediate-width override');
-  assert.match(css,/@media\(max-width:700px\)\{[\s\S]*?body:not\(\.invitation-open\):has\(\.history-gallery-expanded\) \.exploration-rail\{[^}]*inset:8px!important[^}]*width:auto!important/,'the phone gallery drawer keeps its full-width inset layout');
+  assert.match(css,/\.history-suggestion-deck-portal\{position:fixed/,'suggestion review renders in a viewport-level overlay');
+  assert.match(css,/@media\(max-width:700px\)\{body\.history-phone-deck-active \.exploration-rail\{display:none!important\}/,'compact review hides the exploration rail while open');
+  assert.match(css,/\.history-suggestion-deck-portal>\.history-timeline-suggestions:not\(\[hidden\]\)/,'List content is styled inside its review overlay');
 
   app.get('show-invitation').click(); app.get('prompt').value='Escape draft';
   const escaped=app.document.keydown('Escape');
@@ -1045,8 +1015,8 @@ test('automatically prepared suggestion scenes refresh every gallery card withou
   const cards=findNodes(app.get('history-timeline-host'),node=>node?.className==='history-timeline-suggestion');
   assert.equal(cards.length,3);
   assert.deepEqual(cards.map(card=>findNodes(card,node=>node?.tagName==='img')[0]?.src),suggestions.map(item=>generated.get(item.id)));
-  const windowChip=findNodes(app.get('history-timeline-host'),node=>node?.dataset?.action==='suggest-window')[0];
-  assert.match(windowChip?.textContent || '',/(?:Current date · )?3 ·/,'cached window count matches the three unique suggestion cards');
+  const windowRow=findNodes(app.get('history-timeline-host'),node=>node?.dataset?.action==='open-window-deck')[0];
+  assert.match(windowRow?.textContent || '',/3 possibilities around 270 CE/,'the saved-window row counts the three unique suggestion cards');
   assert.equal(app.ui.state().history.date,initial.date);
   assert.equal(app.ui.state().history.selectedEventId,initial.eventId);
   assert.equal(app.get('hero-image').src,generated.get('gallery-b'),'the selected sheet receives its image without changing selection');

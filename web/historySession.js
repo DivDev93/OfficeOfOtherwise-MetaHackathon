@@ -14,8 +14,12 @@ const eventAtOrBefore = (history, year) => {
 };
 
 export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setTimeout, clearTimer = clearTimeout,
+  requestFrame = callback => typeof globalThis.requestAnimationFrame === 'function'
+    ? globalThis.requestAnimationFrame(callback) : setTimeout(callback, 0),
+  cancelFrame = handle => typeof globalThis.cancelAnimationFrame === 'function'
+    ? globalThis.cancelAnimationFrame(handle) : clearTimeout(handle),
   onChange = () => {}, debounceMs = 800 } = {}) {
-  let context = null, timer = null, weaveFeedbackTimer = null, generation = 0, preferenceRequest = 0, heldOwnerKey = '';
+  let context = null, timer = null, weaveFeedbackTimer = null, weaveFeedbackFrame = null, generation = 0, preferenceRequest = 0, heldOwnerKey = '';
   const preferenceWriteVersion = { autoSuggest: 0, autoWeave: 0 };
   let batchCheckOwner = 0;
   let autoWeaveTask = null;
@@ -27,6 +31,25 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   const state = { autoSuggest: true, autoWeave: false, autoWeaveRunning: false, questionId: '', historyId: '', selectedEventId: '', heldSuggestionIds: [], date: null, window: null, question: null, questions: [], histories: [],
     suggestions: [], status: '', paused: false, loading: false, busyIds: new Set(), history: null, windowCached: false, windowStatus: '', batchCheckUncertain:null, weaveFeedback:null };
   const emit = () => { const snapshot = { ...state, suggestions: [...state.suggestions], heldSuggestionIds: [...state.heldSuggestionIds], busyIds: new Set(state.busyIds) }; onChange(snapshot); for (const listener of listeners) listener(snapshot); };
+  function clearWeaveFeedback() {
+    if (weaveFeedbackFrame !== null) cancelFrame(weaveFeedbackFrame);
+    if (weaveFeedbackTimer !== null) clearTimer(weaveFeedbackTimer);
+    weaveFeedbackFrame = null; weaveFeedbackTimer = null; state.weaveFeedback = null;
+  }
+  function startWeaveFeedbackAfterRender(feedback) {
+    weaveFeedbackFrame = requestFrame(() => {
+      weaveFeedbackFrame = null;
+      if (state.weaveFeedback !== feedback) return;
+      feedback.expiresAt = Date.now() + 2000;
+      weaveFeedbackTimer = setTimer(() => {
+        if (state.weaveFeedback !== feedback) return;
+        weaveFeedbackTimer = null;
+        state.weaveFeedback = null;
+        emit();
+      }, 2000);
+      emit();
+    });
+  }
   const isCurrent = (token, identity) => token === generation && context?.questionId === identity.questionId
     && (!identity.historyId || context?.historyId === identity.historyId);
   function cachedEntry(history, year) {
@@ -230,6 +253,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     if (!context || state.busyIds.has(busyId)) return null;
     const identity = { ...context, window: { ...state.window }, windowCached: state.windowCached }, token = generation;
     state.busyIds.add(busyId); state.status = 'Saving history…'; emit();
+    let weaveFeedbackToStart = null;
     try {
       const response = await fetchImpl(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
         questionId: identity.questionId, historyId: identity.historyId, ...payload,
@@ -291,21 +315,21 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
           context.window = windowFor(newestWoven.year);
           state.window = { ...context.window };
           updateWindowSuggestions();
-          if (weaveFeedbackTimer !== null) clearTimer(weaveFeedbackTimer);
-          const feedback = { eventIds:newWovenEvents.map(event => String(event.id)), expiresAt:Date.now() + 2000 };
+          clearWeaveFeedback();
+          const feedback = { eventIds:newWovenEvents.map(event => String(event.id)), expiresAt:null };
           state.weaveFeedback = feedback;
-          weaveFeedbackTimer = setTimer(() => {
-            if (state.weaveFeedback !== feedback) return;
-            weaveFeedbackTimer = null;
-            state.weaveFeedback = null;
-            emit();
-          }, 2000);
+          weaveFeedbackToStart = feedback;
         }
       }
       if (forkedHistory && state.autoSuggest && !state.windowCached && !state.suggestions.length) scheduleSuggest();
       return data;
     } catch (error) { if (isCurrent(token, identity)) state.status = error.message || 'Could not update history.'; return null; }
-    finally { if (token === generation && context?.questionId === identity.questionId) { state.busyIds.delete(busyId); emit(); } }
+    finally {
+      if (token === generation && context?.questionId === identity.questionId) {
+        state.busyIds.delete(busyId); emit();
+        if (weaveFeedbackToStart && state.weaveFeedback === weaveFeedbackToStart) startWeaveFeedbackAfterRender(weaveFeedbackToStart);
+      }
+    }
   }
   async function checkWeaveBatch(suggestionIds = [], { retryOf = '', automatic = false } = {}) {
     if (!context || !Array.isArray(suggestionIds) || !suggestionIds.length) return null;
@@ -439,10 +463,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     const next = { questionId, historyId, eventId, date, window: windowFor(date), readOnly };
     const sameHistory = context?.questionId === questionId && context?.historyId === historyId;
     const sameWindow = sameHistory && context.window.fromYear <= date && context.window.toYear >= date;
-    if (!sameHistory && state.weaveFeedback) {
-      if (weaveFeedbackTimer !== null) clearTimer(weaveFeedbackTimer);
-      weaveFeedbackTimer = null; state.weaveFeedback = null;
-    }
+    if (!sameHistory && state.weaveFeedback) clearWeaveFeedback();
     if (sameWindow) {
       const changed = context.eventId !== eventId || context.date !== date;
       context.eventId = eventId; context.date = date; context.readOnly = readOnly; state.selectedEventId = eventId; state.date = date;
@@ -588,10 +609,10 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   }
   function clear() {
     finalizePendingBeforeNavigation(context, state.history);
-    generation++; if (timer !== null) clearTimer(timer); timer = null; if (weaveFeedbackTimer !== null) clearTimer(weaveFeedbackTimer); weaveFeedbackTimer = null; context = null;
+    generation++; if (timer !== null) clearTimer(timer); timer = null; clearWeaveFeedback(); context = null;
     batchCheckOwner++; batchPlanCache.clear(); batchPlanFlights.clear(); batchCheckUncertainCache.clear(); state.batchCheckUncertain = null;
     heldOwnerKey = ''; state.questionId = ''; state.historyId = ''; state.selectedEventId = ''; state.heldSuggestionIds = []; state.date = null; state.window = null; state.suggestions = [];
-    state.status = ''; state.loading = false; state.paused = false; state.autoWeaveRunning = false; state.busyIds.clear(); state.history = null; state.question = null; state.histories = []; state.questions = []; state.windowCached = false; state.windowStatus = ''; state.weaveFeedback = null; emit();
+    state.status = ''; state.loading = false; state.paused = false; state.autoWeaveRunning = false; state.busyIds.clear(); state.history = null; state.question = null; state.histories = []; state.questions = []; state.windowCached = false; state.windowStatus = ''; emit();
   }
   function hover() { /* Preview is deliberately inert: never generate from hover. */ }
   readPreferences();

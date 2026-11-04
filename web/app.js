@@ -50,7 +50,15 @@ const historyAutoSceneRefs = new Map(), historyAutoScenePreparationKeys = new Se
 let historyAutoSceneQueue = Promise.resolve(), historyAutoScenePollTimer = null;
 const historyTimeline = mountHistoryTimeline($('history-timeline-host'), { getState:() => historySession.getState(), subscribe:fn => historySession.subscribe(fn), session:historySession,
   onHistoryChange:id => historySession.selectHistory(id), onEventSelect:id => selectHistoryEvent(id), onWindowSelect:window => historySession.selectSuggestionWindow(window),
+  onClose:() => { setAtlasFocused(true); syncAtlasCompactButtons(); $('atlas-show-tree')?.focus?.({preventScroll:true}); },
   isCompact:() => window.matchMedia?.('(max-width: 700px)').matches === true,
+  onWeaveComplete:() => {
+    if (!isAtlasPhone()) return;
+    setAtlasFocused(false);
+    document.body.classList.add('atlas-panels-open');
+    document.body.classList.remove('atlas-details-open');
+    syncAtlasCompactButtons();
+  },
   onCompactInspect:() => {
     if (!window.matchMedia?.('(max-width: 700px)').matches) return;
     if (!document.body.classList.contains('atlas-focused')) setAtlasFocused(true);
@@ -483,7 +491,7 @@ function updateHistoryAtlasView(state = historySession.getState()) {
   // Atlas records preserve event content and media refs, so same-count hydration updates must
   // invalidate the scene just like selection, date, or geography changes do.
   const signature = JSON.stringify([state.questionId,state.historyId,state.date,state.selectedEventId,state.window,
-    surfaceMode,view.surfaceGeography,historyShowOrbit,state.question,state.history,state.suggestions,heldSuggestionIds,atlasSuggestions,state.questions,state.weaveFeedback]);
+    surfaceMode,view.surfaceGeography,historyShowOrbit,state.question,state.history,state.suggestions,heldSuggestionIds,atlasSuggestions,state.questions]);
   if (signature === historyRenderSignature && !historyRenderFailed) return;
   historyRenderSignature = signature;
   try {

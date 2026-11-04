@@ -321,10 +321,12 @@ test('ripple actions address the specific woven event when an event has multiple
 });
 
 test('last-suggestion weave preserves its cached window and never auto-generates a follow-up', async () => {
-  const clock = timers(), cachedWindow = { fromYear:1503,toYear:2503 }, candidate = suggestion('only-one', cachedWindow);
+  const clock = timers(), frames = [], cachedWindow = { fromYear:1503,toYear:2503 }, candidate = suggestion('only-one', cachedWindow);
   const original = { ...history('h',[candidate]), suggestionWindows:[{ window:cachedWindow,status:'ready',batches:1,suggestionCount:1 }] };
   const updated = { ...history('h'), events:[...original.events,{ id:'only-one',year:1978,title:'Woven event',checkFlags:[] }] };
-  const session = createHistorySession({ setTimer:clock.setTimer, clearTimer:clock.clearTimer, fetchImpl:async (url,init={}) => {
+  const session = createHistorySession({ setTimer:clock.setTimer, clearTimer:clock.clearTimer,
+    requestFrame:callback=>{frames.push(callback);return callback;},cancelFrame:callback=>{const index=frames.indexOf(callback);if(index>=0)frames.splice(index,1);},
+    fetchImpl:async (url,init={}) => {
     if (url === '/api/history/preferences') return response({ autoSuggest:true });
     if (url.startsWith('/api/histories')) return response({ questions:[{ id:'q',histories:[original] }] });
     if (url === '/api/history/weave') return response({ history:updated,event:updated.events.at(-1) });
@@ -337,6 +339,8 @@ test('last-suggestion weave preserves its cached window and never auto-generates
   assert.equal(session.getState().windowCached,true);
   assert.equal(session.getState().suggestions.length,0);
   assert.equal(session.getState().history.suggestionWindows.find(item=>item.window.fromYear===1503)?.status,'ready');
+  assert.equal(clock.size,0,'feedback duration starts after the synchronous render');
+  frames.shift()();
   assert.equal(clock.size,1,'the only scheduled timer clears transient weave feedback, not a suggestion request');
   assert.deepEqual(session.getState().weaveFeedback.eventIds,['only-one']);
   clock.fire(); assert.equal(clock.size,0);
@@ -348,8 +352,10 @@ test('new single and batch weave events select their canonical date and expose e
   for (const path of ['/api/history/weave','/api/history/weave-batch']) {
     const original=history('h'), woven={id:`woven-${path.endsWith('batch')?'batch':'single'}`,year:-5000,title:'Earlier observatory',checkFlags:[]};
     const updated={...original,events:[...original.events,woven]}, emissions=[], calls=[];
-    const clock=timers();
-    const session=createHistorySession({setTimer:clock.setTimer,clearTimer:clock.clearTimer,fetchImpl:async(url,init={})=>{
+    const clock=timers(), frames=[];
+    const session=createHistorySession({setTimer:clock.setTimer,clearTimer:clock.clearTimer,
+      requestFrame:callback=>{frames.push(callback);return callback;},cancelFrame:callback=>{const index=frames.indexOf(callback);if(index>=0)frames.splice(index,1);},
+      fetchImpl:async(url,init={})=>{
       calls.push(url);
       if(url==='/api/history/preferences')return response({autoSuggest:false});
       if(url.startsWith('/api/histories'))return response({questions:[{id:'q',histories:[original]}]});
@@ -367,8 +373,12 @@ test('new single and batch weave events select their canonical date and expose e
     assert.equal(emitted.date,-5000,'render subscribers see the new date with the new event in one emission');
     assert.equal(emitted.history.events.some(event=>event.id===woven.id),true);
     assert.deepEqual(state.weaveFeedback.eventIds,[woven.id]);
+    assert.equal(state.weaveFeedback.expiresAt,null,'the two-second window does not start until after the synchronous subscribers render');
+    assert.equal(clock.size,0);
+    assert.equal(frames.length,1,'feedback starts on the next animation frame');
+    frames.shift()();
     assert.ok(state.weaveFeedback.expiresAt >= Date.now()+1990 && state.weaveFeedback.expiresAt <= Date.now()+2000);
-    assert.equal(clock.size,1,'new canonical records get one transient feedback timer');
+    assert.equal(clock.size,1,'new canonical records get one transient feedback timer after the first rendered frame');
     clock.fire();
     assert.equal(session.getState().weaveFeedback,null,'feedback clears after two seconds');
     assert.equal(calls.includes('/api/history/suggest'),false,'the date bump never triggers a new suggestion request');

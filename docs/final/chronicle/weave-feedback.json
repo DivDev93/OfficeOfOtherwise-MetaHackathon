@@ -1,0 +1,85 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "interaction": "Native mouse click on List row Weave",
+  "commitStatus": 200,
+  "selectedYear": -44,
+  "totalEventsAfterWeave": 9,
+  "eventsAsOfSelectedYear": 8,
+  "samples": [
+    {
+      "elapsedMs": 46,
+      "highlightActive": true,
+      "widthPx": 21.67,
+      "heightPx": 21.13
+    },
+    {
+      "elapsedMs": 349,
+      "highlightActive": true,
+      "widthPx": 19.72,
+      "heightPx": 19.23
+    },
+    {
+      "elapsedMs": 540,
+      "highlightActive": true,
+      "widthPx": 21.59,
+      "heightPx": 21.06
+    },
+    {
+      "elapsedMs": 862,
+      "highlightActive": true,
+      "widthPx": 21.49,
+      "heightPx": 20.95
+    },
+    {
+      "elapsedMs": 1194,
+      "highlightActive": true,
+      "widthPx": 19.37,
+      "heightPx": 18.89
+    },
+    {
+      "elapsedMs": 1516,
+      "highlightActive": true,
+      "widthPx": 18.68,
+      "heightPx": 18.22
+    },
+    {
+      "elapsedMs": 1786,
+      "highlightActive": true,
+      "widthPx": 19.07,
+      "heightPx": 18.6
+    },
+    {
+      "elapsedMs": 2010,
+      "highlightActive": false,
+      "widthPx": 17.92,
+      "heightPx": 17.47
+    },
+    {
+      "elapsedMs": 2347,
+      "highlightActive": false,
+      "widthPx": 17.92,
+      "heightPx": 17.47
+    },
+    {
+      "elapsedMs": 2543,
+      "highlightActive": false,
+      "widthPx": 17.92,
+      "heightPx": 17.47
+    },
+    {
+      "elapsedMs": 2869,
+      "highlightActive": false,
+      "widthPx": 17.92,
+      "heightPx": 17.47
+    },
+    {
+      "elapsedMs": 3151,
+      "highlightActive": false,
+      "widthPx": 17.92,
+      "heightPx": 17.47
+    }
+  ]
+}
