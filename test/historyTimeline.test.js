@@ -230,6 +230,33 @@ test('pending and unavailable batch ripple flags expose one explicit combined re
   assert.deepEqual(calls,[[['later-a','later-b'],['woven-a','woven-b']]]);
 });
 
+test('empty histories show starting points without verdict badges or empty-history boilerplate', () => {
+  const fit={...event('start-fit',120,'A shrine is built',{verdict:'fits',reason:'The supplied history contains no events, so this possibility conflicts with nothing listed.'}),summary:'The shrine becomes a stop for travelers.'};
+  const conflict={...event('start-conflict',130,'An impossible overlap',{verdict:'conflicts',conflictsWith:'future',reason:'The supplied history contains no events, so nothing conflicts with this possibility.'})};
+  const meaningful={...event('start-meaningful',140,'Caravanserai network',{verdict:'fits',reason:'Seasonal hosts maintain a route from Mecca to the coast.'})};
+  const history={id:'starting-history',events:[],suggestions:[fit,conflict,meaningful],suggestionWindows:[{window:{fromYear:100,toYear:199},status:'ready'}]};
+  const state={questionId:'starting-question',question:{id:'starting-question',histories:[history]},history,histories:[history],historyId:history.id,date:150,window:{fromYear:100,toYear:199},suggestions:history.suggestions};
+  const mounted=mountHistoryTimeline(new Element('main',document),{getState:()=>state,document});
+  const suggestions=mounted.element.children[2], cards=()=>suggestions.queryAll('article').filter(node=>node.className==='history-timeline-suggestion');
+  assert.equal(suggestions.queryAll('h3')[0].textContent,'Starting points · 3');
+  assert.equal(suggestions.getAttribute('aria-label'),'Starting points · 3 in this timeline');
+  assert.equal(suggestions.queryAll('div').find(node=>node.className==='history-timeline-suggestion-groups').getAttribute('aria-label'),'Starting points');
+  assert.equal(suggestions.queryAll('h4').some(node=>node.textContent==='Starting points'),false,'the Starting points label is not duplicated below the primary heading');
+  assert.equal(cards().some(card=>card.queryAll('div').some(node=>String(node.className).includes('history-verdict'))),false,'the UI omits both fits and conflicts badges');
+  assert.deepEqual(cards().map(card=>card.queryAll('input').find(node=>node.dataset.batchSuggestion)?.checked),[true,false,true],
+    'hiding verdicts does not alter fit preselection or conflict exclusion');
+  assert.doesNotMatch(cards()[0].textContent,/supplied history contains no events/i);
+  assert.doesNotMatch(cards()[1].textContent,/supplied history contains no events/i);
+  assert.match(cards()[0].textContent,/The shrine becomes a stop for travelers/,'meaningful summaries remain visible');
+  assert.match(cards()[2].textContent,/Seasonal hosts maintain a route/,'meaningful reasons remain visible');
+  assert.ok(cards()[0].queryAll('button').some(button=>button.dataset.action==='weave'));
+  assert.ok(cards()[1].queryAll('button').some(button=>button.dataset.action==='fork-suggestion'));
+  state.history={...history,events:[event('canonical-event',50,'A canonical event')]};
+  state.histories=[state.history]; mounted.render(state);
+  const populatedCards=mounted.element.children[2].queryAll('article').filter(node=>node.className==='history-timeline-suggestion');
+  assert.ok(populatedCards[0].queryAll('div').some(node=>String(node.className).includes('history-verdict')),'canonical history restores fit/conflict verdict badges');
+});
+
 test('preview portals above filtered rails and restores to the timeline on close or destroy', async () => {
   const portalDocument={createElement(tag){return new Element(tag,portalDocument);},createTextNode(text){return {textContent:String(text),queryAll:()=>[]};}};
   portalDocument.body=new Element('body',portalDocument);

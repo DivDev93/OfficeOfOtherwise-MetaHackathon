@@ -2,6 +2,7 @@ import { deriveEras } from './historyModel.js';
 import { projectBatchPlan } from './historyBatch.js';
 
 const labelYear = year => `${Math.abs(year).toLocaleString()} ${year < 0 ? 'BCE' : 'CE'}`;
+const isEmptyHistoryBoilerplateReason = reason => /\b(?:the )?(?:supplied )?history (?:contains|has|includes) no (?:prior |existing )?events\b|\bno (?:prior|existing|canonical|saved) events\b|\bthere (?:are|were) no (?:prior |existing )?events\b|\bempty history\b/i.test(reason);
 const make = (document, tag, text = null, className = '') => {
   const node = document.createElement(tag);
   if (text !== null) node.textContent = String(text);
@@ -567,9 +568,10 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       seenSuggestionIds.add(id);
       if (item.verdict !== 'fits' || item.conflictsWith) selectedSuggestionIds.delete(id);
     }
-    const heading = make(document, 'h3', `Saved suggestions · ${savedSuggestions.length}`);
+    const startingPoints = !active.events.length;
+    const heading = make(document, 'h3', `${startingPoints ? 'Starting points' : 'Saved suggestions'} · ${savedSuggestions.length}`);
     const subheading = make(document,'p',`Browse every saved suggestion in this timeline. The date remains ${dateText} until you move the timebar.`,'history-timeline-suggestions-context');
-    suggestions.setAttribute('aria-label', `All ${savedSuggestions.length} saved suggestions in this timeline`); suggestions.append(heading,subheading);
+    suggestions.setAttribute('aria-label', startingPoints ? `Starting points · ${savedSuggestions.length} in this timeline` : `All ${savedSuggestions.length} saved suggestions in this timeline`); suggestions.append(heading,subheading);
     const controls = make(document, 'div', null, 'history-suggestion-controls');
     const autoLabel = make(document, 'label', null, 'history-auto-label');
     const autoToggle = make(document, 'input'); autoToggle.type = 'checkbox'; autoToggle.checked = state.autoSuggest !== false; autoToggle.dataset.autoSuggest = 'true';
@@ -640,6 +642,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const orderedGroups = galleryExpanded ? [['all',{window:null,items:visibleSuggestions}]]
       : [...groups.entries()].sort((a,b) => (a[1].window?.fromYear ?? a[1].items[0]?.year ?? 0) - (b[1].window?.fromYear ?? b[1].items[0]?.year ?? 0));
     const groupList = make(document,'div',null,'history-timeline-suggestion-groups');
+    if (startingPoints) groupList.setAttribute('aria-label','Starting points');
     for (const [,group] of orderedGroups) {
       const groupNode = make(document,'section',null,'history-timeline-suggestion-group');
       const groupWindow = group.window;
@@ -664,13 +667,16 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
         const currentDateWindow = item.window?.fromYear === state.window?.fromYear && item.window?.toYear === state.window?.toYear;
         const windowText = galleryExpanded ? currentDateWindow ? ' · Current date window' : ''
           : item.window ? ` · ${labelYear(item.window.fromYear)}–${labelYear(item.window.toYear)}${currentDateWindow ? ' · Current date window' : ''}` : '';
-        content.append(make(document, 'div', `${labelYear(item.year)} · ${item.verdict === 'conflicts' ? 'Conflicts' : 'Fits'}${windowText}`, `history-verdict ${item.verdict === 'conflicts' ? 'conflicts' : 'fits'}`));
+        const startingPoint = !active.events.length;
+        content.append(make(document, 'div', startingPoint ? `${labelYear(item.year)}${windowText}` : `${labelYear(item.year)} · ${item.verdict === 'conflicts' ? 'Conflicts' : 'Fits'}${windowText}`,
+          startingPoint ? 'history-suggestion-starting-meta' : `history-verdict ${item.verdict === 'conflicts' ? 'conflicts' : 'fits'}`));
         const title = button(item.id === state.selectedEventId ? `Selected · ${item.title || 'Untitled possibility'}` : item.title || 'Untitled possibility','select-suggestion',item.id);
         title.className += ' history-timeline-suggestion-title'; title.setAttribute('aria-pressed',String(item.id === state.selectedEventId));
         title.setAttribute('aria-label',`${item.id === state.selectedEventId ? 'Selected suggestion' : 'Inspect suggestion'}: ${item.title || 'Untitled possibility'}, ${labelYear(item.year)}`);
         content.append(title,make(document, 'p', item.summary || ''));
         const reason = typeof item.reason === 'string' ? item.reason.trim() : '';
-        if (reason && !/^migrated from (?:an )?earlier exploration\.?$/i.test(reason)) content.append(make(document, 'p', reason, 'history-suggestion-reason'));
+        if (reason && !/^migrated from (?:an )?earlier exploration\.?$/i.test(reason)
+            && !(startingPoint && isEmptyHistoryBoilerplateReason(reason))) content.append(make(document, 'p', reason, 'history-suggestion-reason'));
         const actions = make(document,'div',null,'history-timeline-suggestion-actions');
         if (item.id === state.selectedEventId) actions.append(make(document,'span','Selected','history-timeline-suggestion-selected'));
         if (item.verdict === 'conflicts') actions.append(button('What if instead…', 'fork-suggestion', item.id));
