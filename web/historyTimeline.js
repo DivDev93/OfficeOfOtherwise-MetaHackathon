@@ -93,7 +93,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   document.defaultView?.addEventListener?.('resize',positionDeckPortal);
   let batchScope = '', batchNotice = '';
   const batchPreviewState = { open:false, loading:false, error:'', plan:null, scope:'', source:'list', selectionKey:'', selectedIds:[], acceptedMergeIds:new Set(), excludedSuggestionIds:new Set(), focusAction:'batch-cancel', focusId:'', requestId:0 };
-  let galleryExpanded = false, lastRenderedHistoryId = '', lastRenderedSelectionId = '';
+  let galleryExpanded = false, lastRenderedHistoryId = '', lastRenderedSelectionId = '', lastSuggestionActionHistoryId = '', pendingSuggestionActionHistoryId = '';
   const suggestionDetailKey = (historyId,suggestionId) => `${String(historyId || '')}:${String(suggestionId || '')}`;
   let comparisonOpen = false, comparisonHasFocus = false, comparisonFocusAction = 'back-to-timeline', comparisonFocusHistoryId = '', comparisonCards = null, comparisonPreviousRail = null, comparisonPreviousScrollTop = null;
   const button = (label, action, id, extra = {}) => {
@@ -177,7 +177,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       deckSwipe?.decide?.(card,keep?1:-1,event,'button');
     }
     else if (node.dataset.action==='deck-inspect') inspectSuggestion(node.dataset.id);
-    else if (node.dataset.action==='deck-weave') await session?.weave?.(node.dataset.id);
+    else if (node.dataset.action==='deck-weave') await weaveSuggestion(node.dataset.id);
     else if (node.dataset.action==='deck-fork') await session?.forkSuggestion?.(node.dataset.id);
     else if (node.dataset.action==='deck-rekeep') {
       const current=deckContext; if (!current) return;
@@ -342,7 +342,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const review=deckState.review({ ...current.owner,suggestions:current.suggestions });
       syncHeldSuggestionIds(current.state,current.active,review.keptIds); render(getState?.() || {});
     }
-    else if (node.dataset.action === 'weave') await session?.weave?.(node.dataset.id);
+    else if (node.dataset.action === 'weave') await weaveSuggestion(node.dataset.id);
     else if (node.dataset.action === 'fork-suggestion') await session?.forkSuggestion?.(node.dataset.id);
     else if (node.dataset.action === 'suggest-window') {
       const group = (suggestions.queryAll?.('section') || []).find(item => item.dataset.windowKey === `${node.dataset.fromYear}:${node.dataset.toYear}`);
@@ -428,7 +428,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     portalBatchPreview(true);
     render(getState?.() || {});
     const plan = await session?.checkWeaveBatch?.(selectedIds,retryOf ? {retryOf} : {});
-    const currentIds = source === 'deck' ? selectedIds : [...(batchSelections.get(batchScope) || [])].sort();
+    const currentIds = source !== 'list' ? selectedIds : [...(batchSelections.get(batchScope) || [])].sort();
     const currentKey = `${batchScope}\u0000${source}\u0000${currentIds.join('\u0000')}`;
     if (requestId !== batchPreviewState.requestId || scope !== batchScope || currentKey !== batchPreviewState.selectionKey) return;
     batchPreviewState.loading = false; batchPreviewState.operation = '';
@@ -439,6 +439,20 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       batchPreviewState.error = `${sessionState.status || 'Could not prepare this preview.'}${uncertain?.possibleCharge ? ' A previous check may have incurred a charge; use Retry batch check to reconcile it.' : ''}`;
     }
     render(getState?.() || {});
+    return batchPreviewState.plan;
+  }
+  async function weaveSuggestion(suggestionId) {
+    const plan = await openBatchPreview('',[String(suggestionId)],'single');
+    if (!plan) return false;
+    let projection;
+    try { projection = projectBatchPlan(plan); }
+    catch (error) {
+      batchPreviewState.error = error.message || 'Could not validate the checked weave plan.';
+      render(getState?.() || {}); return false;
+    }
+    if (projection.unresolvedConflicts?.length) return false;
+    await commitBatchPreview();
+    return true;
   }
   function closeBatchPreview() {
     if (!batchPreviewState.open) return;
@@ -689,6 +703,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const key=String(item.inspiredByEventId), ids=quietSuggestions.get(key)||new Set(); ids.add(String(item.id)); quietSuggestions.set(key,ids);
     }
     const selected = state.selectedEventId;
+    const weaveFeedbackIds = new Set((state.weaveFeedback?.eventIds || []).map(String));
     const selectionChanged = String(active.id) !== lastRenderedHistoryId || String(selected ?? '') !== lastRenderedSelectionId;
     const timelineSuggestionCount = new Set([...(active.suggestions || []),...(state.suggestions || [])]
       .filter(item=>item?.id!=null&&!wovenSuggestionIds.has(String(item.id))).map(item => String(item.id))).size;
@@ -731,6 +746,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const list = make(document, 'ol', null, 'history-era-events');
       for (const item of era.events) {
         const row = make(document, 'li', null, 'history-event-row'); row.dataset.eventId = item.id;
+        if (weaveFeedbackIds.has(String(item.id))) row.className += ' history-event-woven-feedback';
         if (item.pending === true) { row.dataset.pending = 'true'; row.className += ' history-event-pending'; }
         if (item.id === selected) row.dataset.selected = 'true';
         const select = button(`${labelYear(item.year)} · ${item.title}`, 'select-event', item.id); select.setAttribute('aria-current', String(item.id === selected));
@@ -1061,6 +1077,26 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       }
       lastRenderedSelectionId = String(state.selectedEventId ?? '');
       lastRenderedHistoryId = String(active.id);
+    }
+    const actionHistoryId = String(active.id || '');
+    if (actionHistoryId && actionHistoryId !== lastSuggestionActionHistoryId && actionHistoryId !== pendingSuggestionActionHistoryId) {
+      const firstSuggestionAction = findAction(suggestions, 'weave') || findAction(deckPortal, 'deck-weave');
+      // The suggestion tray and rail both clip their contents. Keep the first primary
+      // action reachable when a history opens, without changing the user's later scroll.
+      if (firstSuggestionAction) {
+        pendingSuggestionActionHistoryId = actionHistoryId;
+        const revealAction = () => {
+          if (pendingSuggestionActionHistoryId !== actionHistoryId) return;
+          pendingSuggestionActionHistoryId = '';
+          const current = getState?.() || {};
+          if (String(current.history?.id || current.historyId || '') !== actionHistoryId) return;
+          const action = findAction(suggestions, 'weave') || findAction(deckPortal, 'deck-weave');
+          action?.scrollIntoView?.({block:'nearest'});
+          lastSuggestionActionHistoryId = actionHistoryId;
+        };
+        if (document.defaultView?.requestAnimationFrame) document.defaultView.requestAnimationFrame(revealAction);
+        else revealAction();
+      }
     }
     // Session setters emit synchronously. Run after the complete outer render so a nested
     // render replaces a finished tree instead of interleaving duplicate tray children.

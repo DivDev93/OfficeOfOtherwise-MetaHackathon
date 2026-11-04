@@ -475,14 +475,15 @@ function updateHistoryAtlasView(state = historySession.getState()) {
   }
   for (const item of state.suggestions || []) if (item?.id != null) atlasSuggestionsById.set(String(item.id), item);
   const atlasSuggestions = [...atlasSuggestionsById.values()];
-  const view = { question:state.question, historyId:state.historyId, asOfYear:state.date, date:state.date,
+  const view = { question:state.weaveFeedback ? { ...state.question, weaveFeedback:state.weaveFeedback } : state.question,
+    historyId:state.historyId, asOfYear:state.date, date:state.date,
     window:state.window, suggestions:atlasSuggestions, heldSuggestionIds, selectedEventId:state.selectedEventId,
     questions:state.questions, activeQuestionId:state.questionId, showOrbit:historyShowOrbit,
     surfaceMode, composedGeography, surfaceGeography:surfaceMode === 'present' ? presentDayGeography() : surfaceGeography };
   // Atlas records preserve event content and media refs, so same-count hydration updates must
   // invalidate the scene just like selection, date, or geography changes do.
   const signature = JSON.stringify([state.questionId,state.historyId,state.date,state.selectedEventId,state.window,
-    surfaceMode,view.surfaceGeography,historyShowOrbit,state.question,state.history,state.suggestions,heldSuggestionIds,atlasSuggestions,state.questions]);
+    surfaceMode,view.surfaceGeography,historyShowOrbit,state.question,state.history,state.suggestions,heldSuggestionIds,atlasSuggestions,state.questions,state.weaveFeedback]);
   if (signature === historyRenderSignature && !historyRenderFailed) return;
   historyRenderSignature = signature;
   try {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatHistoryQuestionChip, historyAtlasFrameBounds, historyAtlasStatus, historyOrbitMarkerScale, historyOrbitPositions, historySurfaceVisibility, historyWindowForYear, historyYearToAtlasX, historyZoomPresentation, historyZoomStage, layoutHistoryPins, projectHistoryAtlas, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../web/historyAtlas.js';
+import { formatHistoryQuestionChip, historyAtlasFrameBounds, historyAtlasStatus, historyOrbitMarkerScale, historyOrbitPositions, historySurfaceVisibility, historyWeaveFeedbackIntensity, historyWindowForYear, historyYearToAtlasX, historyZoomPresentation, historyZoomStage, layoutHistoryPins, projectHistoryAtlas, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../web/historyAtlas.js';
 import { fitCenteredCameraDistance } from '../web/atlasLayout.js';
 
 const place = { name: 'Lake Chad', lat: 13, lon: 14 };
@@ -50,6 +50,18 @@ test('Atlas projection shows stable gold event pins through the date and highlig
     { id: 'marsh', visualKind: 'history-event', highlighted: true, selectionEventId: 'marsh' },
   ]);
   assert.equal(projected.latestEvent, source.histories[0].events[1]);
+});
+
+test('weave feedback tags only newly woven canonical pins and expires without restarting', () => {
+  const source = question();
+  source.weaveFeedback = { eventIds:['marsh', 'not-in-this-history'], expiresAt:Date.now() + 2000 };
+  const projected = projectHistoryAtlas(source, { historyId:'history-main', asOfYear:-2500,
+    window:{ fromYear:-3000, toYear:-2001 } });
+  assert.equal(projected.pins.find(pin => pin.id === 'marsh').wovenFeedbackExpiresAt, source.weaveFeedback.expiresAt);
+  assert.equal(projected.pins.find(pin => pin.id === 'wetlands').wovenFeedbackExpiresAt, undefined);
+  assert.equal(historyWeaveFeedbackIntensity(source.weaveFeedback.expiresAt, Date.now(), false) > 0, true);
+  assert.equal(historyWeaveFeedbackIntensity(source.weaveFeedback.expiresAt, Date.now(), true), 0.28);
+  assert.equal(historyWeaveFeedbackIntensity(source.weaveFeedback.expiresAt, source.weaveFeedback.expiresAt, false), 0);
 });
 
 test('pending canonical events retain provenance and use normal as-of date and geography', () => {

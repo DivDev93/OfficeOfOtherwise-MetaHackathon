@@ -23,6 +23,17 @@ export function isPendingHistoryEvent(world = {}) {
   return world.visualKind === 'history-event' && world.pending === true;
 }
 
+/** Return a time-based pulse strength without storing animation state on the history record. */
+export function historyWeaveFeedbackIntensity(expiresAt, now = Date.now(), reducedMotion = false) {
+  const expires = Number(expiresAt), time = Number(now);
+  if (!Number.isFinite(expires) || !Number.isFinite(time) || expires <= time) return 0;
+  if (reducedMotion) return 0.28;
+  const remaining = expires - time;
+  const elapsed = Math.max(0, 2000 - remaining);
+  const envelope = Math.min(1, remaining / 380);
+  return (0.14 + 0.48 * ((Math.sin(elapsed * Math.PI * 2 / 420 - Math.PI / 2) + 1) / 2)) * envelope;
+}
+
 /** Held suggestions remain cyan history-suggestion pins and receive a separate dashed halo. */
 export function isHeldHistorySuggestion(world = {}) {
   return world.visualKind === 'history-suggestion' && world.held === true;
@@ -246,12 +257,16 @@ export function projectHistoryAtlas(question, {
   if (!Array.isArray(activeHistory.events)) throw new Error('Atlas history requires an events array');
 
   const dateWindow = checkedWindow(window, asOfYear);
+  const weaveFeedbackIds = new Set((question.weaveFeedback?.eventIds || []).map(String));
+  const weaveFeedbackExpiresAt = Number(question.weaveFeedback?.expiresAt) || 0;
   const pastEvents = eventsAsOf(activeHistory, asOfYear);
   const latestEvent = pastEvents.at(-1) ?? null;
   const pins = pastEvents.map(event => ({
     ...event,
     historyId: activeHistory.id,
     visualKind: 'history-event',
+    ...(weaveFeedbackIds.has(String(event.id)) && weaveFeedbackExpiresAt > Date.now()
+      ? { wovenFeedbackExpiresAt:weaveFeedbackExpiresAt } : {}),
     highlighted: event.id === latestEvent?.id,
     selectionEventId: event.id,
   }));

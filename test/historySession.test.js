@@ -337,16 +337,19 @@ test('last-suggestion weave preserves its cached window and never auto-generates
   assert.equal(session.getState().windowCached,true);
   assert.equal(session.getState().suggestions.length,0);
   assert.equal(session.getState().history.suggestionWindows.find(item=>item.window.fromYear===1503)?.status,'ready');
-  assert.equal(clock.size,0);
+  assert.equal(clock.size,1,'the only scheduled timer clears transient weave feedback, not a suggestion request');
+  assert.deepEqual(session.getState().weaveFeedback.eventIds,['only-one']);
+  clock.fire(); assert.equal(clock.size,0);
   session.setContext({ questionId:'q',historyId:'h',eventId:'only-one',date:1978 });
   assert.deepEqual(session.getState().window,cachedWindow); assert.equal(clock.size,0);
 });
 
-test('new future weave events advance the as-of date and window before emitting the updated history', async () => {
+test('new single and batch weave events select their canonical date and expose expiring feedback', async () => {
   for (const path of ['/api/history/weave','/api/history/weave-batch']) {
-    const original=history('h'), woven={id:`woven-${path.endsWith('batch')?'batch':'single'}`,year:500,title:'Future observatory',checkFlags:[]};
+    const original=history('h'), woven={id:`woven-${path.endsWith('batch')?'batch':'single'}`,year:-5000,title:'Earlier observatory',checkFlags:[]};
     const updated={...original,events:[...original.events,woven]}, emissions=[], calls=[];
-    const session=createHistorySession({fetchImpl:async(url,init={})=>{
+    const clock=timers();
+    const session=createHistorySession({setTimer:clock.setTimer,clearTimer:clock.clearTimer,fetchImpl:async(url,init={})=>{
       calls.push(url);
       if(url==='/api/history/preferences')return response({autoSuggest:false});
       if(url.startsWith('/api/histories'))return response({questions:[{id:'q',histories:[original]}]});
@@ -358,11 +361,16 @@ test('new future weave events advance the as-of date and window before emitting 
     if(path.endsWith('batch')) await session.commitWeaveBatch({suggestionIds:[woven.id],planId:'future-plan'});
     else await session.weave(woven.id);
     const state=session.getState(), emitted=emissions.at(-1);
-    assert.equal(state.date,500);
+    assert.equal(state.date,-5000,'a new event earlier than the prior as-of date becomes selected');
     assert.equal(state.selectedEventId,woven.id);
-    assert.deepEqual(state.window,{fromYear:1,toYear:1000});
-    assert.equal(emitted.date,500,'render subscribers see the new date with the new event in one emission');
+    assert.deepEqual(state.window,{fromYear:-5000,toYear:-4001});
+    assert.equal(emitted.date,-5000,'render subscribers see the new date with the new event in one emission');
     assert.equal(emitted.history.events.some(event=>event.id===woven.id),true);
+    assert.deepEqual(state.weaveFeedback.eventIds,[woven.id]);
+    assert.ok(state.weaveFeedback.expiresAt >= Date.now()+1990 && state.weaveFeedback.expiresAt <= Date.now()+2000);
+    assert.equal(clock.size,1,'new canonical records get one transient feedback timer');
+    clock.fire();
+    assert.equal(session.getState().weaveFeedback,null,'feedback clears after two seconds');
     assert.equal(calls.includes('/api/history/suggest'),false,'the date bump never triggers a new suggestion request');
   }
 });

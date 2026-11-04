@@ -22,6 +22,15 @@ test('history marker colors keep event and suggestion roles stable through hover
     'renderer passes scene-local hover identity into the executable role helper');
 });
 
+test('woven event feedback pulses only from its absolute expiry and respects reduced motion', () => {
+  assert.match(scene, /historyWeaveFeedbackIntensity\(entry\.world\?\.wovenFeedbackExpiresAt, Date\.now\(\), motionReduced\)/,
+    'each rendered event samples transient feedback against wall-clock expiry');
+  assert.match(scene, /dummy\.scale\.multiplyScalar\(1 \+ weavePulse \* 0\.34\)/,
+    'Surface pins receive the pulse scale');
+  assert.match(scene, /\.lerp\(HISTORY_GOLD_LATEST, weavePulse \* 0\.55\)/,
+    'both Surface and lifted pins brighten gold while pulsing');
+});
+
 test('surface history focus uses only canonical pin centroids and landing targets Afro-Eurasia', () => {
   const centroid = historyPinCentroid([
     { world:{ visualKind:'history-event' }, globe:{ x:1, y:0, z:0 } },

@@ -15,7 +15,7 @@ const eventAtOrBefore = (history, year) => {
 
 export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setTimeout, clearTimer = clearTimeout,
   onChange = () => {}, debounceMs = 800 } = {}) {
-  let context = null, timer = null, generation = 0, preferenceRequest = 0, heldOwnerKey = '';
+  let context = null, timer = null, weaveFeedbackTimer = null, generation = 0, preferenceRequest = 0, heldOwnerKey = '';
   const preferenceWriteVersion = { autoSuggest: 0, autoWeave: 0 };
   let batchCheckOwner = 0;
   let autoWeaveTask = null;
@@ -25,7 +25,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   const batchCheckUncertainCache = new Map();
   const listeners = new Set();
   const state = { autoSuggest: true, autoWeave: false, autoWeaveRunning: false, questionId: '', historyId: '', selectedEventId: '', heldSuggestionIds: [], date: null, window: null, question: null, questions: [], histories: [],
-    suggestions: [], status: '', paused: false, loading: false, busyIds: new Set(), history: null, windowCached: false, windowStatus: '', batchCheckUncertain:null };
+    suggestions: [], status: '', paused: false, loading: false, busyIds: new Set(), history: null, windowCached: false, windowStatus: '', batchCheckUncertain:null, weaveFeedback:null };
   const emit = () => { const snapshot = { ...state, suggestions: [...state.suggestions], heldSuggestionIds: [...state.heldSuggestionIds], busyIds: new Set(state.busyIds) }; onChange(snapshot); for (const listener of listeners) listener(snapshot); };
   const isCurrent = (token, identity) => token === generation && context?.questionId === identity.questionId
     && (!identity.historyId || context?.historyId === identity.historyId);
@@ -281,8 +281,9 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
       }
       if (!forkedHistory && data.cached !== true && ['/api/history/weave', '/api/history/weave-batch'].includes(path)) {
         const previousEventIds = new Set((priorHistory?.events || []).map(event => String(event.id)));
-        const newestWoven = canonicalEvents(state.history).filter(event => !previousEventIds.has(String(event.id))).at(-1);
-        if (newestWoven && newestWoven.year > state.date) {
+        const newWovenEvents = canonicalEvents(state.history).filter(event => event.pending !== true && !previousEventIds.has(String(event.id)));
+        const newestWoven = newWovenEvents.at(-1);
+        if (newestWoven) {
           state.date = newestWoven.year;
           state.selectedEventId = newestWoven.id;
           context.date = newestWoven.year;
@@ -290,6 +291,15 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
           context.window = windowFor(newestWoven.year);
           state.window = { ...context.window };
           updateWindowSuggestions();
+          if (weaveFeedbackTimer !== null) clearTimer(weaveFeedbackTimer);
+          const feedback = { eventIds:newWovenEvents.map(event => String(event.id)), expiresAt:Date.now() + 2000 };
+          state.weaveFeedback = feedback;
+          weaveFeedbackTimer = setTimer(() => {
+            if (state.weaveFeedback !== feedback) return;
+            weaveFeedbackTimer = null;
+            state.weaveFeedback = null;
+            emit();
+          }, 2000);
         }
       }
       if (forkedHistory && state.autoSuggest && !state.windowCached && !state.suggestions.length) scheduleSuggest();
@@ -429,6 +439,10 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     const next = { questionId, historyId, eventId, date, window: windowFor(date), readOnly };
     const sameHistory = context?.questionId === questionId && context?.historyId === historyId;
     const sameWindow = sameHistory && context.window.fromYear <= date && context.window.toYear >= date;
+    if (!sameHistory && state.weaveFeedback) {
+      if (weaveFeedbackTimer !== null) clearTimer(weaveFeedbackTimer);
+      weaveFeedbackTimer = null; state.weaveFeedback = null;
+    }
     if (sameWindow) {
       const changed = context.eventId !== eventId || context.date !== date;
       context.eventId = eventId; context.date = date; context.readOnly = readOnly; state.selectedEventId = eventId; state.date = date;
@@ -574,10 +588,10 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   }
   function clear() {
     finalizePendingBeforeNavigation(context, state.history);
-    generation++; if (timer !== null) clearTimer(timer); timer = null; context = null;
+    generation++; if (timer !== null) clearTimer(timer); timer = null; if (weaveFeedbackTimer !== null) clearTimer(weaveFeedbackTimer); weaveFeedbackTimer = null; context = null;
     batchCheckOwner++; batchPlanCache.clear(); batchPlanFlights.clear(); batchCheckUncertainCache.clear(); state.batchCheckUncertain = null;
     heldOwnerKey = ''; state.questionId = ''; state.historyId = ''; state.selectedEventId = ''; state.heldSuggestionIds = []; state.date = null; state.window = null; state.suggestions = [];
-    state.status = ''; state.loading = false; state.paused = false; state.autoWeaveRunning = false; state.busyIds.clear(); state.history = null; state.question = null; state.histories = []; state.questions = []; state.windowCached = false; state.windowStatus = ''; emit();
+    state.status = ''; state.loading = false; state.paused = false; state.autoWeaveRunning = false; state.busyIds.clear(); state.history = null; state.question = null; state.histories = []; state.questions = []; state.windowCached = false; state.windowStatus = ''; state.weaveFeedback = null; emit();
   }
   function hover() { /* Preview is deliberately inert: never generate from hover. */ }
   readPreferences();

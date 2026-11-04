@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { defaultWorldImageUrl } from './imageRefs.js';
 import { createWorldTextureFactory } from './worldTextures.js';
-import { afroEurasiaFacingVector, formatHistoryQuestionChip, historyAtlasFrameBounds, historyOrbitMarkerScale, historyOrbitPositions, historyPinCentroid, historyPinColorRole, historySurfaceVisibility, historyYearToAtlasX, historyZoomPresentation, historyZoomStage, isHeldHistorySuggestion, isPendingHistoryEvent, layoutHistoryPins, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../historyAtlas.js';
+import { afroEurasiaFacingVector, formatHistoryQuestionChip, historyAtlasFrameBounds, historyOrbitMarkerScale, historyOrbitPositions, historyPinCentroid, historyPinColorRole, historySurfaceVisibility, historyWeaveFeedbackIntensity, historyYearToAtlasX, historyZoomPresentation, historyZoomStage, isHeldHistorySuggestion, isPendingHistoryEvent, layoutHistoryPins, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../historyAtlas.js';
 import { buildHistorySceneRecords, projectHistorySpineGeometry } from '../historySpines.js';
 import { projectGeographyLocation } from '../terrainRaster.js';
 import { clusterOpacityAtPresentation, orbitClusteredIdsForPresentation, planWorldClusters } from './clusters.js';
@@ -1368,13 +1368,17 @@ export function createAtlasScene(container, {
     const surfaceMarkerDiagnostics = [];
     const canvasRect = renderer.domElement.getBoundingClientRect();
     flatEntries.forEach((entry, index) => {
+      const weavePulse = historyWeaveFeedbackIntensity(entry.world?.wovenFeedbackExpiresAt, Date.now(), motionReduced);
       dummy.position.copy(surfacePinAnchorPosition(entry, state, timestamp));
       dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), surfacePoint(entry).normalize());
       dummy.scale.setScalar(surfacePinInstanceScale(entry, dummy.position));
+      dummy.scale.multiplyScalar(1 + weavePulse * 0.34);
       dummy.updateMatrix(); surfacePinInstances.setMatrixAt(index, dummy.matrix);
-      surfacePinInstances.setColorAt(index, instanceColor.copy(worldColor(entry, currentId, hoveredId)));
+      const pinColor = instanceColor.copy(worldColor(entry, currentId, hoveredId))
+        .lerp(HISTORY_GOLD_LATEST, weavePulse * 0.55);
+      surfacePinInstances.setColorAt(index, pinColor);
       surfacePinCoreInstances.setMatrixAt(index, dummy.matrix);
-      surfacePinCoreInstances.setColorAt(index, instanceColor.copy(worldColor(entry, currentId, hoveredId)));
+      surfacePinCoreInstances.setColorAt(index, pinColor);
       const centerPx = dummy.position.clone().applyMatrix4(atlasGroup.matrixWorld).project(camera);
       const centerX = canvasRect.left + (centerPx.x + 1) * canvasRect.width / 2;
       const centerY = canvasRect.top + (1 - centerPx.y) * canvasRect.height / 2;
@@ -1409,6 +1413,7 @@ export function createAtlasScene(container, {
       mesh.count = groupEntries.length;
       groupEntries.forEach((entry, index) => {
         instanceIds.push(entry.id);
+        const weavePulse = historyWeaveFeedbackIntensity(entry.world?.wovenFeedbackExpiresAt, Date.now(), motionReduced);
         const scale = historyProjection
           ? historyOrbitMarkerScale(markerScale, entry.world) : markerScale;
         const point = worldPosition(entry, state, timestamp, markerRadius);
@@ -1417,9 +1422,12 @@ export function createAtlasScene(container, {
         surfaceYawQuaternion.setFromAxisAngle(surfaceYawAxis, facing.yaw);
         surfacePitchQuaternion.setFromAxisAngle(surfacePitchAxis, facing.pitch);
         dummy.quaternion.copy(surfacePitchQuaternion).multiply(surfaceYawQuaternion);
-        dummy.scale.setScalar(scale * (entry.world.selected ? 1.42 : entry.world.highlighted ? 1.16 : 1) * Math.sqrt(revealAlpha(entry.id)));
+        dummy.scale.setScalar(scale * (entry.world.selected ? 1.42 : entry.world.highlighted ? 1.16 : 1)
+          * (1 + weavePulse * 0.34) * Math.sqrt(revealAlpha(entry.id)));
         dummy.updateMatrix(); mesh.setMatrixAt(index, dummy.matrix);
-        mesh.setColorAt(index, instanceColor.copy(worldColor(entry, currentId, hoveredId)).lerp(LIT_TINT, state.atlas * (entry.explored ? 0.58 : 0.06)));
+        mesh.setColorAt(index, instanceColor.copy(worldColor(entry, currentId, hoveredId))
+          .lerp(HISTORY_GOLD_LATEST, weavePulse * 0.55)
+          .lerp(LIT_TINT, state.atlas * (entry.explored ? 0.58 : 0.06)));
       });
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;

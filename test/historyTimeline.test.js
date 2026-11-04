@@ -52,7 +52,11 @@ test('timeline groups eras, lists cause links, per-flag ripple controls, fork ac
     suggestions:[{ id:'s1', year:-900, title:'Canal network', summary:'It connects wetlands.', verdict:'fits', reason:'Fits beside the dry season.' },
       { id:'s2', year:-850, title:'Rain returns', summary:'A conflicting possibility.', verdict:'conflicts', conflictsWith:'e3', reason:'Would reverse the dry spell.' }] };
   const root = new Element('main', document), calls = [];
-  const session = { weave:id => calls.push(['weave',id]), forkSuggestion:id => calls.push(['forkSuggestion',id]), forkEvent:id => calls.push(['forkEvent',id]),
+  const weavePlan={id:'plan-s1',questionId:'q',historyId:'h1',suggestionIds:['s1'],existingEventIds:['q','e1','e2','e3'],
+    existingEvents:state.history.events,chain:[{id:'s1',year:-900,title:'Canal network',causeEventId:'q'}],merges:[],conflicts:[]};
+  const session = { checkWeaveBatch:async ids=>{calls.push(['checkWeaveBatch',ids]);return weavePlan;},
+    commitWeaveBatch:async body=>{calls.push(['commitWeaveBatch',body]);return {history:state.history};},getState:()=>({status:''}),
+    forkSuggestion:id => calls.push(['forkSuggestion',id]), forkEvent:id => calls.push(['forkEvent',id]),
     keep:(id,woven) => calls.push(['keep',id,woven]), regenerate:(id,woven) => calls.push(['regenerate',id,woven]) };
   const mounted = mountHistoryTimeline(root, { getState:() => state, session, document });
   assert.deepEqual(groupHistoryEras(state.history.events).map(item => item.label), ['Green beginnings','Later change']);
@@ -62,6 +66,8 @@ test('timeline groups eras, lists cause links, per-flag ripple controls, fork ac
   assert.match(mounted.element.textContent, /Fits beside the dry season/);
   assert.match(mounted.element.textContent, /Would reverse the dry spell/);
   const timeline = mounted.element.children[1], suggestions = mounted.element.children[2];
+  assert.equal(suggestions.queryAll('button').find(button=>button.dataset.action==='weave').scrolled,true,
+    'the first suggestion action is scrolled into the visible tray area when a history opens');
   const details = timeline.queryAll('details').find(item=>item.queryAll('button').some(button=>button.dataset.id==='e2'));
   assert.equal(details.open, true, 'the selected event era opens on first view');
   details.open = false; details.listeners.toggle(); state.date = -950; mounted.render(state);
@@ -69,7 +75,11 @@ test('timeline groups eras, lists cause links, per-flag ripple controls, fork ac
   const click = async (container, action, id) => container.listeners.click({ target:{ closest:() => ({ dataset:{ action, id, wovenId:'woven-1' } }) } });
   await click(timeline,'keep','e3'); await click(timeline,'regenerate','e3'); await click(timeline,'fork-event','e3');
   await click(suggestions,'weave','s1'); await click(suggestions,'fork-suggestion','s2');
-  assert.deepEqual(calls, [['keep','e3','woven-1'],['regenerate','e3','woven-1'],['forkEvent','e3'],['weave','s1'],['forkSuggestion','s2']]);
+  assert.deepEqual(calls, [['keep','e3','woven-1'],['regenerate','e3','woven-1'],['forkEvent','e3'],
+    ['checkWeaveBatch',['s1']],['commitWeaveBatch',{suggestionIds:['s1'],planId:'plan-s1',acceptedMergeIds:[],excludedSuggestionIds:[]}],['forkSuggestion','s2']]);
+  state.weaveFeedback={eventIds:['e3'],expiresAt:Date.now()+2000}; mounted.render(state);
+  const wovenRow=timeline.queryAll('li').find(row=>row.dataset.eventId==='e3');
+  assert.match(wovenRow.className,/history-event-woven-feedback/,'canonical woven rows receive the transient feedback class');
   const tabs = mounted.element.children[0]; assert.equal(tabs.queryAll('button').length, 1); assert.equal(tabs.queryAll('select').length, 0);
 });
 
