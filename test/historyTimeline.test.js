@@ -106,6 +106,32 @@ test('all saved suggestion windows stay visible, window controls jump without mo
   assert.equal(timeline.queryAll('li').find(row=>row.dataset.eventId==='e-selected').scrolled,true,'a newly selected event scrolls into view');
 });
 
+test('batch weave defaults fits only, keeps scoped checkbox choices through refresh, and sends one batch action', async () => {
+  const fits=[event('fit-a',120,'Fit A',{verdict:'fits'}),event('fit-b',130,'Fit B',{verdict:'fits'})];
+  const conflict=event('conflict',140,'Conflict',{verdict:'conflicts',conflictsWith:'anchor'});
+  const history={id:'batch-history',events:[event('anchor',50,'Anchor')],suggestions:[...fits,conflict],suggestionWindows:[{window:{fromYear:100,toYear:199},status:'ready'}]};
+  const state={questionId:'batch-question',question:{id:'batch-question',histories:[history]},history,histories:[history],historyId:history.id,date:150,window:{fromYear:100,toYear:199},suggestions:[...fits,conflict],windowCached:true};
+  const calls=[];
+  const root=new Element('main',document), mounted=mountHistoryTimeline(root,{getState:()=>state,session:{weaveBatch:ids=>calls.push(ids),more:()=>calls.push('more')},document});
+  const suggestions=mounted.element.children[2];
+  const checks=()=>suggestions.queryAll('input').filter(input=>input.dataset.batchSuggestion);
+  assert.deepEqual(checks().filter(input=>input.checked).map(input=>input.dataset.batchSuggestion),['fit-a','fit-b']);
+  assert.equal(checks().find(input=>input.dataset.batchSuggestion==='conflict').checked,false);
+  assert.equal(checks().find(input=>input.dataset.batchSuggestion==='conflict').disabled,true);
+  const fitA=checks().find(input=>input.dataset.batchSuggestion==='fit-a'); fitA.checked=false;
+  suggestions.listeners.change({target:fitA});
+  mounted.render(state);
+  assert.equal(checks().find(input=>input.dataset.batchSuggestion==='fit-a').checked,false,'refresh rendering preserves an explicit deselection');
+  const weave=suggestions.queryAll('button').find(button=>button.dataset.action==='weave-batch');
+  await suggestions.listeners.click({target:{closest:()=>weave}});
+  const more=suggestions.queryAll('button').find(button=>button.dataset.action==='manual-more');
+  await suggestions.listeners.click({target:{closest:()=>more}});
+  assert.deepEqual(calls,[['fit-b'],'more'],'batch selection is one call and More retains its existing action');
+  const otherHistory={...history,id:'other-history'}; state.history=otherHistory; state.histories=[otherHistory]; state.historyId=otherHistory.id;
+  mounted.render(state);
+  assert.deepEqual(checks().filter(input=>input.checked).map(input=>input.dataset.batchSuggestion),['fit-a','fit-b'],'each history starts with its own default selection');
+});
+
 test('multiple histories open an inline comparison with event-based distinctions and explicit selection', () => {
   const sharedOne=event('shared-one',1650,'Doggerland Plain Links Britain Europe');
   const sharedTwo=event('shared-two',1800,'Sundaland River Plain Unites Islands',{causeEventId:'shared-one'});

@@ -811,3 +811,7 @@ body:not(.invitation-open):has(.history-gallery-expanded) #history-timebar-host,
 .history-timeline-suggestion-title{display:block;width:100%;min-height:34px;padding:4px 6px;text-align:left;white-space:normal;line-height:1.25}
 .history-timeline-suggestion-title[aria-pressed=true]{border-color:var(--gold);color:var(--gold)}
 .history-timeline-suggestion-title:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.history-weave-tray{position:sticky;top:0;z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px;margin:0 0 6px;border:1px solid #73aaa155;border-radius:7px;background:rgba(8,12,13,.96);box-shadow:0 4px 12px #0008}
+.history-weave-tray .outline{min-height:32px;padding:4px 8px;font-size:10px}
+.history-weave-tray-notice{flex:1 1 100%;color:var(--gold);font-size:10px}
+.history-timeline-suggestion-content>input[data-batch-suggestion]{justify-self:start;inline-size:16px;block-size:16px;margin:0 0 2px;accent-color:var(--gold)}

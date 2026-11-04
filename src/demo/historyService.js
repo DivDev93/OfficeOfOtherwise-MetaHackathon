@@ -287,6 +287,123 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
     return { ...resultFor(final.question, final.history, { event: final.event }), ripple: final.flags };
   }
 
+  async function weaveBatch({ questionId, historyId, suggestionIds, userId, sessionId, signal } = {}) {
+    if (!validId(questionId) || !validId(historyId) || !Array.isArray(suggestionIds)
+        || suggestionIds.length < 1 || suggestionIds.length > 32
+        || suggestionIds.some(id => !validId(id)) || new Set(suggestionIds).size !== suggestionIds.length) {
+      throw new HistoryServiceError('invalid_batch', 'Select between 1 and 32 unique suggestions.', 400);
+    }
+
+    // A replay of the same request is a read: it does not duplicate events or
+    // dispatch another compatibility check.
+    const initial = resolve(store, questionId, historyId);
+    const existingEvents = new Map(initial.history.events.map(item => [item.id, item]));
+    if (suggestionIds.every(id => existingEvents.has(id))) {
+      return { ...resultFor(initial.question, initial.history, { cached: true }),
+        events: suggestionIds.map(id => existingEvents.get(id)), ripple: [] };
+    }
+
+    // Refresh every selected suggestion before making any timeline change.
+    // This may update stale suggestion verdict metadata, but never inserts a
+    // subset of the requested events.
+    for (const suggestionId of suggestionIds) {
+      if (!existingEvents.has(suggestionId)) await ensureCurrentSuggestion({ questionId, historyId, suggestionId, signal });
+    }
+
+    const started = await mutateQuestion(questionId, () => {
+      const { question, history } = resolve(store, questionId, historyId);
+      const alreadyWoven = new Map(history.events.map(item => [item.id, item]));
+      const selected = [];
+      for (const suggestionId of suggestionIds) {
+        if (alreadyWoven.has(suggestionId)) continue;
+        const suggestion = history.suggestions?.find(item => item.id === suggestionId);
+        if (!suggestion) throw new HistoryServiceError('not_found', 'Suggestion not found', 404);
+        if (suggestion.historyRevision !== historyRevision(history)) {
+          throw new HistoryServiceError('suggestion_recheck_pending', 'A selected suggestion changed during batch validation. Retry the batch.', 409, { suggestion });
+        }
+        if (suggestion.verdict !== 'fits') {
+          const conflict = suggestion.verdict === 'conflicts';
+          throw new HistoryServiceError(conflict ? 'suggestion_became_conflict' : 'invalid_suggestion',
+            conflict ? 'A selected suggestion conflicts with the current history. It remains available for What-if.' : 'A selected suggestion is not confirmed to fit.',
+            409, { ...(suggestion.conflictsWith ? { conflictsWith: suggestion.conflictsWith } : {}), reason: suggestion.reason, suggestion });
+        }
+        if (!isYear(suggestion.year) || !validId(suggestion.causeEventId)) throw new HistoryServiceError('invalid_suggestion', 'A selected suggestion cannot be woven', 409, { suggestion });
+        selected.push(suggestion);
+      }
+      const selectedById = new Map(selected.map(item => [item.id, item]));
+      for (const suggestion of selected) {
+        const cause = suggestion.causeEventId === question.id ? null
+          : history.events.find(event => event.id === suggestion.causeEventId) ?? selectedById.get(suggestion.causeEventId);
+        if (suggestion.causeEventId !== question.id && (!cause || cause.year >= suggestion.year)) {
+          throw new HistoryServiceError('invalid_cause', 'A selected suggestion cause is not earlier in this history or batch.', 409, { suggestion });
+        }
+      }
+      if (!selected.length) return { question, history, events: suggestionIds.map(id => alreadyWoven.get(id)), later: [], cached: true };
+
+      const wovenEvents = selected.map(suggestion => {
+        const event = { ...suggestion, id: suggestion.id };
+        for (const key of ['window', 'verdict', 'conflictsWith', 'reason', 'generatedAt', 'historyRevision', 'recheckStatus', 'recheckReason']) delete event[key];
+        return event;
+      });
+      const allEvents = sorted([...history.events, ...wovenEvents]);
+      const laterEvents = allEvents.filter(item => !selectedById.has(item.id) && wovenEvents.some(event => item.year > event.year));
+      const withPending = allEvents.map(item => {
+        if (selectedById.has(item.id)) return item;
+        const newlyEarlier = wovenEvents.filter(event => item.year > event.year);
+        if (!newlyEarlier.length) return item;
+        const flags = (item.checkFlags ?? []).filter(flag => !(flag?.kind === 'weave-ripple' && newlyEarlier.some(event => flag.wovenEventId === event.id)));
+        for (const wovenEvent of newlyEarlier) {
+          const date = wovenEvent.year < 0 ? `${Math.abs(wovenEvent.year)} BCE` : `${wovenEvent.year} CE`;
+          flags.push({ kind: 'weave-ripple', eventId: item.id, wovenEventId: wovenEvent.id, year: item.year, status: 'pending',
+            message: `Written before ${date} was woven in. Re-check pending.`, actions: ['keep', 'regenerate'] });
+        }
+        return { ...item, checkFlags: flags };
+      });
+      const nextHistory = { ...history, events: withPending,
+        suggestions: (history.suggestions ?? []).filter(item => !selectedById.has(item.id)) };
+      const savedQuestion = saveHistory(store, question, nextHistory);
+      const savedHistory = savedQuestion.histories.find(item => item.id === historyId);
+      return { question: savedQuestion, history: savedHistory,
+        events: wovenEvents.map(event => savedHistory.events.find(item => item.id === event.id)),
+        wovenEvents, later: laterEvents.map(event => savedHistory.events.find(item => item.id === event.id)), cached: false };
+    });
+    if (started.cached) return { ...resultFor(started.question, started.history, { cached: true }), events: started.events, ripple: [] };
+
+    let checks, checkError;
+    if (started.later.length) {
+      try {
+        if (typeof agent.checkRippleBatch !== 'function') throw new Error('Combined ripple checking is unavailable');
+        checks = await agent.checkRippleBatch({ question: started.question, events: started.later, history: started.history,
+          wovenEvents: started.wovenEvents, signal });
+      } catch (error) { checkError = error; }
+    } else checks = [];
+    const final = await mutateQuestion(questionId, () => {
+      const { question, history } = resolve(store, questionId, historyId);
+      const checkByEvent = new Map((checks ?? []).map(item => [item.eventId, item]));
+      const ripple = [];
+      const updated = { ...history, events: history.events.map(event => {
+        const earlier = started.wovenEvents.filter(item => event.year > item.year && !started.wovenEvents.some(other => other.id === event.id));
+        if (!earlier.length) return event;
+        const result = checkByEvent.get(event.id);
+        const flags = (event.checkFlags ?? []).map(flag => {
+          if (flag?.kind !== 'weave-ripple' || !earlier.some(item => item.id === flag.wovenEventId) || flag.status === 'kept') return flag;
+          if (!checkError && result && !result.inconsistent) return null;
+          const failed = { ...flag, status: checkError || !result ? 'unavailable' : 'review',
+            message: `Written before ${earlier.map(item => item.year < 0 ? `${Math.abs(item.year)} BCE` : `${item.year} CE`).join(', ')} was woven in. Re-check suggested.`,
+            ...(checkError || !result ? { error: checkError?.message ?? 'No ripple result was returned.' } : { reason: result.reason }), actions: ['keep', 'regenerate'] };
+          ripple.push(failed);
+          return failed;
+        }).filter(Boolean);
+        return { ...event, checkFlags: flags };
+      }) };
+      const saved = saveHistory(store, question, updated);
+      const savedHistory = saved.histories.find(item => item.id === historyId);
+      return { question: saved, history: savedHistory, events: started.events.map(item => savedHistory.events.find(event => event.id === item.id)), ripple };
+    });
+    return { ...resultFor(final.question, final.history), events: final.events, ripple: final.ripple,
+      usage: store.usage?.(userId, sessionId) };
+  }
+
   async function fork({ questionId, historyId, eventId, suggestionId, userId, sessionId } = {}) {
     if (suggestionId) await ensureCurrentSuggestion({ questionId, historyId, suggestionId });
     return mutateQuestion(questionId, () => {
@@ -455,5 +572,5 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
     return store.setPreference({ userId, sessionId, autoSuggest });
   }
 
-  return { suggest, weave, fork, rippleCheck, regenerateEvent, keepEvent, preference, setPreference };
+  return { suggest, weave, weaveBatch, fork, rippleCheck, regenerateEvent, keepEvent, preference, setPreference };
 }

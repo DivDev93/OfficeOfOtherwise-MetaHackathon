@@ -420,6 +420,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
           if (history) result.history = history;
           if (forkedHistory) result.forkedHistory = forkedHistory;
           if (event) result.event = event;
+          if (Array.isArray(result.events) && history) result.events = result.events.map(item => history.events.find(saved => saved.id === item.id) ?? item);
           const decoratedHistory = history ?? forkedHistory;
           if (result.suggestion && decoratedHistory) result.suggestion = decoratedHistory.suggestions?.find(item => item.id === result.suggestion.id) ?? result.suggestion;
           if (Array.isArray(result.suggestions) && decoratedHistory) result.suggestions = result.suggestions.map(item =>
@@ -793,6 +794,7 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       }
       const historyActionNames = new Map([
         ['/api/history/suggest', ['POST', 'suggest']], ['/api/history/weave', ['POST', 'weave']],
+        ['/api/history/weave-batch', ['POST', 'weaveBatch']],
         ['/api/history/fork', ['POST', 'fork']], ['/api/history/ripple-check', ['POST', 'rippleCheck']],
         ['/api/history/keep', ['POST', 'keepEvent']], ['/api/history/regenerate', ['POST', 'regenerateEvent']],
       ]);

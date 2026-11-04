@@ -212,6 +212,25 @@ test('last-suggestion weave preserves its cached window and never auto-generates
   assert.deepEqual(session.getState().window,cachedWindow); assert.equal(clock.size,0);
 });
 
+test('batch weave posts one history-scoped request and applies the returned history once', async () => {
+  const clock=timers(), window={fromYear:1503,toYear:2503};
+  const first=suggestion('batch-a',window), second=suggestion('batch-b',window);
+  const original={...history('h',[first,second]),suggestionWindows:[{window,status:'ready',batches:1,suggestionCount:2}]};
+  const updated={...original,suggestions:[],events:[...original.events,{id:'woven-batch',year:1978,title:'Combined event',checkFlags:[]}]};
+  const requests=[];
+  const session=createHistorySession({setTimer:clock.setTimer,clearTimer:clock.clearTimer,fetchImpl:async(url,init={})=>{
+    if(url==='/api/history/preferences')return response({autoSuggest:false});
+    if(url.startsWith('/api/histories'))return response({questions:[{id:'q',histories:[original]}]});
+    if(url==='/api/history/weave-batch'){requests.push([url,JSON.parse(init.body)]);return response({question:{id:'q',histories:[updated]},history:updated,events:[updated.events.at(-1)],ripple:[],cached:false});}
+    throw new Error(url);
+  }});
+  session.setContext({questionId:'q',historyId:'h',eventId:'event-1',date:1978}); await tick();
+  await session.weaveBatch(['batch-a','batch-b']);
+  assert.deepEqual(requests,[['/api/history/weave-batch',{questionId:'q',historyId:'h',suggestionIds:['batch-a','batch-b'] }]]);
+  assert.equal(session.getState().history.events.at(-1).id,'woven-batch');
+  assert.equal(session.getState().busyIds.size,0);
+});
+
 test('forking a conflicting suggestion outside the current window uses its canonical conflict target', async () => {
   const clock=timers(), currentWindow={fromYear:1503,toYear:2503}, otherWindow={fromYear:2504,toYear:3504};
   const current=suggestion('current-window-suggestion',currentWindow);

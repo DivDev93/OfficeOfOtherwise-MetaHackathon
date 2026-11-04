@@ -185,6 +185,52 @@ test('weaving inserts a fitting event in date order and persists explicit Spark 
   assert.equal(result.history.events.find(event => event.id === later.id).title, later.title, 'ripple checks never auto-edit events');
 });
 
+test('batch weave validates all six candidates, saves them together, and runs one combined ripple check', async () => {
+  const store = memoryStore();
+  const questionWithCandidates = store.get('lake-chad');
+  const suggestions = Array.from({ length: 6 }, (_, index) => ({
+    ...candidate(`batch-${index + 1}`, -2300 + index * 50),
+    sceneRef: { status: 'complete', path: `scenes/${index + 1}.png` },
+  }));
+  questionWithCandidates.histories[0].suggestions = suggestions;
+  store.save(questionWithCandidates);
+  const calls = [];
+  const service = createHistoryService({ store, agent: { async suggest() { return []; }, async checkRippleBatch(args) {
+    calls.push(args);
+    return [{ eventId: 'settlement-1800', inconsistent: true, reason: 'The later settlement now lacks sufficient water.' }];
+  } } });
+  const ids = suggestions.map(item => item.id);
+  const result = await service.weaveBatch({ questionId: 'lake-chad', historyId: 'history-1', suggestionIds: ids });
+  assert.deepEqual(result.events.map(item => item.id), ids);
+  assert.deepEqual(result.history.events.map(item => item.id), ['channels-2400', ...ids, 'settlement-1800']);
+  assert.equal(result.history.suggestions.length, 0);
+  assert.equal(result.events[0].causeEventId, 'channels-2400');
+  assert.equal(result.events[0].sceneRef.path, suggestions[0].sceneRef.path);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].wovenEvents.map(item => item.id), ids);
+  assert.equal(calls[0].events.length, 1);
+  assert.equal(result.ripple.length, 6, 'the combined verdict is associated with each newly earlier woven event');
+  assert.equal(result.ripple[0].status, 'review');
+
+  const replay = await service.weaveBatch({ questionId: 'lake-chad', historyId: 'history-1', suggestionIds: ids });
+  assert.equal(replay.cached, true);
+  assert.equal(replay.history.events.filter(item => ids.includes(item.id)).length, 6);
+  assert.equal(calls.length, 1, 'idempotent replay does not dispatch another Spark request');
+});
+
+test('batch weave rejects an invalid selection before inserting any selected event', async () => {
+  const store = memoryStore();
+  const questionWithCandidates = store.get('lake-chad');
+  const suggestions = [candidate('batch-valid', -2300), candidate('batch-conflict', -2200, 'conflicts', 'settlement-1800')];
+  questionWithCandidates.histories[0].suggestions = suggestions;
+  store.save(questionWithCandidates);
+  const service = createHistoryService({ store, agent: { async suggest() { return []; }, async checkRippleBatch() { throw new Error('should not dispatch'); } } });
+  await assert.rejects(service.weaveBatch({ questionId: 'lake-chad', historyId: 'history-1', suggestionIds: suggestions.map(item => item.id) }),
+    error => error.code === 'suggestion_became_conflict' && error.status === 409);
+  assert.deepEqual(store.get('lake-chad').histories[0].events.map(item => item.id), ['channels-2400', 'settlement-1800']);
+  assert.equal(store.get('lake-chad').histories[0].suggestions.length, 2);
+});
+
 test('conflicting suggestion forks with shared earlier prefix and leaves original history intact', async () => {
   const store = memoryStore();
   const item = candidate('suggestion-alt', -2300, 'conflicts', 'channels-2400');

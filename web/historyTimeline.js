@@ -60,6 +60,9 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   comparison.setAttribute('aria-label','Compare saved timelines');
   host.append(tabs, timeline, suggestions, comparison, status);
   const openEras = new Map();
+  const batchSelections = new Map();
+  const seenBatchSuggestions = new Map();
+  let batchScope = '', batchNotice = '';
   let galleryExpanded = false, lastRenderedHistoryId = '', lastRenderedSelectionId = '';
   let comparisonOpen = false, comparisonHasFocus = false, comparisonFocusAction = 'back-to-timeline', comparisonFocusHistoryId = '', comparisonCards = null, comparisonPreviousRail = null, comparisonPreviousScrollTop = null;
   const button = (label, action, id, extra = {}) => {
@@ -155,6 +158,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     else if (node.dataset.action === 'select-suggestion') onEventSelect(node.dataset.id);
   });
   suggestions.addEventListener('click', async event => {
+    if (event.target?.dataset?.batchSuggestion) return;
     const node = event.target.closest?.('button[data-action]');
     if (!node) {
       const card = event.target.closest?.('article.history-timeline-suggestion');
@@ -171,13 +175,42 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     else if (node.dataset.action === 'toggle-gallery') setGalleryExpanded(!galleryExpanded);
     else if (node.dataset.action === 'manual-suggest') await session?.suggest?.();
     else if (node.dataset.action === 'manual-more') await session?.more?.();
+    else if (node.dataset.action === 'batch-select-all' || node.dataset.action === 'batch-select-none') {
+      const selected = batchSelections.get(batchScope) || new Set();
+      const eligible = [...(suggestions.queryAll?.('input') || [])].filter(input => input.dataset?.batchSuggestion && !input.disabled);
+      for (const [index,input] of eligible.entries()) {
+        input.checked = node.dataset.action === 'batch-select-all' && index < 32;
+        if (input.checked) selected.add(input.dataset.batchSuggestion); else selected.delete(input.dataset.batchSuggestion);
+      }
+      batchSelections.set(batchScope, selected); batchNotice = node.dataset.action === 'batch-select-all' && eligible.length > 32 ? 'Select up to 32 suggestions to weave at once.' : '';
+      render(getState?.() || {});
+    }
+    else if (node.dataset.action === 'weave-batch') {
+      const scope = batchScope, selected = [...(batchSelections.get(scope) || [])];
+      if (selected.length && selected.length <= 32) {
+        batchNotice = '';
+        const result = await session?.weaveBatch?.(selected);
+        if (result) for (const id of selected) batchSelections.get(scope)?.delete(id);
+      }
+    }
   });
-  suggestions.addEventListener('change', event => { if (event.target?.dataset?.autoSuggest === 'true') session?.setAutoSuggest?.(event.target.checked); });
+  suggestions.addEventListener('change', event => {
+    const target = event.target;
+    if (target?.dataset?.autoSuggest === 'true') session?.setAutoSuggest?.(target.checked);
+    else if (target?.dataset?.batchSuggestion) {
+      const selected = batchSelections.get(batchScope) || new Set();
+      if (target.checked && selected.size >= 32) { target.checked = false; batchNotice = 'Select up to 32 suggestions to weave at once.'; }
+      else { if (target.checked) selected.add(target.dataset.batchSuggestion); else selected.delete(target.dataset.batchSuggestion); batchNotice = ''; }
+      batchSelections.set(batchScope, selected); render(getState?.() || {});
+    }
+  });
 
   function render(state = getState?.() || {}) {
     const question = state.question || null;
     const histories = state.histories || question?.histories || [];
     const active = state.history || state.activeHistory || histories.find(item => item.id === state.historyId) || histories[0] || null;
+    const nextBatchScope = `${String(state.questionId || question?.id || '')}\u0000${String(active?.id || '')}`;
+    if (nextBatchScope !== batchScope) { batchScope = nextBatchScope; batchNotice = ''; }
     const activeDate = state.date ?? state.asOfYear;
     if (active && lastRenderedHistoryId && lastRenderedHistoryId !== String(active.id)) galleryExpanded = false;
     host.classList?.toggle('history-gallery-expanded',galleryExpanded);
@@ -277,10 +310,22 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     }
     const dateText = activeDate ? labelYear(activeDate) : 'this date';
     const wovenIds = wovenSuggestionIds;
+    const selectedForScope = batchSelections.get(batchScope);
+    if (selectedForScope) for (const id of wovenIds) selectedForScope.delete(String(id));
     const savedById = new Map();
     for (const item of active.suggestions || []) if (item?.id != null && !wovenIds.has(String(item.id))) savedById.set(String(item.id), item);
     for (const item of state.suggestions || []) if (item?.id != null && !wovenIds.has(String(item.id))) savedById.set(String(item.id), { ...savedById.get(String(item.id)), ...item });
     const savedSuggestions = [...savedById.values()].sort((a,b) => a.year - b.year || String(a.id).localeCompare(String(b.id)));
+    let selectedSuggestionIds = batchSelections.get(batchScope);
+    if (!selectedSuggestionIds) { selectedSuggestionIds = new Set(); batchSelections.set(batchScope, selectedSuggestionIds); }
+    let seenSuggestionIds = seenBatchSuggestions.get(batchScope);
+    if (!seenSuggestionIds) { seenSuggestionIds = new Set(); seenBatchSuggestions.set(batchScope, seenSuggestionIds); }
+    for (const item of savedSuggestions) {
+      const id = String(item.id);
+      if (!seenSuggestionIds.has(id) && item.verdict === 'fits' && !item.conflictsWith) selectedSuggestionIds.add(id);
+      seenSuggestionIds.add(id);
+      if (item.verdict !== 'fits' || item.conflictsWith) selectedSuggestionIds.delete(id);
+    }
     const heading = make(document, 'h3', `Saved suggestions · ${savedSuggestions.length}`);
     const subheading = make(document,'p',`Browse every saved suggestion in this timeline. The date remains ${dateText} until you move the timebar.`,'history-timeline-suggestions-context');
     suggestions.setAttribute('aria-label', `All ${savedSuggestions.length} saved suggestions in this timeline`); suggestions.append(heading,subheading);
@@ -290,9 +335,26 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     autoToggle.setAttribute('aria-label', 'Automatically suggest events after changing date');
     autoLabel.append(autoToggle, document.createTextNode(' Auto-suggest')); controls.append(autoLabel);
     if (!state.windowCached && !(state.suggestions || []).length) controls.append(button(state.autoSuggest === false ? `Suggest events around ${dateText}` : `Suggest events now around ${dateText}`, 'manual-suggest', 'current-window'));
-    if (state.windowCached) controls.append(button(`More around ${dateText}`, 'manual-more', 'current-window'));
     controls.queryAll?.('button').forEach(node => { node.disabled = !!state.loading || !!state.paused; });
     suggestions.append(controls);
+    const batchBusy = state.busyIds?.has?.('weave-batch') || false;
+    const selectedCount = selectedSuggestionIds.size;
+    const tray = make(document,'div',null,'history-weave-tray');
+    const selectAll = button('Select all','batch-select-all','batch-all');
+    const selectNone = button('Select none','batch-select-none','batch-none');
+    selectAll.disabled = !!state.loading || !!state.paused || !!batchBusy || selectedCount >= 32;
+    selectNone.disabled = !!state.loading || !!state.paused || !!batchBusy || selectedCount === 0;
+    tray.append(selectAll,selectNone);
+    const weaveBatch = button(batchBusy ? 'Weaving…' : `Weave ${selectedCount} into history`,'weave-batch','batch-weave');
+    weaveBatch.disabled = !!state.loading || !!state.paused || !!batchBusy || selectedCount === 0;
+    tray.append(weaveBatch);
+    if (state.windowCached) {
+      const more = button(`More around ${dateText}`,'manual-more','current-window');
+      more.disabled = !!state.loading || !!state.paused || !!batchBusy;
+      tray.append(more);
+    }
+    if (batchNotice) tray.append(make(document,'span',batchNotice,'history-weave-tray-notice'));
+    suggestions.append(tray);
     const cachedWindows = new Map();
     for (const item of active.suggestionWindows || []) {
       const key = `${item.window.fromYear}:${item.window.toYear}`; cachedWindows.set(key, { ...item, count:item.suggestionCount || 0 });
@@ -350,6 +412,11 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
         if (imageUrl) { const image = make(document,'img',null,'history-timeline-suggestion-image'); image.src = imageUrl; image.alt = ''; image.loading = 'lazy'; card.append(image); }
         else card.append(make(document,'span',sceneStatus === 'pending' || sceneStatus === 'queued' ? 'Image preparing' : sceneStatus === 'unknown' ? 'Image status uncertain' : 'No saved image','history-timeline-suggestion-image-placeholder'));
         const content = make(document,'div',null,'history-timeline-suggestion-content');
+        const batchChoice = make(document,'input'); batchChoice.type = 'checkbox'; batchChoice.dataset.batchSuggestion = String(item.id);
+        batchChoice.checked = selectedSuggestionIds.has(String(item.id));
+        batchChoice.disabled = item.verdict !== 'fits' || !!item.conflictsWith || !!state.loading || !!state.paused || batchBusy;
+        batchChoice.setAttribute('aria-label',`Select ${item.title || 'untitled possibility'} for batch weave`);
+        content.append(batchChoice);
         const currentDateWindow = item.window?.fromYear === state.window?.fromYear && item.window?.toYear === state.window?.toYear;
         const windowText = galleryExpanded ? currentDateWindow ? ' · Current date window' : ''
           : item.window ? ` · ${labelYear(item.window.fromYear)}–${labelYear(item.window.toYear)}${currentDateWindow ? ' · Current date window' : ''}` : '';

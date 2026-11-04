@@ -1,0 +1,114 @@
+{
+  "source": "out/history-model-review/deep-sea-levels-source/live/.history/state-v1.json",
+  "question": {
+    "id": "question-895184fc-5cf0-4561-b3d4-324c007ca248",
+    "title": "What if Buddhism Spread to Arabia",
+    "divergenceYear": -250,
+    "divergencePlace": {
+      "name": "Mecca, Arabia",
+      "lat": 21.4225,
+      "lon": 39.8262
+    }
+  },
+  "history": {
+    "id": "history-3be909c6-af43-4778-a607-8edf9d8b7458",
+    "initialEventCount": 0,
+    "cachedSuggestionCount": 6,
+    "window": {
+      "fromYear": -1000,
+      "toYear": -1
+    },
+    "suggestions": [
+      {
+        "id": "suggestion:a72c30f0a7e059e917bc8db705786eb86230b0eedd0101b077c3f87eca931256",
+        "year": -245,
+        "place": {
+          "name": "Jeddah, Arabia",
+          "lat": 21.4858,
+          "lon": 39.1925
+        },
+        "title": "Red Sea Monks Reach Jeddah",
+        "summary": "Indian Buddhist monks sailing with monsoon spice traders land at Jeddah and share sutras, meditation practices, and monastic discipline with Arabian merchants, forming a small sangha on the route inland to Mecca.",
+        "causeEventId": "question-895184fc-5cf0-4561-b3d4-324c007ca248",
+        "verdict": "fits",
+        "conflictsWith": null,
+        "reason": "The supplied history contains no events, so this cultural arrival shortly after the -250 divergence conflicts with nothing listed."
+      },
+      {
+        "id": "suggestion:d2145ee80df3994157d448f55b6540c295fca4c7d2b1b470f649ca9b09a1dbad",
+        "year": -238,
+        "place": {
+          "name": "Jeddah, Arabia",
+          "lat": 21.4858,
+          "lon": 39.1925
+        },
+        "title": "Buddhist Sailors' Shrine at Jeddah",
+        "summary": "Indian Ocean merchants arriving with the monsoon dedicate a small stupa, prayer hall, and travellers' rest house near the port, introducing Buddhist ritual and Prakrit inscriptions to western Arabia.",
+        "causeEventId": "question-895184fc-5cf0-4561-b3d4-324c007ca248",
+        "verdict": "fits",
+        "conflictsWith": null,
+        "reason": "The supplied history contains no events, so nothing conflicts with a post-divergence Buddhist shrine established through Indian Ocean trade."
+      },
+      {
+        "id": "suggestion:7a04084bdc22863df97a22743ad01e37bbabbc14cd78d542d1058bbc07be5ad3",
+        "year": -176,
+        "place": {
+          "name": "Hegra, Arabia",
+          "lat": 26.804,
+          "lon": 37.9578
+        },
+        "title": "Lotus Carvings at Hegra",
+        "summary": "Arabian stonemasons influenced by Buddhist traders carve lotus, wheel, and stupa motifs into shrines at Hegra, blending South Asian Buddhist symbolism with local Arabian rock-cut art.",
+        "causeEventId": "question-895184fc-5cf0-4561-b3d4-324c007ca248",
+        "verdict": "fits",
+        "conflictsWith": null,
+        "reason": "The supplied history contains no events, so this artistic development following increased Buddhist contact conflicts with nothing listed."
+      },
+      {
+        "id": "suggestion:14665b33c0b5b66789fe4ba63bbefdcb33332a2a596a890d35c512c6140ae4ef",
+        "year": -170,
+        "place": {
+          "name": "Mecca, Arabia",
+          "lat": 21.4225,
+          "lon": 39.8262
+        },
+        "title": "Meccan Jataka Reliefs",
+        "summary": "Arabian caravan merchants commission rock reliefs depicting Jataka tales in a local South Arabian artistic style, accompanied by bilingual Prakrit and ancient Arabic inscriptions emphasizing compassion and generosity to travellers.",
+        "causeEventId": "question-895184fc-5cf0-4561-b3d4-324c007ca248",
+        "verdict": "fits",
+        "conflictsWith": null,
+        "reason": "The supplied history contains no events, so nothing conflicts with Buddhist stories being adapted into Arabian art and inscriptions after the divergence at Mecca."
+      },
+      {
+        "id": "suggestion:60a6f6c876ca8e74b2152709793e7c5be4fc89f2ec6a047d32b34b2e94555f36",
+        "year": -98,
+        "place": {
+          "name": "Mecca, Arabia",
+          "lat": 21.4225,
+          "lon": 39.8262
+        },
+        "title": "Vihara Healing Garden in Mecca",
+        "summary": "Buddhist monks at a Mecca vihara cultivate medicinal herbs and teach breath meditation and dietary care to local healers, blending Ayurvedic remedies with Arabian plant knowledge.",
+        "causeEventId": "question-895184fc-5cf0-4561-b3d4-324c007ca248",
+        "verdict": "fits",
+        "conflictsWith": null,
+        "reason": "The supplied history contains no events, so this medical and cultural exchange in Mecca conflicts with nothing listed."
+      },
+      {
+        "id": "suggestion:35066f32d3a39a6120ed81c28b14d1775e798138a287f4d311021c072c1f7809",
+        "year": -75,
+        "place": {
+          "name": "Hegra, Arabia",
+          "lat": 26.8147,
+          "lon": 37.9478
+        },
+        "title": "Buddhist Healing House at Hegra",
+        "summary": "Buddhist monks and Arabian herbalists maintain a hospice for caravan travellers, combining meditation and breathing practices with Indian medicinal plants and local frankincense-based remedies recorded on ostraca.",
+        "causeEventId": "question-895184fc-5cf0-4561-b3d4-324c007ca248",
+        "verdict": "fits",
+        "conflictsWith": null,
+        "reason": "The supplied history contains no events, so nothing conflicts with Buddhism spreading north along Arabian trade routes into medical and hospice practices."
+      }
+    ]
+  }
+}

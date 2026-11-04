@@ -101,6 +101,32 @@ test('history actions are authorized, cached, weave with ripple flags, and suppo
   assert.equal(regenerateCalls, 1);
 });
 
+test('batch weave route uses existing history authorization and returns one atomic batch result', async t => {
+  const liveRunsDir = await mkdtemp(join(tmpdir(), 'office-history-batch-route-'));
+  t.after(() => rm(liveRunsDir, { recursive: true, force: true }));
+  const { store } = seed(liveRunsDir);
+  const question = store.get('question-one');
+  question.histories[0].suggestions = ['batch-a', 'batch-b'].map((id, index) => ({ id, year: -3500 + index * 100,
+    place: { name: 'Sahara', lat: 20, lon: 10 }, title: `Canal ${id}`, summary: 'Communities share seasonal channels.',
+    causeEventId: 'root-event', era: 'Green Sahara', geography: { version: 1, changes: [] }, verdict: 'fits', conflictsWith: null, reason: '' }));
+  store.save(question);
+  let combinedCalls = 0;
+  const service = createHistoryService({ store, agent: { async suggest() { return []; }, async checkRippleBatch({ events }) {
+    combinedCalls++;
+    return events.map(event => ({ eventId: event.id, inconsistent: false, reason: '' }));
+  } } });
+  const { url, headers } = await start(t, { liveRunsDir, service });
+  const input = { questionId: 'question-one', historyId: 'history-one', suggestionIds: ['batch-a', 'batch-b'] };
+  const denied = await fetch(`${url}/api/history/weave-batch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) });
+  assert.equal(denied.status, 403);
+  const response = await fetch(`${url}/api/history/weave-batch`, { method: 'POST', headers, body: JSON.stringify(input) });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.deepEqual(result.events.map(event => event.id), input.suggestionIds);
+  assert.equal(result.history.events.filter(event => input.suggestionIds.includes(event.id)).length, 2);
+  assert.equal(combinedCalls, 1);
+});
+
 test('history preferences default on, persist by browser session, and legacy history response stays unchanged', async t => {
   const liveRunsDir = await mkdtemp(join(tmpdir(), 'office-history-pref-'));
   t.after(() => rm(liveRunsDir, { recursive: true, force: true }));

@@ -29,6 +29,21 @@ test('history suggestion agent accepts a named conflict and a compatible fit fro
   assert.match(calls[0].instructions, /"fits" means it can plausibly be true alongside every event/);
 });
 
+test('history agent checks all later events against one newly woven batch in a single Spark call', async () => {
+  const laterEvents = [{ id: 'later-a', year: -1000 }, { id: 'later-b', year: -500 }];
+  const response = { checks: laterEvents.map(event => ({ eventId: event.id, inconsistent: event.id === 'later-b', reason: 'A shared resource no longer supports the later event.' })) };
+  const { agent, calls } = agentFor(response);
+  const checks = await agent.checkRippleBatch({ question: { id: 'q', question: 'A scenario' },
+    events: laterEvents, history: { events: [...laterEvents] }, wovenEvents: [{ id: 'new-a', year: -2000 }, { id: 'new-b', year: -1500 }] });
+  assert.deepEqual(checks.map(item => item.eventId), ['later-a', 'later-b']);
+  assert.equal(checks[0].inconsistent, false);
+  assert.equal(checks[1].inconsistent, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].model, 'muse-spark-1.3');
+  assert.equal(calls[0].label, 'history-agent:ripple-batch');
+  assert.match(calls[0].instructions, /combined effect of ALL supplied newly woven events/);
+});
+
 test('new history question sends bounded verified parent as-of context without importing old causes', async () => {
   const question = { id: 'question-new', question: 'What if canal gardens spread?', title: 'Canal gardens spread',
     divergenceYear: -2400, divergencePlace: { name: 'Sahara', lat: 20, lon: 10 }, origin: { kind: 'user-written' },

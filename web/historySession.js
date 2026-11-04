@@ -166,7 +166,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
       const forkedHistory = !!(data.history?.id && data.history.id !== context.historyId && data.forkEventId);
       state.question = data.question || state.question;
       state.history = forkedHistory ? mergeWindows(data.history, null, null) : mergeWindows(data.history || state.history, priorHistory,
-        identity.window, path === '/api/history/weave' || identity.windowCached ? 'ready' : '');
+        identity.window, path === '/api/history/weave' || path === '/api/history/weave-batch' || identity.windowCached ? 'ready' : '');
       if (state.question) {
         state.histories = state.question.histories.map(item => item.id === state.history.id ? state.history : item);
         state.question = { ...state.question, histories: state.histories };
@@ -340,6 +340,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
      setContext, selectHistory, selectQuestion, openQuestion, setQuestions, updateMediaReference, selectEvent, selectSuggestion, selectRecord, selectSuggestionWindow, setDate, clear, hover, setAutoSuggest: persistPreference,
     suggest: () => requestSuggestions(false), more: () => requestSuggestions(true),
     weave: suggestionId => mutate('/api/history/weave', { suggestionId }, `suggestion:${suggestionId}`),
+    weaveBatch: suggestionIds => mutate('/api/history/weave-batch', { suggestionIds }, 'weave-batch'),
     forkSuggestion: suggestionId => {
       const suggestion = [...(state.history?.suggestions || []),...(state.suggestions || [])].find(item => String(item.id) === String(suggestionId));
       return mutate('/api/history/fork', { eventId:suggestion?.conflictsWith, suggestionId }, `suggestion:${suggestionId}`);
