@@ -86,6 +86,9 @@ test('batch plan reservations persist ready plans and require their receipt for 
   assert.equal(retry.status, 'reserved', 'only the matching explicit receipt permits redispatch');
   const plan = { id: 'batch-plan:test', questionId: 'q', historyId: 'h', suggestionIds: [] };
   assert.equal(store.completeBatchPlan({ planKey: base.planKey, requestId: 'request-2', plan }).status, 'ready');
+  assert.equal(store.reserveBatchPlan({ ...base, sessionId:'another-session', requestId:'foreign-request' }).status,'owner-mismatch',
+    'a legacy semantic-key reservation never returns another browser session\'s plan');
+  assert.deepEqual(store.getBatchPlan(base.planKey).plan,plan,'the owner-bound plan remains available after a foreign lookup');
   const interrupted = { ...base, planKey: 'b'.repeat(64), requestId: 'request-pending' };
   store.reserveBatchPlan(interrupted);
   const restarted = createHistoryStore(root);

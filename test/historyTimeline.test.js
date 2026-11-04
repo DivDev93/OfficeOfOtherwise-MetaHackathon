@@ -322,7 +322,7 @@ test('uncertain preview offers an explicit receipt retry and explains possible c
   assert.equal(retry.textContent,'Retry batch check');
   await panel.listeners.click({target:{closest:()=>retry}});
   panel=mounted.element.children[3];
-  assert.match(panel.textContent,/Preview 1 selected suggestions/);
+  assert.match(panel.textContent,/Weave 1 possibility/);
   assert.match(panel.textContent,/because ← Starting question/);
   assert.doesNotMatch(panel.textContent,/q-uncertain/,'internal question IDs are not shown as cause labels');
   assert.deepEqual(calls,[[['uncertain-fit'],{}],[['uncertain-fit'],{retryOf:'receipt-opaque'}]]);
@@ -518,7 +518,7 @@ test('deck and inline List review share window scope without losing checked sele
   const review=portal.queryAll('button').find(node=>node.dataset.action==='deck-review-kept');
   await portal.listeners.click({target:{closest:()=>review}});
   assert.deepEqual(calls,[['check',['deck-a','deck-b']]],'Review kept checks kept deck IDs, not list selection');
-  const panel=mounted.element.children[3]; assert.match(panel.textContent,/2 selected suggestions/);
+  const panel=mounted.element.children[3]; assert.match(panel.textContent,/Weave 2 possibilities/);
   const cancel=panel.queryAll('button').find(node=>node.dataset.action==='batch-cancel');
   await panel.listeners.click({target:{closest:()=>cancel}});
   assert.equal(panel.hidden,true); assert.equal(portal.hidden,false);
@@ -570,6 +570,7 @@ test('compact window deck keeps recovery shortcuts and its List pane in the over
   await panel.listeners.click({target:{closest:()=>cancel}});
   const review=portal.queryAll('button').find(node=>node.dataset.action==='deck-review-kept');
   assert.equal(review.disabled,false,'kept suggestions remain reviewable after cancelling Keep all fits');
+  assert.equal(review.parentNode,portal.children[0],'the weave action remains visible in the deck header, outside the overflow menu');
   await portal.listeners.click({target:{closest:()=>review}});
   assert.equal(panel.hidden,false,'Review kept opens the cached batch preview');
   assert.equal(checked.length,1,'Review kept reuses the cached plan');

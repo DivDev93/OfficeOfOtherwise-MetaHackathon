@@ -412,6 +412,39 @@ test('an explicit batch check from a reopened read-only history is cached and co
   assert.equal(session.getState().busyIds.size,0);
 });
 
+test('missing owner-bound batch plan clears the client cache and requires a fresh check instead of retrying the same ID', async () => {
+  const clock=timers(), window={fromYear:1503,toYear:2503}, candidate=suggestion('owner-fit',window);
+  const original={...history('h',[candidate]),suggestionWindows:[{window,status:'ready'}]};
+  const updated={...original,suggestions:[],events:[...original.events,{id:'woven-owner',year:1978,title:'Woven event',checkFlags:[]}]};
+  const plans=[{id:'foreign-plan',questionId:'q',historyId:'h',suggestionIds:[candidate.id],chain:[],merges:[],conflicts:[]},
+    {id:'owned-plan',questionId:'q',historyId:'h',suggestionIds:[candidate.id],chain:[],merges:[],conflicts:[]}];
+  let checkCount=0, commitCount=0;
+  const session=createHistorySession({setTimer:clock.setTimer,clearTimer:clock.clearTimer,fetchImpl:async(url,init={})=>{
+    if(url==='/api/history/preferences')return response({autoSuggest:false});
+    if(url.startsWith('/api/histories'))return response({questions:[{id:'q',histories:[original]}]});
+    if(url==='/api/history/batch-check')return response({plan:plans[checkCount++]});
+    if(url==='/api/history/weave-batch'){
+      commitCount++;
+      if(JSON.parse(init.body).planId==='foreign-plan')return {ok:false,status:404,json:async()=>({code:'batch_plan_not_found',error:'The checked batch plan is not available for this session.'})};
+      return response({question:{id:'q',histories:[updated]},history:updated,events:[updated.events.at(-1)],ripple:[],cached:false});
+    }
+    throw new Error(url);
+  }});
+  session.setContext({questionId:'q',historyId:'h',eventId:'event-1',date:1978,readOnly:true}); await tick();
+  assert.equal((await session.checkWeaveBatch([candidate.id])).id,'foreign-plan');
+  assert.equal(session.isBatchPlanUnavailable('foreign-plan'),false);
+  assert.equal(await session.commitWeaveBatch({suggestionIds:[candidate.id],planId:'foreign-plan',acceptedMergeIds:[],excludedSuggestionIds:[]}),null);
+  assert.equal(session.isBatchPlanUnavailable('foreign-plan'),true,'the preview can offer a fresh check for this unavailable plan');
+  assert.equal(session.isBatchPlanUnavailable('owned-plan'),false);
+  assert.match(session.getState().status,/Check the selected suggestions again/);
+  await session.commitWeaveBatch({suggestionIds:[candidate.id],planId:'foreign-plan',acceptedMergeIds:[],excludedSuggestionIds:[]});
+  assert.equal(commitCount,1,'the unavailable owner-bound plan is not sent again');
+  assert.equal((await session.checkWeaveBatch([candidate.id])).id,'owned-plan','clearing the cache lets Review kept fetch a session-owned plan');
+  assert.ok(await session.commitWeaveBatch({suggestionIds:[candidate.id],planId:'owned-plan',acceptedMergeIds:[],excludedSuggestionIds:[]}));
+  assert.equal(session.isBatchPlanUnavailable('foreign-plan'),true,'the unavailable marker remains scoped to its plan');
+  assert.equal(checkCount,2); assert.equal(commitCount,2);
+});
+
 test('batch-check response from a changed history cannot become the active cached plan', async () => {
   const clock=timers(), firstWindow={fromYear:1503,toYear:2503}, secondWindow={fromYear:2504,toYear:3504};
   const first={...history('h1',[suggestion('first-suggestion',firstWindow)]),suggestionWindows:[{window:firstWindow,status:'ready'}]};

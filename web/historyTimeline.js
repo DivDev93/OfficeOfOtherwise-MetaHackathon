@@ -549,6 +549,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     } else {
       batchPreviewState.loading = false; batchPreviewState.operation = '';
       batchPreviewState.error = session?.getState?.().status || 'Could not weave this preview. Review the history and retry.';
+      if (session?.isBatchPlanUnavailable?.(plan.id)) batchPreviewState.plan = null;
       render(getState?.() || {});
     }
   }
@@ -559,7 +560,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   function renderBatchPreview(state, active) {
     batchPreview.setAttribute('aria-busy',String(batchPreviewState.loading));
     const plan = batchPreviewState.plan;
-    const heading = make(document,'h3',plan ? `Preview ${batchPreviewState.selectedIds.length} selected suggestions` : 'Prepare selected suggestions');
+    const heading = make(document,'h3',plan ? `Weave ${batchPreviewState.selectedIds.length} possibilit${batchPreviewState.selectedIds.length === 1 ? 'y' : 'ies'}` : batchPreviewState.loading ? 'Checking possibilities' : 'Check possibilities again');
     heading.id = 'history-batch-preview-title';
     const cancel = button('Cancel','batch-cancel','cancel'); cancel.disabled = batchPreviewState.operation === 'commit';
     const panelHeader = make(document,'header',null,'history-batch-preview-header'); panelHeader.append(heading,cancel);
@@ -654,7 +655,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       unresolved.setAttribute('role','status'); body.append(unresolved);
     }
     const busy = batchPreviewState.loading || state.busyIds?.has?.('weave-batch');
-    const commit = button(busy ? 'Weaving…' : `Weave ${projection.events.length} events into history`,'batch-commit','commit');
+    const commit = button(busy ? 'Weaving…' : `Weave ${projection.events.length} event${projection.events.length === 1 ? '' : 's'} into history`,'batch-commit','commit');
+    commit.className = 'primary';
     commit.disabled = !!busy || !!projection.unresolvedConflicts?.length;
     batchPreview.append(commit);
     if (batchPreviewState.focusPending) focusBatchPreviewAction();
@@ -1100,11 +1102,12 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const portalKeepAll=button('Keep all fits','deck-keep-all-fits','keep-all');
       portalKeepAll.disabled=!savedSuggestions.some(item=>!deckReview.keptIds.includes(String(item.id))&&item.verdict==='fits'&&!item.conflictsWith)
         ||deckReview.keptIds.length>=deckState.maxKept;
-      const portalReview=button(`Review ${deckReview.keptIds.length} kept`,'deck-review-kept','review-kept');
+      const portalReview=button(`Weave kept (${deckReview.keptIds.length})`,'deck-review-kept','review-kept');
       portalReview.disabled=!deckReview.keptIds.length||!!state.busyIds?.size;
       const portalUndo=button('Undo last','deck-undo','undo');
       portalUndo.disabled=!owner.questionId||!owner.historyId||!savedSuggestions.length||!deckState.canUndo(owner);
-      portalMoreActions.append(portalKeepAll,portalReview,portalUndo);
+      portalMoreActions.append(portalKeepAll,portalUndo);
+      if (deckReview.keptIds.length) deckHeader.append(portalReview);
       deckHeader.append(portalMore);
       deckHeader.append(button('List view','deck-list','list'));
       deckPortal.append(deckHeader);
@@ -1112,7 +1115,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const currentItem=savedSuggestions.find(item=>String(item.id)===currentId&&deckReview.unreviewedIds.includes(String(item.id)))
         || savedSuggestions.find(item=>deckReview.unreviewedIds.includes(String(item.id)));
       if (!currentItem) {
-        deckPortal.append(make(document,'p',deckReview.keptIds.length?'No unreviewed suggestions remain. Kept suggestions stay available for batch review.':deckReview.passedIds.length?'All suggestions reviewed. Passed suggestions remain available below.':'No unwoven suggestions remain in this window.','history-deck-empty'));
+        deckPortal.append(make(document,'p',deckReview.keptIds.length?`${deckReview.keptIds.length} kept possibilit${deckReview.keptIds.length === 1 ? 'y is' : 'ies are'} ready to weave.`:deckReview.passedIds.length?'All suggestions reviewed. Passed suggestions remain available below.':'No unwoven suggestions remain in this window.','history-deck-empty'));
       } else {
         deckCurrentIds.set(batchScope,String(currentItem.id));
         const card=make(document,'article',null,'history-deck-card'); card.dataset.swipeCard='true'; card.dataset.suggestionId=String(currentItem.id); card.tabIndex=0;
@@ -1134,7 +1137,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
         const cardActions=make(document,'div',null,'history-deck-actions');
         cardActions.append(button('Not now','deck-pass',currentItem.id,{swipeIgnore:'true'}),button('Keep','deck-keep',currentItem.id,{swipeIgnore:'true'}));
         cardContent.append(cardActions); card.append(cardContent); deckPortal.append(card);
-        deckPortal.append(make(document,'p','Swipe right or press → to keep. Swipe left or press ← for Not now.','history-deck-help'));
+        deckPortal.append(make(document,'p','Swipe right or press → to keep, then confirm Weave into history. Left/←: Not now.','history-deck-help'));
       }
       if (deckReview.passedIds.length) {
         const passedToggle=button(`Passed · ${deckReview.passedIds.length}`,'deck-passed-toggle','passed');

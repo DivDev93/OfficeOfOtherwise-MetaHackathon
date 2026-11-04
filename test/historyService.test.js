@@ -258,6 +258,28 @@ test('batch weave validates all six candidates, saves them together, and runs on
   assert.equal(calls.length, 1, 'idempotent replay does not dispatch another Spark request');
 });
 
+test('batch plan cache is session-scoped so each browser can commit only its own checked plan', async t => {
+  const root=await mkdtemp(join(tmpdir(),'office-session-plans-')); t.after(()=>rm(root,{recursive:true,force:true}));
+  const store=createHistoryStore(root), suggestion=candidate('session-fit',-2300);
+  store.save(question);
+  const saved=store.get(question.id); saved.histories[0].suggestions=[suggestion]; store.save(saved);
+  let checks=0;
+  const service=createHistoryService({store,agent:{async suggest(){return [];},async planBatchWeave({suggestions}) {
+    checks++;
+    return {chain:suggestions.map(item=>({suggestionId:item.id,causeEventId:'channels-2400'})),merges:[],conflicts:[]};
+  },async checkRippleBatch(){return [];}}});
+  const base={questionId:question.id,historyId:'history-1',suggestionIds:[suggestion.id],userId:'u'};
+  const first=await service.batchCheck({...base,sessionId:'browser-a'});
+  const second=await service.batchCheck({...base,sessionId:'browser-b'});
+  assert.equal(checks,2,'a semantic plan cache hit cannot cross browser sessions');
+  assert.notEqual(first.plan.id,second.plan.id);
+  assert.notEqual(first.plan.planKey,second.plan.planKey);
+  const committed=await service.weaveBatch({...base,sessionId:'browser-b',planId:second.plan.id,acceptedMergeIds:[],excludedSuggestionIds:[]});
+  assert.deepEqual(committed.events.map(item=>item.id),[suggestion.id]);
+  await assert.rejects(service.weaveBatch({...base,sessionId:'browser-a',planId:first.plan.id,acceptedMergeIds:[],excludedSuggestionIds:[]}),
+    error=>error.code==='batch_plan_stale','the first session still resolves its own plan and receives stale-history feedback after the other commit');
+});
+
 test('batch weave rejects an invalid selection before inserting any selected event', async () => {
   const store = memoryStore();
   const questionWithCandidates = store.get('lake-chad');

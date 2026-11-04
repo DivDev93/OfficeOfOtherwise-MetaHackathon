@@ -337,7 +337,11 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
       return suggestion;
     });
     if (typeof agent.planBatchWeave !== 'function') throw new HistoryServiceError('batch_plan_unavailable', 'Batch planning is unavailable.', 501);
-    const planKey = batchPlanKey(questionId, historyId, history, suggestions);
+    const contentKey = batchPlanKey(questionId, historyId, history, suggestions);
+    // A durable plan is commit-authorized for one browser session. Keep the
+    // semantic history revision separate from its owner so another session
+    // cannot receive a cached plan it is forbidden to commit.
+    const planKey = createHash('sha256').update(JSON.stringify([contentKey, String(userId), String(sessionId)])).digest('hex');
     if (batchPlanInFlight.has(planKey)) return batchPlanInFlight.get(planKey);
     const task = (async () => {
       const requestId = randomUUID();
@@ -378,7 +382,7 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
         else localBatchPlans.set(planKey, { status: 'ready', requestId: reservation.requestId, attempts: localBatchPlans.get(planKey)?.attempts ?? 1, plan });
         const latest = resolve(store, questionId, historyId);
         const latestKey = batchPlanKey(questionId, historyId, latest.history, suggestions.map(item => latest.history.suggestions?.find(value => value.id === item.id) ?? item));
-        if (latestKey !== planKey) throw new HistoryServiceError('batch_plan_stale', 'History or selected suggestion content changed during planning. Refresh and check again.', 409, { plan });
+        if (latestKey !== contentKey) throw new HistoryServiceError('batch_plan_stale', 'History or selected suggestion content changed during planning. Refresh and check again.', 409, { plan });
         return { plan: hydrateBatchPlan(plan, latest.history), cached: false };
       } catch (error) {
         const dispatched = Number.isSafeInteger(dispatchStart) && typeof agent.client?.dispatchCount === 'function'

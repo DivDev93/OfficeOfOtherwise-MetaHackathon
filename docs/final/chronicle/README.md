@@ -25,3 +25,13 @@ The local recording command remains documented in [the final-day README](../READ
 After the verification weave the Chronicle contains **9 total events**. The time bar and sheet correctly show **8 events as of 44 BCE** because the existing Taif event at 22 BCE is later.
 
 This is Chrome touch emulation, not a physical-device test. Verification did not change the normal app's saved history or replace the configured key/spend ledger. No deployment or submission was performed.
+
+## Follow-up: clear Weave confirmation and browser-session cache
+
+A second browser could receive another session's cached checked plan, then receive `batch_plan_not_found` when confirming Weave. Checked-plan cache keys now include the user/session; store reservations still enforce ownership and history revision checks. A rejected unavailable plan is cleared from the client preview and offers Retry check inline.
+
+Review now fits its contents with a prominent gold Weave action beside the event. Cancelling returns to a visible Weave kept action in the deck header rather than hiding it in the overflow menu. Card actions remain Not now and Keep.
+
+The in-app browser check began at 245 BCE with eight canonical events and the saved Aden possibility. Keep, Cancel, Weave kept and confirmation succeeded in the disposable history copy: HTTP 200, nine events, Aden selected at 44 BCE. The original history remains at eight events with its suggestion available. The normal recording server was restarted with its configured key and existing spend ledger.
+
+The final Node 22 suite passed **853/853**, including cross-session ownership and unavailable-plan recovery checks. Updated confirmation screenshots: [985×822](weave-review-985.png), [375×812](weave-review-375.png).

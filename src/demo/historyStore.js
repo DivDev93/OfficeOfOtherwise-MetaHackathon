@@ -297,13 +297,14 @@ export function createHistoryStore(root, now = Date.now) {
       const current = state();
       current.batchPlans ??= {};
       const existing = current.batchPlans[planKey];
+      const userSessionKey = usageKey(userId, sessionId);
+      if (existing && existing.userSessionKey !== userSessionKey) return { status: 'owner-mismatch' };
       if (existing && ['ready', 'committed'].includes(existing.status)) return { status: 'cached', plan: structuredClone(existing.plan), requestId: existing.requestId };
       if (existing && existing.status === 'pending') return { status: 'pending', requestId: existing.requestId };
       if (existing && existing.status === 'unknown' && (!retryOf || retryOf !== existing.retryOf)) {
         return { status: 'unknown', requestId: existing.requestId, retryOf: existing.retryOf };
       }
       if (existing?.status === 'unknown' && retryOf === existing.retryOf) existing.retryOf = undefined;
-      const userSessionKey = usageKey(userId, sessionId);
       const windowAttempts = Object.values(current.windowBatches ?? {}).filter(entry => entry.userSessionKey === userSessionKey).length;
       const planAttempts = Object.values(current.batchPlans).filter(entry => entry.userSessionKey === userSessionKey)
         .reduce((sum, entry) => sum + (entry.attempts ?? 1), 0);

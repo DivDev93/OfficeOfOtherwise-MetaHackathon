@@ -26,6 +26,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   const pendingFinalizeFlights = new Set();
   const batchPlanCache = new Map();
   const batchPlanFlights = new Map();
+  const unavailableBatchPlanIds = new Set();
   const batchCheckUncertainCache = new Map();
   const listeners = new Set();
   const state = { autoSuggest: true, autoWeave: false, autoWeaveRunning: false, questionId: '', historyId: '', selectedEventId: '', heldSuggestionIds: [], date: null, window: null, question: null, questions: [], histories: [],
@@ -270,6 +271,10 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
           state.status = data.error || 'This suggestion now conflicts with the selected history.';
           if (state.question) state.histories = state.histories.map(item => item.id === state.history.id ? state.history : item);
           emit();
+        } else if (data.code === 'batch_plan_not_found') {
+          unavailableBatchPlanIds.add(String(payload.planId || ''));
+          batchPlanCache.clear(); batchCheckUncertainCache.clear(); state.batchCheckUncertain = null;
+          state.status = 'This checked plan is unavailable for this browser session. Check the selected suggestions again.';
         } else if (data.code === 'suggestion_recheck_pending') state.status = data.error || 'This suggestion is being checked again; retry the action shortly.';
         else state.status = data.error || 'Could not update history.';
         return null;
@@ -382,11 +387,12 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   function commitWeaveBatch({ suggestionIds = [], planId, acceptedMergeIds = [], excludedSuggestionIds = [], pending = false,
     automatic = false, returnStaleData = false } = {}) {
     if (state.autoWeaveRunning && !automatic) return Promise.resolve(null);
+    if (unavailableBatchPlanIds.has(String(planId))) return Promise.resolve(null);
     const key = context && JSON.stringify([context.questionId, context.historyId, [...new Set(suggestionIds.map(String))].sort()]);
     const result = mutate('/api/history/weave-batch', { planId, acceptedMergeIds, excludedSuggestionIds, ...(pending ? { pending: true } : {}) },
       'weave-batch', { returnStaleData });
     return Promise.resolve(result).then(data => {
-      if (data && key) batchPlanCache.delete(key);
+      if (data && key) { batchPlanCache.delete(key); unavailableBatchPlanIds.delete(String(planId)); }
       return data;
     });
   }
@@ -610,13 +616,14 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   function clear() {
     finalizePendingBeforeNavigation(context, state.history);
     generation++; if (timer !== null) clearTimer(timer); timer = null; clearWeaveFeedback(); context = null;
-    batchCheckOwner++; batchPlanCache.clear(); batchPlanFlights.clear(); batchCheckUncertainCache.clear(); state.batchCheckUncertain = null;
+    batchCheckOwner++; batchPlanCache.clear(); batchPlanFlights.clear(); batchCheckUncertainCache.clear(); unavailableBatchPlanIds.clear(); state.batchCheckUncertain = null;
     heldOwnerKey = ''; state.questionId = ''; state.historyId = ''; state.selectedEventId = ''; state.heldSuggestionIds = []; state.date = null; state.window = null; state.suggestions = [];
     state.status = ''; state.loading = false; state.paused = false; state.autoWeaveRunning = false; state.busyIds.clear(); state.history = null; state.question = null; state.histories = []; state.questions = []; state.windowCached = false; state.windowStatus = ''; emit();
   }
   function hover() { /* Preview is deliberately inert: never generate from hover. */ }
   readPreferences();
   return { getState: () => ({ ...state, suggestions: [...state.suggestions], heldSuggestionIds: [...state.heldSuggestionIds], busyIds: new Set(state.busyIds) }),
+    isBatchPlanUnavailable: planId => unavailableBatchPlanIds.has(String(planId)),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     setContext, selectHistory, selectQuestion, openHistory, openQuestion, setQuestions, updateMediaReference, selectEvent, selectSuggestion, selectRecord, selectSuggestionWindow, setDate, setHeldSuggestionIds, clear, hover,
     setAutoSuggest: persistPreference, setAutoWeave: persistAutoWeave, finalizePendingBatch, removePendingEvent,
