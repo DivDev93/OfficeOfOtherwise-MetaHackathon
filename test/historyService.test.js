@@ -44,8 +44,10 @@ test('suggestion windows cache by history and window; More explicitly appends a 
   const args = { questionId: 'lake-chad', historyId: 'history-1', window: { fromYear: -3000, toYear: -2000 }, userId: 'u', sessionId: 's' };
   const first = await service.suggest(args);
   assert.equal(first.generated, true);
+  assert.deepEqual(first.generatedSuggestionIds, first.suggestions.map(item => item.id));
   const cached = await service.suggest(args);
   assert.equal(cached.cached, true);
+  assert.equal(cached.generatedSuggestionIds, undefined, 'cached browse does not identify suggestions for auto-weave');
   assert.equal(count, 1);
   assert.equal(cached.suggestions[0].id, first.suggestions[0].id);
   const more = await service.suggest({ ...args, more: true });
@@ -365,6 +367,125 @@ test('durable batch commit receipt replays after restart before Spark finalizati
   assert.equal(finishedStore.get('lake-chad').histories[0].events.filter(item => item.id === mergeId).length, 1);
   assert.equal(finishedStore.getBatchPlan(checked.plan.planKey).status, 'committed');
   assert.equal(rippleCalls, 1);
+});
+
+test('pending batch finalize and remove are persistence-only; removal restores source media and repairs descendants', async () => {
+  const makeSources = () => [
+    { ...candidate('pending-a', -2300), window: { fromYear: -2500, toYear: -2000 }, sceneRef: { status: 'complete', path: 'scenes/pending-a.png' } },
+    { ...candidate('pending-b', -2250), window: { fromYear: -2500, toYear: -2000 }, heroRef: { status: 'complete', path: 'scenes/pending-b.png' } },
+    { ...candidate('pending-excluded', -2200), window: { fromYear: -2500, toYear: -2000 } },
+  ];
+  async function createPendingRun() {
+    const store = memoryStore();
+    const sources = makeSources();
+    const saved = store.get('lake-chad');
+    saved.histories[0].suggestions = sources;
+    store.save(saved);
+    let modelCalls = 0;
+    const service = createHistoryService({ store, agent: { async suggest() { throw new Error('not used'); },
+      async planBatchWeave({ suggestions }) {
+        modelCalls++;
+        return { chain: suggestions.map(item => ({ suggestionId: item.id, causeEventId: 'channels-2400' })),
+          merges: [{ suggestionIds: ['pending-a', 'pending-b'], title: 'Combined water practice',
+            summary: 'Lake Chad communities combine the water practices.' }], conflicts: [] };
+      }, async checkRippleBatch({ events }) {
+        modelCalls++;
+        return events.map(item => ({ eventId: item.id, inconsistent: false, reason: '' }));
+      } } });
+    const args = { questionId: 'lake-chad', historyId: 'history-1', suggestionIds: sources.map(item => item.id), userId: 'u', sessionId: 's' };
+    const checked = await service.batchCheck(args);
+    const mergeId = checked.plan.merges[0].id;
+    const result = await service.weaveBatch({ ...args, planId: checked.plan.id, acceptedMergeIds: [mergeId],
+      excludedSuggestionIds: ['pending-excluded'], pending: true });
+    assert.equal(result.pendingBatchId, result.events[0].pendingBatchId);
+    return { store, service, sources, args, result, mergeId, modelCalls: () => modelCalls };
+  }
+
+  const finalized = await createPendingRun();
+  assert.equal(finalized.result.history.weaveBatches[0].sourceSuggestions.length, 2);
+  assert.deepEqual(finalized.result.events[0].pendingWindows, [{ fromYear: -2500, toYear: -2000 }]);
+  assert.deepEqual(finalized.result.events[0].sourceMediaRefs.map(item => item.suggestionId), ['pending-a', 'pending-b']);
+  const callsBeforeFinalize = finalized.modelCalls();
+  const kept = await finalized.service.finalizePendingWeave({ questionId: 'lake-chad', historyId: 'history-1', pendingBatchId: finalized.result.pendingBatchId });
+  assert.equal(kept.events[0].pending, undefined);
+  assert.equal(kept.history.weaveBatches[0].status, 'kept');
+  assert.equal(finalized.modelCalls(), callsBeforeFinalize, 'finalize is persistence-only');
+  assert.equal((await finalized.service.finalizePendingWeave({ questionId: 'lake-chad', historyId: 'history-1', pendingBatchId: finalized.result.pendingBatchId })).cached, true);
+  await assert.rejects(finalized.service.removePendingWeave({ questionId: 'lake-chad', historyId: 'history-1', pendingBatchId: finalized.result.pendingBatchId }),
+    error => error.code === 'pending_batch_finalized');
+
+  const removed = await createPendingRun();
+  const child = { id: 'pending-descendant', year: -1700, place: { name: 'Lake Chad', lat: 13, lon: 14 },
+    title: 'A later settlement follows the combined practice', summary: 'Lake Chad settlement builders adapt the combined practice.',
+    causeEventId: removed.mergeId };
+  const withChild = removed.store.get('lake-chad');
+  withChild.histories[0].events.push(child);
+  removed.store.save(withChild);
+  const callsBeforeRemove = removed.modelCalls();
+  const restored = await removed.service.removePendingWeave({ questionId: 'lake-chad', historyId: 'history-1', pendingBatchId: removed.result.pendingBatchId });
+  assert.equal(removed.modelCalls(), callsBeforeRemove, 'remove is persistence-only');
+  assert.equal(restored.history.events.some(item => item.id === removed.mergeId), false);
+  assert.equal(restored.history.events.find(item => item.id === child.id).causeEventId, 'channels-2400');
+  assert.ok(restored.history.events.every(event => event.causeEventId === 'lake-chad'
+    || restored.history.events.some(cause => cause.id === event.causeEventId && cause.year < event.year)));
+  assert.deepEqual(restored.history.suggestions.map(item => item.id), ['pending-a', 'pending-b', 'pending-excluded']);
+  assert.equal(restored.history.suggestions.find(item => item.id === 'pending-a').sceneRef.path, 'scenes/pending-a.png');
+  assert.equal(restored.history.suggestions.find(item => item.id === 'pending-b').heroRef.path, 'scenes/pending-b.png');
+  assert.equal(restored.history.events.find(item => item.id === 'settlement-1800').checkFlags.some(flag => flag.kind === 'weave-ripple'), false);
+  assert.equal(restored.history.weaveBatches[0].status, 'removed');
+  assert.equal((await removed.service.removePendingWeave({ questionId: 'lake-chad', historyId: 'history-1', pendingBatchId: removed.result.pendingBatchId })).cached, true);
+});
+
+test('removing one pending merged row restores only its sources and leaves the other batch rows pending', async () => {
+  const store = memoryStore();
+  const sources = [
+    { ...candidate('row-a', -2300), window: { fromYear: -2500, toYear: -2000 } },
+    { ...candidate('row-mid-a', -2200), window: { fromYear: -2500, toYear: -2000 }, sceneRef: { status: 'complete', path: 'scenes/row-mid-a.png' } },
+    { ...candidate('row-mid-b', -2150), window: { fromYear: -2500, toYear: -2000 }, heroRef: { status: 'complete', path: 'scenes/row-mid-b.png' } },
+    { ...candidate('row-c', -2100), window: { fromYear: -2500, toYear: -2000 } },
+  ];
+  const seeded = store.get('lake-chad');
+  seeded.histories[0].suggestions = sources;
+  store.save(seeded);
+  let modelCalls = 0;
+  const service = createHistoryService({ store, agent: { async suggest() { throw new Error('not used'); },
+    async planBatchWeave({ suggestions }) {
+      modelCalls++;
+      return { chain: suggestions.map((item, index) => ({ suggestionId: item.id,
+        causeEventId: index ? suggestions[index - 1].id : 'channels-2400' })),
+        merges: [{ suggestionIds: ['row-mid-a', 'row-mid-b'], title: 'Combined middle-row practice',
+          summary: 'Lake Chad communities combine these related middle-period practices.' }], conflicts: [] };
+    }, async checkRippleBatch({ events }) {
+      modelCalls++;
+      return events.map(item => ({ eventId: item.id, inconsistent: true, reason: 'Review after the provisional changes.' }));
+    } } });
+  const args = { questionId: 'lake-chad', historyId: 'history-1', suggestionIds: sources.map(item => item.id), userId: 'u', sessionId: 's' };
+  const checked = await service.batchCheck(args);
+  const mergedId = checked.plan.merges[0].id;
+  const committed = await service.weaveBatch({ ...args, planId: checked.plan.id, acceptedMergeIds: [mergedId],
+    excludedSuggestionIds: [], pending: true });
+  assert.deepEqual(committed.events.map(item => item.id), ['row-a', mergedId, 'row-c']);
+  assert.equal(modelCalls, 2, 'the checked batch uses one Wonder and one combined Spark call');
+  const callCount = modelCalls;
+  const removed = await service.removePendingWeave({ questionId: 'lake-chad', historyId: 'history-1',
+    pendingBatchId: committed.pendingBatchId, eventId: mergedId });
+  assert.equal(modelCalls, callCount, 'per-row remove is persistence-only');
+  assert.deepEqual(removed.removedEventIds, [mergedId]);
+  assert.deepEqual(removed.history.events.filter(item => item.pending).map(item => item.id), ['row-a', 'row-c']);
+  assert.equal(removed.history.events.find(item => item.id === 'row-c').causeEventId, 'row-a');
+  assert.deepEqual(removed.history.suggestions.map(item => item.id), ['row-mid-a', 'row-mid-b']);
+  assert.equal(removed.history.suggestions.find(item => item.id === 'row-mid-a').sceneRef.path, 'scenes/row-mid-a.png');
+  assert.equal(removed.history.suggestions.find(item => item.id === 'row-mid-b').heroRef.path, 'scenes/row-mid-b.png');
+  assert.deepEqual(removed.history.weaveBatches[0].eventIds, ['row-a', 'row-c']);
+  assert.deepEqual(removed.history.weaveBatches[0].sourceSuggestions.map(item => item.id), ['row-a', 'row-c']);
+  const laterFlags = removed.history.events.find(item => item.id === 'settlement-1800').checkFlags.filter(flag => flag.kind === 'weave-ripple');
+  assert.deepEqual(laterFlags.map(flag => flag.wovenEventId), ['row-a', 'row-c']);
+  assert.equal((await service.removePendingWeave({ questionId: 'lake-chad', historyId: 'history-1',
+    pendingBatchId: committed.pendingBatchId, eventId: mergedId })).cached, true, 'repeat removal cannot restore duplicate source suggestions');
+  const finalized = await service.finalizePendingWeave({ questionId: 'lake-chad', historyId: 'history-1', pendingBatchId: committed.pendingBatchId });
+  assert.deepEqual(finalized.events.map(item => item.id), ['row-a', 'row-c']);
+  assert.ok(finalized.events.every(item => item.pending !== true));
+  assert.equal(modelCalls, callCount, 'finalizing the remaining rows is persistence-only');
 });
 
 test('conflicting suggestion forks with shared earlier prefix and leaves original history intact', async () => {

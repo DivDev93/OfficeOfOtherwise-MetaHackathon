@@ -342,7 +342,7 @@ export function createHistoryStore(root, now = Date.now) {
         ...(['ready', 'committed'].includes(entry.status) ? { plan: structuredClone(entry.plan) } : {}),
         ...(entry.retryOf ? { retryOf: entry.retryOf } : {}),
         ...(entry.status === 'committed' ? { eventIds: [...(entry.eventIds ?? [])],
-          acceptedMergeIds: [...(entry.acceptedMergeIds ?? [])], excludedSuggestionIds: [...(entry.excludedSuggestionIds ?? [])] } : {}) } : { status: 'missing' };
+          acceptedMergeIds: [...(entry.acceptedMergeIds ?? [])], excludedSuggestionIds: [...(entry.excludedSuggestionIds ?? [])], pending: entry.pending === true } : {}) } : { status: 'missing' };
     },
     getBatchPlanById({ planId, questionId, historyId, userId, sessionId } = {}) {
       if (!validId(planId) || !validId(questionId) || !validId(historyId) || !validId(userId) || !validId(sessionId)) return { status: 'missing' };
@@ -352,7 +352,7 @@ export function createHistoryStore(root, now = Date.now) {
       return entry ? { status: entry.status, requestId: entry.requestId,
         ...(['ready', 'committed'].includes(entry.status) ? { plan: structuredClone(entry.plan) } : {}),
         ...(entry.status === 'committed' ? { eventIds: [...(entry.eventIds ?? [])],
-          acceptedMergeIds: [...(entry.acceptedMergeIds ?? [])], excludedSuggestionIds: [...(entry.excludedSuggestionIds ?? [])] } : {}) } : { status: 'missing' };
+          acceptedMergeIds: [...(entry.acceptedMergeIds ?? [])], excludedSuggestionIds: [...(entry.excludedSuggestionIds ?? [])], pending: entry.pending === true } : {}) } : { status: 'missing' };
     },
     completeBatchCommit({ planKey, planId, requestId, eventIds = [] } = {}) {
       if (!validId(planKey) || !validId(planId) || !validId(requestId) || !Array.isArray(eventIds)) return { status: 'invalid' };
@@ -364,11 +364,11 @@ export function createHistoryStore(root, now = Date.now) {
       saveState(current);
       return { status: 'committed', eventIds: [...entry.eventIds] };
     },
-    commitBatchHistory({ question, planKey, planId, requestId, eventIds = [], acceptedMergeIds = [], excludedSuggestionIds = [] } = {}) {
+    commitBatchHistory({ question, planKey, planId, requestId, eventIds = [], acceptedMergeIds = [], excludedSuggestionIds = [], pending = false } = {}) {
       if (!question || !validId(question.id) || !validId(planKey) || !validId(planId) || !validId(requestId)
           || !Array.isArray(eventIds) || eventIds.some(id => !validId(id))
           || !Array.isArray(acceptedMergeIds) || acceptedMergeIds.some(id => !validId(id))
-          || !Array.isArray(excludedSuggestionIds) || excludedSuggestionIds.some(id => !validId(id))) return { status: 'invalid' };
+          || !Array.isArray(excludedSuggestionIds) || excludedSuggestionIds.some(id => !validId(id)) || typeof pending !== 'boolean') return { status: 'invalid' };
       const normalized = normalizeQuestionHistories(question);
       const current = state(), entry = current.batchPlans?.[planKey];
       if (!entry || entry.requestId !== requestId || entry.plan?.id !== planId || entry.questionId !== normalized.id
@@ -376,7 +376,7 @@ export function createHistoryStore(root, now = Date.now) {
       if (entry.status === 'committed') {
         const sameChoices = (left = [], right = []) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
         if (!sameChoices(acceptedMergeIds, entry.acceptedMergeIds ?? [])
-            || !sameChoices(excludedSuggestionIds, entry.excludedSuggestionIds ?? [])) return { status: 'choice-mismatch' };
+            || !sameChoices(excludedSuggestionIds, entry.excludedSuggestionIds ?? []) || (entry.pending === true) !== pending) return { status: 'choice-mismatch' };
         return { status: 'committed', alreadyCommitted: true, question: current.questions[normalized.id],
           eventIds: [...(entry.eventIds ?? [])], acceptedMergeIds: [...(entry.acceptedMergeIds ?? [])],
           excludedSuggestionIds: [...(entry.excludedSuggestionIds ?? [])] };
@@ -387,6 +387,7 @@ export function createHistoryStore(root, now = Date.now) {
       entry.eventIds = [...eventIds];
       entry.acceptedMergeIds = [...acceptedMergeIds];
       entry.excludedSuggestionIds = [...excludedSuggestionIds];
+      entry.pending = pending;
       entry.committedAt = new Date(now()).toISOString();
       saveState(current);
       return { status: 'committed', alreadyCommitted: false, question: normalized, eventIds: [...entry.eventIds],
@@ -417,16 +418,20 @@ export function createHistoryStore(root, now = Date.now) {
         status: group.statuses.includes('ready') ? 'ready' : group.statuses.at(-1), batches: group.batches, suggestionCount: group.suggestionIds.size }));
     },
     getPreference(userId, sessionId) {
-      if (!validId(userId) || !validId(sessionId)) return { autoSuggest: true };
-      return { autoSuggest: state().preferences?.[usageKey(userId, sessionId)]?.autoSuggest ?? true };
+      if (!validId(userId) || !validId(sessionId)) return { autoSuggest: true, autoWeave: false };
+      const preference = state().preferences?.[usageKey(userId, sessionId)] ?? {};
+      return { autoSuggest: preference.autoSuggest ?? true, autoWeave: preference.autoWeave ?? false };
     },
-    setPreference({ userId, sessionId, autoSuggest } = {}) {
-      if (!validId(userId) || !validId(sessionId) || typeof autoSuggest !== 'boolean') throw new Error('Invalid history preference');
+    setPreference({ userId, sessionId, autoSuggest, autoWeave } = {}) {
+      if (!validId(userId) || !validId(sessionId) || (autoSuggest === undefined && autoWeave === undefined)
+          || (autoSuggest !== undefined && typeof autoSuggest !== 'boolean') || (autoWeave !== undefined && typeof autoWeave !== 'boolean')) throw new Error('Invalid history preference');
       const current = state();
       current.preferences ??= {};
-      current.preferences[usageKey(userId, sessionId)] = { autoSuggest, updatedAt: new Date(now()).toISOString() };
+      const key = usageKey(userId, sessionId), previous = current.preferences[key] ?? {};
+      current.preferences[key] = { autoSuggest: autoSuggest ?? previous.autoSuggest ?? true,
+        autoWeave: autoWeave ?? previous.autoWeave ?? false, updatedAt: new Date(now()).toISOString() };
       saveState(current);
-      return { autoSuggest };
+      return { autoSuggest: current.preferences[key].autoSuggest, autoWeave: current.preferences[key].autoWeave };
     },
     /** Merge newly discovered legacy paths without overwriting saved question/history edits. */
     migrateLegacy(records, options) {

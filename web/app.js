@@ -2011,6 +2011,12 @@ function historySceneCandidates(state) {
     seen.add(key); candidates.push({ identity, record, key });
   };
   for (const suggestion of state.suggestions || []) add(suggestion);
+  const activeWindow = state.window;
+  for (const event of state.history?.events || []) {
+    if (event.pending !== true || !activeWindow) continue;
+    const belongsToActiveWindow = (event.pendingWindows || []).some(window => window.fromYear === activeWindow.fromYear && window.toYear === activeWindow.toYear);
+    if (belongsToActiveWindow) add(event);
+  }
   const selected = state.history?.events?.find(event => event.id === state.selectedEventId);
   add(selected);
   return candidates;
@@ -2106,7 +2112,7 @@ async function reconcileHistoryMediaAttachment(kind, identity, state = historySe
 }
 function scheduleAutomaticHistoryScenePreparation(state = historySession.getState()) {
   if (!historyMode || state.loading || !state.history || !state.questionId || !state.historyId
-      || !canCreateFreshHistory()) return;
+      || state.autoWeaveRunning || !canCreateFreshHistory()) return;
   const contextKey = JSON.stringify([state.questionId,state.historyId]);
   const batch = [];
   for (const candidate of historySceneCandidates(state)) {

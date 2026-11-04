@@ -52,6 +52,35 @@ test('Atlas projection shows stable gold event pins through the date and highlig
   assert.equal(projected.latestEvent, source.histories[0].events[1]);
 });
 
+test('pending canonical events retain provenance and use normal as-of date and geography', () => {
+  const source = question();
+  const pending = event('woven-provisional', -2600, {
+    pending: true, pendingBatchId: 'batch-1', pendingWindows: [{ fromYear: -3000, toYear: -2001 }],
+    causeEventId: 'marsh', sceneRef: { path: 'scenes/pending.png', status: 'complete' },
+    geography: { version: 1, changes: [{ id: 'pending-lake', kind: 'lake', region: 'chad', intensity: 0.9 }] },
+  });
+  source.histories[0].events.push(pending);
+  const before = structuredClone(source);
+  const projected = projectHistoryAtlas(source, { historyId: 'history-main', asOfYear: -2500,
+    window: { fromYear: -3000, toYear: -2001 } });
+  const pin = projected.pins.find(item => item.id === pending.id);
+  assert.equal(pin.pending, true);
+  assert.equal(pin.pendingBatchId, 'batch-1');
+  assert.deepEqual(pin.pendingWindows, [{ fromYear: -3000, toYear: -2001 }]);
+  assert.equal(pin.causeEventId, 'marsh');
+  assert.deepEqual(pin.sceneRef, pending.sceneRef);
+  assert.equal(projected.latestEvent.id, pending.id);
+  assert.deepEqual(projected.composedGeography.changes, [
+    { id: 'dry', kind: 'vegetation', region: 'sahara', intensity: 0.2 },
+    ...pending.geography.changes,
+  ],
+    'pending is a review marker; its canonical event and geography still obey the selected as-of date');
+  assert.deepEqual(source, before, 'projection preserves the stored pending event unchanged');
+  const beforeDate = projectHistoryAtlas(source, { historyId: 'history-main', asOfYear: -2601,
+    window: { fromYear: -3000, toYear: -2001 } });
+  assert.ok(!beforeDate.pins.some(item => item.id === pending.id), 'the date does not advance to include pending events');
+});
+
 test('Atlas suggestions stay within the active history and exact current window', () => {
   const projected = projectHistoryAtlas(question(), { historyId: 'history-main', asOfYear: -2500, window: { fromYear: -3000, toYear: -2001 } });
   assert.deepEqual(projected.suggestions.map(item => item.id), ['sug-in-window']);

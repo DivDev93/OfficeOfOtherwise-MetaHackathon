@@ -789,13 +789,20 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
         if (req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') return json(res, 415, { error: 'Use a JSON request body.', code: 'unsupported_media_type' });
         const input = await historyRequestBody(req, res);
         if (!input) return;
-        if (Object.keys(input).some(key => key !== 'autoSuggest') || typeof input.autoSuggest !== 'boolean') return json(res, 400, { error: 'autoSuggest must be a boolean.', code: 'invalid_preference' });
-        try { return json(res, 200, service.setPreference({ ...actor, autoSuggest: input.autoSuggest })); }
+        const preferenceKeys = Object.keys(input);
+        if (preferenceKeys.some(key => !['autoSuggest', 'autoWeave'].includes(key)) || !preferenceKeys.length
+            || (input.autoSuggest !== undefined && typeof input.autoSuggest !== 'boolean')
+            || (input.autoWeave !== undefined && typeof input.autoWeave !== 'boolean')) {
+          return json(res, 400, { error: 'Provide autoSuggest and/or autoWeave as booleans.', code: 'invalid_preference' });
+        }
+        try { return json(res, 200, service.setPreference({ ...actor, autoSuggest: input.autoSuggest, autoWeave: input.autoWeave })); }
         catch (error) { return json(res, Number.isInteger(error?.status) ? error.status : 400, { error: error.message, code: error.code ?? 'invalid_preference' }); }
       }
       const historyActionNames = new Map([
         ['/api/history/suggest', ['POST', 'suggest']], ['/api/history/weave', ['POST', 'weave']],
         ['/api/history/weave-batch', ['POST', 'weaveBatch']],
+        ['/api/history/pending-weave/finalize', ['POST', 'finalizePendingWeave']],
+        ['/api/history/pending-weave/remove', ['POST', 'removePendingWeave']],
         ['/api/history/batch-check', ['POST', 'batchCheck']],
         ['/api/history/fork', ['POST', 'fork']], ['/api/history/ripple-check', ['POST', 'rippleCheck']],
         ['/api/history/ripple-check-batch', ['POST', 'rippleCheckBatch']],
@@ -804,23 +811,28 @@ export function createDemoServer({ runsDir = resolve('demo/runs'), liveRunsDir =
       const historyActionRoute = historyActionNames.get(path);
       if (historyActionRoute && req.method === historyActionRoute[0]) {
         if (!historyAuthorized(req) || !sameOrigin(req)) return json(res, 403, { error: 'History needs an access code.', code: 'unauthorized' });
-        const generationJob = true;
-        if (!acquireJob()) return json(res, 429, { error: 'Another generation is in progress.', code: 'busy' });
+        const [method] = historyActionRoute.slice(1);
+        const generationJob = !['finalizePendingWeave', 'removePendingWeave'].includes(method);
+        if (generationJob && !acquireJob()) return json(res, 429, { error: 'Another generation is in progress.', code: 'busy' });
         try {
         if (req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') return json(res, 415, { error: 'Use a JSON request body.', code: 'unsupported_media_type' });
         const sessionId = expansionCookieId(req);
         if (!expansionBudget.known(sessionId)) return json(res, 403, { error: 'A valid browser session is required.', code: 'invalid_history_session' });
         const input = await historyRequestBody(req, res);
         if (!input) return;
-        const [method] = historyActionRoute.slice(1), actor = { userId: 'demo', sessionId };
+        const actor = { userId: 'demo', sessionId };
         if (method === 'batchCheck' && Object.keys(input).some(key => !['questionId', 'historyId', 'suggestionIds', 'retryOf'].includes(key))) {
           return json(res, 400, { error: 'Unsupported batch check fields.', code: 'invalid_batch' });
         }
         if (method === 'rippleCheckBatch' && Object.keys(input).some(key => !['questionId', 'historyId', 'eventIds', 'wovenEventIds'].includes(key))) {
           return json(res, 400, { error: 'Unsupported batch ripple fields.', code: 'invalid_ripple_batch' });
         }
-        if (method === 'weaveBatch' && Object.keys(input).some(key => !['questionId', 'historyId', 'planId', 'acceptedMergeIds', 'excludedSuggestionIds'].includes(key))) {
+        if (method === 'weaveBatch' && Object.keys(input).some(key => !['questionId', 'historyId', 'planId', 'acceptedMergeIds', 'excludedSuggestionIds', 'pending'].includes(key))) {
           return json(res, 400, { error: 'A checked batch plan is required.', code: 'invalid_batch' });
+        }
+        if ((method === 'finalizePendingWeave' || method === 'removePendingWeave')
+            && Object.keys(input).some(key => !['questionId', 'historyId', 'pendingBatchId', ...(method === 'removePendingWeave' ? ['eventId'] : [])].includes(key))) {
+          return json(res, 400, { error: 'A pending batch ID is required.', code: 'invalid_pending_batch' });
         }
         if (method === 'suggest' && !hasMetaKey() && !injectedHistoryService) {
           const history = historyStore.get(input.questionId)?.histories?.find(item => item.id === input.historyId);

@@ -18,6 +18,11 @@ export function historyPinColorRole(world = {}, { hovered = false } = {}) {
   return null;
 }
 
+/** Auto-woven canonical events keep their normal gold pin role and gain a separate pending outline. */
+export function isPendingHistoryEvent(world = {}) {
+  return world.visualKind === 'history-event' && world.pending === true;
+}
+
 /** Skip the optional one-history Orbit tier while keeping direct surface-to-Atlas interpolation. */
 export function historyZoomPresentation(value, orbitEnabled = false) {
   const zoom = Math.min(1, Math.max(0, Number(value) || 0));

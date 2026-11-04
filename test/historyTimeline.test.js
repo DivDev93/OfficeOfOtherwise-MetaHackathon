@@ -259,6 +259,35 @@ test('pending and unavailable batch ripple flags expose one explicit combined re
   assert.deepEqual(calls,[[['later-a','later-b'],['woven-a','woven-b']]]);
 });
 
+test('auto-weave preference is opt-in and pending batches expose Keep all plus event-level Remove', async () => {
+  const pendingA=event('pending-a',120,'Pending shrine',{causeEventId:'anchor',pending:true,pendingBatchId:'batch-pending',pendingWindows:[{fromYear:100,toYear:199}]});
+  const pendingB=event('pending-b',140,'Pending observatory',{causeEventId:'pending-a',pending:true,pendingBatchId:'batch-pending',pendingWindows:[{fromYear:100,toYear:199},{fromYear:200,toYear:299}]});
+  const history={id:'pending-history',events:[event('anchor',50,'Anchor'),pendingA,pendingB],suggestions:[]};
+  const state={questionId:'pending-question',question:{id:'pending-question',histories:[history]},history,histories:[history],historyId:history.id,
+    selectedEventId:'pending-a',date:150,window:{fromYear:100,toYear:199},autoSuggest:true,autoWeave:false,busyIds:new Set()};
+  const calls=[],root=new Element('main',document);
+  const session={setAutoWeave:value=>calls.push(['autoWeave',value]),finalizePendingBatch:id=>calls.push(['finalize',id]),removePendingEvent:(batchId,id)=>calls.push(['remove',batchId,id])};
+  const mounted=mountHistoryTimeline(root,{getState:()=>state,session,document});
+  const timeline=mounted.element.children[1],suggestions=mounted.element.children[2];
+  const autoWeave=suggestions.queryAll('input').find(input=>input.dataset.autoWeave==='true');
+  assert.equal(autoWeave.checked,false,'auto-weave is opt-in by default');
+  autoWeave.checked=true; suggestions.listeners.change({target:autoWeave});
+  assert.deepEqual(calls,[['autoWeave',true]]);
+  const rows=timeline.queryAll('li');
+  const pendingRows=rows.filter(row=>row.dataset.pending==='true');
+  assert.deepEqual(pendingRows.map(row=>row.dataset.eventId),['pending-a','pending-b']);
+  assert.ok(pendingRows.every(row=>row.className.includes('history-event-pending')),'pending rows receive the dashed pending style');
+  assert.match(pendingRows[0].textContent,/Pending · Auto-weave · 100 CE to 199 CE/);
+  assert.match(pendingRows[1].textContent,/200 CE to 299 CE/,'source window labels use the timeline year formatter');
+  const keep=timeline.queryAll('button').find(button=>button.dataset.action==='finalize-pending-batch');
+  assert.equal(keep.textContent,'Keep all pending · 2');
+  const remove=pendingRows[0].queryAll('button').find(button=>button.dataset.action==='remove-pending-event');
+  assert.equal(remove.getAttribute('aria-label'),'Remove pending event Pending shrine');
+  const click=async button=>timeline.listeners.click({target:{closest:()=>button}});
+  await click(keep); await click(remove);
+  assert.deepEqual(calls,[['autoWeave',true],['finalize','batch-pending'],['remove','batch-pending','pending-a']]);
+});
+
 test('empty histories show starting points without verdict badges or empty-history boilerplate', () => {
   const fit={...event('start-fit',120,'A shrine is built',{verdict:'fits',reason:'The supplied history contains no events, so this possibility conflicts with nothing listed.'}),summary:'The shrine becomes a stop for travelers.'};
   const conflict={...event('start-conflict',130,'An impossible overlap',{verdict:'conflicts',conflictsWith:'future',reason:'The supplied history contains no events, so nothing conflicts with this possibility.'})};

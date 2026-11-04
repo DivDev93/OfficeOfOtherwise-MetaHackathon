@@ -108,6 +108,12 @@ function normalizeEvent(event, { questionId, previousEventId, fallbackId, identi
   const sourceMediaRefs = event.sourceMediaRefs;
   if (sourceMediaRefs !== undefined && (!Array.isArray(sourceMediaRefs) || sourceMediaRefs.length > 32
       || sourceMediaRefs.some(item => !item || !text(item.suggestionId) || item.suggestionId.length > 240))) throw new Error('Invalid history event source media refs');
+  const pendingBatchId = event.pendingBatchId === undefined ? undefined : text(event.pendingBatchId);
+  const pendingWindows = event.pendingWindows;
+  if (event.pending === true && (!pendingBatchId || pendingBatchId.length > 240)) throw new Error('Pending events require a valid batch ID');
+  if (pendingWindows !== undefined && (!Array.isArray(pendingWindows) || pendingWindows.length > 32
+      || pendingWindows.some(window => !window || !Number.isSafeInteger(window.fromYear) || !Number.isSafeInteger(window.toYear)
+        || window.fromYear > window.toYear || window.toYear - window.fromYear > 100_000))) throw new Error('Invalid pending event windows');
   return {
     id, year: event.year, place: normalizePlace(event.place), title, summary,
     causeEventId,
@@ -119,6 +125,8 @@ function normalizeEvent(event, { questionId, previousEventId, fallbackId, identi
     ...(sourcePlaces ? { sourcePlaces: sourcePlaces.map(item => ({ suggestionId: text(item.suggestionId), place: normalizePlace(item.place) })) } : {}),
     ...(sourceMediaRefs ? { sourceMediaRefs: sourceMediaRefs.map(item => ({ suggestionId: text(item.suggestionId),
       ...normalizeMediaRefs(item, {}, identity) })) } : {}),
+    ...(event.pending === true ? { pending: true, pendingBatchId } : {}),
+    ...(pendingWindows ? { pendingWindows: pendingWindows.map(window => ({ fromYear: window.fromYear, toYear: window.toYear })) } : {}),
     ...Object.fromEntries(['checkFlags', 'checks', 'origin', 'forkEventId', 'forkedFromEventId', 'forkReason']
       .filter(key => event[key] !== undefined).map(key => [key, structuredClone(event[key])])),
   };
@@ -155,6 +163,31 @@ export function normalizeHistory(history, { questionId, maxEraGapYears = 500 } =
   for (const key of ['forkedFromHistoryId', 'forkReason', 'origin']) if (history[key] !== undefined) result[key] = structuredClone(history[key]);
   if (history.checkFlags !== undefined) result.checkFlags = structuredClone(history.checkFlags);
   if (Array.isArray(history.suggestions)) result.suggestions = history.suggestions.map(item => ({ ...item }));
+  if (history.weaveBatches !== undefined) {
+    if (!Array.isArray(history.weaveBatches) || history.weaveBatches.length > 256) throw new Error('Invalid weave batch ledger');
+    result.weaveBatches = history.weaveBatches.map(batch => {
+      if (!batch || typeof batch !== 'object' || !text(batch.id) || text(batch.id).length > 240
+          || !['pending', 'kept', 'removed'].includes(batch.status) || !Array.isArray(batch.eventIds) || batch.eventIds.length > 32
+          || batch.eventIds.some(id => !text(id) || text(id).length > 240)
+          || !Array.isArray(batch.sourceSuggestions) || batch.sourceSuggestions.length > 32
+          || (batch.eventSources !== undefined && (!Array.isArray(batch.eventSources) || batch.eventSources.length > 32
+            || batch.eventSources.some(item => !item || !text(item.eventId) || item.eventId.length > 240
+              || !Array.isArray(item.sourceSuggestionIds) || item.sourceSuggestionIds.length > 32
+              || item.sourceSuggestionIds.some(id => !text(id) || text(id).length > 240))))
+          || (batch.removedEventIds !== undefined && (!Array.isArray(batch.removedEventIds) || batch.removedEventIds.length > 32
+            || batch.removedEventIds.some(id => !text(id) || text(id).length > 240)))
+          || !Array.isArray(batch.windows) || batch.windows.length > 32
+          || batch.windows.some(window => !window || !Number.isSafeInteger(window.fromYear) || !Number.isSafeInteger(window.toYear)
+            || window.fromYear > window.toYear || window.toYear - window.fromYear > 100_000)) throw new Error('Invalid weave batch ledger entry');
+      return { id: text(batch.id), status: batch.status, eventIds: [...new Set(batch.eventIds.map(text))],
+        sourceSuggestions: batch.sourceSuggestions.map(item => structuredClone(item)),
+        ...(batch.eventSources ? { eventSources: batch.eventSources.map(item => ({ eventId: text(item.eventId),
+          sourceSuggestionIds: [...new Set(item.sourceSuggestionIds.map(text))] })) } : {}),
+        ...(batch.removedEventIds ? { removedEventIds: [...new Set(batch.removedEventIds.map(text))] } : {}),
+        windows: batch.windows.map(window => ({ fromYear: window.fromYear, toYear: window.toYear })),
+        ...Object.fromEntries(['planId', 'createdAt', 'updatedAt'].filter(key => batch[key] !== undefined).map(key => [key, structuredClone(batch[key])])) };
+    });
+  }
   return result;
 }
 

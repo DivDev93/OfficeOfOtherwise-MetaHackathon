@@ -167,6 +167,8 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     }
     else if (node.dataset.action === 'select-event') onEventSelect(node.dataset.id);
     else if (node.dataset.action === 'select-suggestion') onEventSelect(node.dataset.id);
+    else if (node.dataset.action === 'remove-pending-event') await session?.removePendingEvent?.(node.dataset.batchId,node.dataset.id);
+    else if (node.dataset.action === 'finalize-pending-batch') await session?.finalizePendingBatch?.(node.dataset.id);
   });
   suggestions.addEventListener('click', async event => {
     if (event.target?.dataset?.batchSuggestion) return;
@@ -215,6 +217,7 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
   suggestions.addEventListener('change', event => {
     const target = event.target;
     if (target?.dataset?.autoSuggest === 'true') session?.setAutoSuggest?.(target.checked);
+    else if (target?.dataset?.autoWeave === 'true') session?.setAutoWeave?.(target.checked);
     else if (target?.dataset?.batchSuggestion) {
       const selected = batchSelections.get(batchScope) || new Set();
       if (target.checked && selected.size >= 32) { target.checked = false; batchNotice = 'Select up to 32 suggestions to weave at once.'; }
@@ -537,6 +540,18 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       retryBatch.disabled = !!state.busyIds?.size;
       timeline.append(retryBatch);
     }
+    const pendingEvents = (active.events || []).filter(item => item.pending === true && item.pendingBatchId);
+    const pendingBatches = new Map();
+    for (const item of pendingEvents) {
+      const key = String(item.pendingBatchId), current = pendingBatches.get(key) || [];
+      current.push(item); pendingBatches.set(key,current);
+    }
+    for (const [batchId,events] of pendingBatches) {
+      const keepAll = button(`Keep all pending · ${events.length}`,'finalize-pending-batch',batchId);
+      keepAll.setAttribute('aria-label',`Keep all ${events.length} pending event${events.length === 1 ? '' : 's'}`);
+      keepAll.disabled = !!state.autoWeaveRunning || !!state.busyIds?.has?.('weave-batch') || !!state.busyIds?.has?.(`pending-finalize:${batchId}`);
+      timeline.append(keepAll);
+    }
     for (const era of erasFor(active.events)) {
       const eraKey = `${active.id}:${era.events[0]?.id || era.label}`;
       const details = make(document, 'details', null, 'history-era');
@@ -549,9 +564,18 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
       const list = make(document, 'ol', null, 'history-era-events');
       for (const item of era.events) {
         const row = make(document, 'li', null, 'history-event-row'); row.dataset.eventId = item.id;
+        if (item.pending === true) { row.dataset.pending = 'true'; row.className += ' history-event-pending'; }
         if (item.id === selected) row.dataset.selected = 'true';
         const select = button(`${labelYear(item.year)} · ${item.title}`, 'select-event', item.id); select.setAttribute('aria-current', String(item.id === selected));
         row.append(select);
+        if (item.pending === true) {
+          const pendingWindows = [...new Map((item.pendingWindows || []).filter(window => Number.isSafeInteger(window.fromYear) && Number.isSafeInteger(window.toYear))
+            .map(window => [`${window.fromYear}:${window.toYear}`,window])).values()];
+          const windowLabels = pendingWindows.map(window => `${labelYear(window.fromYear)} to ${labelYear(window.toYear)}`);
+          const pendingTag = make(document,'span',`Pending · Auto-weave${windowLabels.length ? ` · ${windowLabels.join(', ')}` : ''}`,'history-event-pending-tag');
+          if (windowLabels.length) pendingTag.setAttribute('title',`Pending for ${windowLabels.join('; ')}`);
+          row.append(pendingTag);
+        }
         const cause = causes.get(item.causeEventId);
         const because = make(document, 'div', null, 'history-event-cause');
         because.append(document.createTextNode('because ← '));
@@ -565,6 +589,14 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
             button('Keep', 'keep', item.id, { wovenId: flag.wovenEventId }),
             button('Regenerate this event', 'regenerate', item.id, { wovenId: flag.wovenEventId }));
           row.append(flagNode);
+        }
+        if (item.pending === true && item.pendingBatchId) {
+          const removePending = button('Remove','remove-pending-event',item.id,{batchId:String(item.pendingBatchId)});
+          removePending.setAttribute('aria-label',`Remove pending event ${item.title || ''}`.trim());
+          removePending.disabled = !!state.autoWeaveRunning || !!state.busyIds?.has?.('weave-batch')
+            || !!state.busyIds?.has?.(`pending-remove:${item.pendingBatchId}:${item.id}`)
+            || !!state.busyIds?.has?.(`pending-finalize:${item.pendingBatchId}`);
+          row.append(removePending);
         }
         row.append(button('What if instead…', 'fork-event', item.id)); list.append(row);
       }
@@ -597,6 +629,10 @@ export function mountHistoryTimeline(root, { getState, subscribe, session, onHis
     const autoToggle = make(document, 'input'); autoToggle.type = 'checkbox'; autoToggle.checked = state.autoSuggest !== false; autoToggle.dataset.autoSuggest = 'true';
     autoToggle.setAttribute('aria-label', 'Automatically suggest events after changing date');
     autoLabel.append(autoToggle, document.createTextNode(' Auto-suggest')); controls.append(autoLabel);
+    const autoWeaveLabel = make(document,'label',null,'history-auto-label');
+    const autoWeaveToggle = make(document,'input'); autoWeaveToggle.type = 'checkbox'; autoWeaveToggle.checked = state.autoWeave === true; autoWeaveToggle.dataset.autoWeave = 'true';
+    autoWeaveToggle.setAttribute('aria-label','Automatically weave new fitting suggestions after they are checked');
+    autoWeaveLabel.append(autoWeaveToggle,document.createTextNode(' Auto-weave')); controls.append(autoWeaveLabel);
     if (!state.windowCached && !(state.suggestions || []).length) controls.append(button(state.autoSuggest === false ? `Suggest events around ${dateText}` : `Suggest events now around ${dateText}`, 'manual-suggest', 'current-window'));
     controls.queryAll?.('button').forEach(node => { node.disabled = !!state.loading || !!state.paused; });
     suggestions.append(controls);

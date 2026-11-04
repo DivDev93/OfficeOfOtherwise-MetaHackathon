@@ -50,8 +50,10 @@ function saveHistory(store, question, history) {
   return updated;
 }
 
-function resultFor(question, history, { suggestions = [], generated = false, cached = false, usage, event } = {}) {
-  return { question, history, suggestions, generated, cached, ...(event ? { event } : {}), ...(usage ? { usage } : {}) };
+function resultFor(question, history, { suggestions = [], generated = false, cached = false, usage, event, generatedSuggestionIds } = {}) {
+  return { question, history, suggestions, generated, cached,
+    ...(generatedSuggestionIds ? { generatedSuggestionIds: [...generatedSuggestionIds] } : {}),
+    ...(event ? { event } : {}), ...(usage ? { usage } : {}) };
 }
 
 export function createHistoryService({ store, agent, perSessionWindowCap = 20, now = Date.now } = {}) {
@@ -103,7 +105,10 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
     }
     const { question, history } = resolve(store, questionId, historyId);
     const key = `${windowKey(questionId, historyId, window)}:${more ? 'more' : 'initial'}`;
-    if (inFlight.has(key)) return inFlight.get(key);
+    if (inFlight.has(key)) {
+      const joined = await inFlight.get(key);
+      return { ...joined, generated: false, cached: true, generatedSuggestionIds: [] };
+    }
     const task = (async () => {
       const localMatches = (history.suggestions ?? []).filter(item => sameWindow(item.window, window));
       if (!more && localMatches.length) return resultFor(question, history, { suggestions: localMatches, cached: true, usage: store.usage?.(userId, sessionId) });
@@ -143,7 +148,9 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
           const savedQuestion = saveHistory(store, latestQuestion, nextHistory);
           return { question: savedQuestion, history: savedQuestion.histories.find(item => item.id === historyId) };
         });
-        return resultFor(saved.question, saved.history, { suggestions: completed.suggestions ?? suggestions, generated: true,
+        const generatedSuggestions = completed.suggestions ?? suggestions;
+        return resultFor(saved.question, saved.history, { suggestions: generatedSuggestions, generated: true,
+          generatedSuggestionIds: generatedSuggestions.map(item => item.id),
           usage: completed.usage ?? store.usage?.(userId, sessionId) });
       } catch (error) {
         const dispatched = Number.isSafeInteger(dispatchStart) && typeof agent.client?.dispatchCount === 'function'
@@ -381,9 +388,9 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
     try { return await task; } finally { if (batchPlanInFlight.get(planKey) === task) batchPlanInFlight.delete(planKey); }
   }
 
-  async function weaveBatch({ questionId, historyId, planId, acceptedMergeIds = [], excludedSuggestionIds = [], userId, sessionId } = {}) {
+  async function weaveBatch({ questionId, historyId, planId, acceptedMergeIds = [], excludedSuggestionIds = [], pending = false, userId, sessionId } = {}) {
     if (!validId(questionId) || !validId(historyId) || !validId(userId) || !validId(sessionId) || !validId(planId)
-        || !Array.isArray(acceptedMergeIds) || !Array.isArray(excludedSuggestionIds)) {
+        || !Array.isArray(acceptedMergeIds) || !Array.isArray(excludedSuggestionIds) || typeof pending !== 'boolean') {
       throw new HistoryServiceError('invalid_batch', 'A checked batch plan and valid merge/exclusion choices are required.', 400);
     }
     let reservation;
@@ -400,11 +407,12 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
     if (reservation.status === 'committed') {
       const sameChoices = (left = [], right = []) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
       if (!sameChoices(acceptedMergeIds, reservation.acceptedMergeIds ?? [])
-          || !sameChoices(excludedSuggestionIds, reservation.excludedSuggestionIds ?? [])) {
+          || !sameChoices(excludedSuggestionIds, reservation.excludedSuggestionIds ?? []) || (reservation.pending === true) !== pending) {
         throw new HistoryServiceError('batch_already_committed', 'This checked batch was already committed with different merge or exclusion choices.', 409);
       }
-      return { ...resultFor(resolved.question, resolved.history, { cached: true }),
-        events: (reservation.eventIds ?? []).map(id => resolved.history.events.find(item => item.id === id)).filter(Boolean), ripple: [] };
+      const events = (reservation.eventIds ?? []).map(id => resolved.history.events.find(item => item.id === id)).filter(Boolean);
+      return { ...resultFor(resolved.question, resolved.history, { cached: true }), events, ripple: [],
+        ...(reservation.pending === true ? { pendingBatchId: events.find(item => item.pendingBatchId)?.pendingBatchId } : {}) };
     }
     const selected = plan.suggestionIds.map(id => resolved.history.suggestions?.find(item => item.id === id));
     if (selected.some(item => !item)) throw new HistoryServiceError('batch_plan_stale', 'A planned suggestion is no longer available. Check the current batch again.', 409);
@@ -438,7 +446,32 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
         { conflicts: commitProjection.unresolvedConflicts });
       const existingIds = new Set(history.events.map(item => item.id));
       if (commitProjection.events.some(item => existingIds.has(item.id))) throw new HistoryServiceError('batch_plan_stale', 'A planned event already exists in this history.', 409);
-      const newEvents = commitProjection.events.map(item => ({ ...item }));
+      const pendingBatchId = pending ? `pending-batch:${createHash('sha256').update(plan.id).digest('hex').slice(0, 32)}` : undefined;
+      const sourceSnapshots = selected.filter(item => !excludedSuggestionIds.includes(item.id)).map(item => structuredClone(item));
+      const sourceById = new Map(sourceSnapshots.map(item => [item.id, item]));
+      const windowsByKey = new Map();
+      for (const source of sourceSnapshots) {
+        const window = source.window;
+        if (window && Number.isSafeInteger(window.fromYear) && Number.isSafeInteger(window.toYear)) {
+          windowsByKey.set(`${window.fromYear}:${window.toYear}`, { fromYear: window.fromYear, toYear: window.toYear });
+        }
+      }
+      const allWindows = [...windowsByKey.values()].sort((a, b) => a.fromYear - b.fromYear || a.toYear - b.toYear);
+      if (pending && (history.weaveBatches ?? []).some(item => item.id === pendingBatchId)) {
+        throw new HistoryServiceError('pending_batch_exists', 'This checked batch already has a pending review record.', 409);
+      }
+      const newEvents = commitProjection.events.map(item => {
+        if (!pending) return { ...item };
+        const windows = new Map();
+        for (const sourceId of item.sourceSuggestionIds ?? [item.id]) {
+          const window = sourceById.get(sourceId)?.window;
+          if (window && Number.isSafeInteger(window.fromYear) && Number.isSafeInteger(window.toYear)) {
+            windows.set(`${window.fromYear}:${window.toYear}`, { fromYear: window.fromYear, toYear: window.toYear });
+          }
+        }
+        return { ...item, pending: true, pendingBatchId,
+          pendingWindows: [...windows.values()].sort((a, b) => a.fromYear - b.fromYear || a.toYear - b.toYear) };
+      });
       const selectedSet = new Set(plan.suggestionIds);
       const allEvents = sorted([...history.events, ...newEvents]);
       const later = allEvents.filter(item => !newEvents.some(event => event.id === item.id) && newEvents.some(event => item.year > event.year));
@@ -454,14 +487,19 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
         }
         return { ...item, checkFlags: flags };
       });
+      const pendingRecord = pending ? { id: pendingBatchId, status: 'pending', planId, eventIds: newEvents.map(item => item.id),
+        sourceSuggestions: sourceSnapshots,
+        eventSources: newEvents.map(item => ({ eventId: item.id, sourceSuggestionIds: [...(item.sourceSuggestionIds ?? [item.id])] })),
+        removedEventIds: [], windows: allWindows, createdAt: new Date(now()).toISOString() } : null;
       const nextHistory = { ...history, events: withPending,
+        ...(pendingRecord ? { weaveBatches: [...(history.weaveBatches ?? []), pendingRecord] } : {}),
         suggestions: (history.suggestions ?? []).filter(item => !selectedSet.has(item.id) || excludedSuggestionIds.includes(item.id)) };
       let savedQuestion;
       let alreadyCommitted = false;
       if (typeof store.commitBatchHistory === 'function') {
         const committed = store.commitBatchHistory({ question: { ...question, histories: question.histories.map(item => item.id === history.id ? nextHistory : item) },
           planKey: plan.planKey, planId, requestId: reservation.requestId, eventIds: newEvents.map(item => item.id),
-          acceptedMergeIds, excludedSuggestionIds });
+          acceptedMergeIds, excludedSuggestionIds, pending });
         if (committed.status !== 'committed') throw new HistoryServiceError('batch_commit_unavailable', 'The batch could not be committed atomically.', 409);
         savedQuestion = committed.question;
         alreadyCommitted = !!committed.alreadyCommitted;
@@ -469,10 +507,10 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
       const savedHistory = savedQuestion.histories.find(item => item.id === historyId);
       return { question: savedQuestion, history: savedHistory,
         events: newEvents.map(event => savedHistory.events.find(item => item.id === event.id)), newEvents,
-        later: later.map(event => savedHistory.events.find(item => item.id === event.id)), planKey: plan.planKey, alreadyCommitted };
+        later: later.map(event => savedHistory.events.find(item => item.id === event.id)), planKey: plan.planKey, alreadyCommitted, pendingBatchId };
     });
     if (started.alreadyCommitted) return { ...resultFor(started.question, started.history, { cached: true }),
-      events: started.events, ripple: [] };
+      events: started.events, ripple: [], ...(started.pendingBatchId ? { pendingBatchId: started.pendingBatchId } : {}) };
     let checks, checkError;
     if (started.later.length) {
       try { checks = await agent.checkRippleBatch({ question: started.question, events: started.later, history: started.history, wovenEvents: started.newEvents }); }
@@ -507,7 +545,8 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
       }
       return { question: saved, history: savedHistory, events: eventIds.map(id => savedHistory.events.find(item => item.id === id)), ripple };
     });
-    return { ...resultFor(final.question, final.history), events: final.events, ripple: final.ripple, usage: store.usage?.(userId, sessionId) };
+    return { ...resultFor(final.question, final.history), events: final.events, ripple: final.ripple,
+      ...(started.pendingBatchId ? { pendingBatchId: started.pendingBatchId } : {}), usage: store.usage?.(userId, sessionId) };
   }
 
   async function fork({ questionId, historyId, eventId, suggestionId, userId, sessionId } = {}) {
@@ -733,12 +772,111 @@ export function createHistoryService({ store, agent, perSessionWindowCap = 20, n
     });
   }
 
-  function preference(userId, sessionId) { return store.getPreference?.(userId, sessionId) ?? { autoSuggest: true }; }
-  function setPreference({ userId, sessionId, autoSuggest } = {}) {
-    if (!validId(userId) || !validId(sessionId) || typeof autoSuggest !== 'boolean') throw new HistoryServiceError('invalid_preference', 'Valid user, session and autoSuggest setting are required');
-    if (!store.setPreference) throw new HistoryServiceError('preference_unavailable', 'Preference storage is unavailable', 501);
-    return store.setPreference({ userId, sessionId, autoSuggest });
+  function finalizePendingWeave({ questionId, historyId, pendingBatchId } = {}) {
+    if (!validId(questionId) || !validId(historyId) || !validId(pendingBatchId)) throw new HistoryServiceError('invalid_pending_batch', 'Question, history and pending batch are required.');
+    return mutateQuestion(questionId, () => {
+      const { question, history } = resolve(store, questionId, historyId);
+      const batch = history.weaveBatches?.find(item => item.id === pendingBatchId);
+      if (!batch) throw new HistoryServiceError('pending_batch_not_found', 'Pending batch not found.', 404);
+      if (batch.status === 'removed') throw new HistoryServiceError('pending_batch_removed', 'This pending batch was already removed.', 409);
+      if (batch.status === 'kept') return { ...resultFor(question, history, { cached: true }),
+        pendingBatchId, events: batch.eventIds.map(id => history.events.find(item => item.id === id)).filter(Boolean) };
+      const eventIds = new Set(batch.eventIds);
+      if (history.events.filter(item => eventIds.has(item.id) && item.pendingBatchId === pendingBatchId).length !== eventIds.size) {
+        throw new HistoryServiceError('pending_batch_incomplete', 'Pending batch events are missing or changed; finalization was not applied.', 409);
+      }
+      const events = history.events.map(event => {
+        if (!eventIds.has(event.id) || event.pendingBatchId !== pendingBatchId) return event;
+        const finalized = { ...event };
+        delete finalized.pending;
+        delete finalized.pendingBatchId;
+        delete finalized.pendingWindows;
+        return finalized;
+      });
+      const updatedBatch = { ...batch, status: 'kept', updatedAt: new Date(now()).toISOString() };
+      const saved = saveHistory(store, question, { ...history, events,
+        weaveBatches: history.weaveBatches.map(item => item.id === pendingBatchId ? updatedBatch : item) });
+      const savedHistory = saved.histories.find(item => item.id === historyId);
+      return { ...resultFor(saved, savedHistory), pendingBatchId,
+        events: batch.eventIds.map(id => savedHistory.events.find(item => item.id === id)).filter(Boolean) };
+    });
   }
 
-  return { suggest, weave, batchCheck, weaveBatch, fork, rippleCheck, rippleCheckBatch, regenerateEvent, keepEvent, preference, setPreference };
+  function removePendingWeave({ questionId, historyId, pendingBatchId, eventId } = {}) {
+    if (!validId(questionId) || !validId(historyId) || !validId(pendingBatchId)) throw new HistoryServiceError('invalid_pending_batch', 'Question, history and pending batch are required.');
+    if (eventId !== undefined && !validId(eventId)) throw new HistoryServiceError('invalid_pending_batch', 'Pending event ID is invalid.');
+    return mutateQuestion(questionId, () => {
+      const { question, history } = resolve(store, questionId, historyId);
+      const batch = history.weaveBatches?.find(item => item.id === pendingBatchId);
+      if (!batch) throw new HistoryServiceError('pending_batch_not_found', 'Pending batch not found.', 404);
+      if (batch.status === 'kept') throw new HistoryServiceError('pending_batch_finalized', 'A finalized batch cannot be removed.', 409);
+      if (batch.status === 'removed') return { ...resultFor(question, history, { cached: true }), pendingBatchId, events: [] };
+      if (eventId && batch.removedEventIds?.includes(eventId)) return { ...resultFor(question, history, { cached: true }), pendingBatchId, events: [] };
+      if (eventId && !batch.eventIds.includes(eventId)) throw new HistoryServiceError('pending_event_not_found', 'Event is not pending in this batch.', 404);
+      const removedIds = new Set(eventId ? [eventId] : batch.eventIds);
+      const removedEvents = new Map(history.events.filter(event => removedIds.has(event.id)).map(event => [event.id, event]));
+      if (removedEvents.size !== removedIds.size || [...removedEvents.values()].some(event => event.pendingBatchId !== pendingBatchId)) {
+        throw new HistoryServiceError('pending_batch_incomplete', 'Pending batch events are missing or changed; removal was not applied.', 409);
+      }
+      const retainedById = new Map(history.events.filter(event => !removedIds.has(event.id)).map(event => [event.id, event]));
+      const retained = history.events.filter(event => !removedIds.has(event.id)).map(event => {
+        const flags = (event.checkFlags ?? []).filter(flag => !(flag?.kind === 'weave-ripple' && removedIds.has(flag.wovenEventId)));
+        let causeEventId = event.causeEventId;
+        const visited = new Set();
+        while (removedIds.has(causeEventId)) {
+          if (visited.has(causeEventId)) throw new HistoryServiceError('pending_batch_cycle', 'Pending batch causes contain a cycle; removal was not applied.', 409);
+          visited.add(causeEventId);
+          causeEventId = removedEvents.get(causeEventId)?.causeEventId;
+        }
+        if (!causeEventId || (causeEventId !== questionId && !(retainedById.get(causeEventId)?.year < event.year))) causeEventId = questionId;
+        return { ...event, causeEventId, checkFlags: flags };
+      });
+      const currentSuggestions = new Map((history.suggestions ?? []).map(item => [item.id, item]));
+      const eventSources = new Map((batch.eventSources ?? []).map(item => [item.eventId, item.sourceSuggestionIds]));
+      const restoredSourceIds = new Set([...removedIds].flatMap(id => eventSources.get(id)
+        ?? removedEvents.get(id)?.sourceSuggestionIds ?? [id]));
+      const sourceSnapshots = new Map(batch.sourceSuggestions.map(item => [item.id, item]));
+      if ([...restoredSourceIds].some(id => !sourceSnapshots.has(id))) {
+        throw new HistoryServiceError('pending_batch_snapshot_missing', 'A source suggestion snapshot is unavailable; removal was not applied.', 409);
+      }
+      for (const sourceId of restoredSourceIds) {
+        const suggestion = sourceSnapshots.get(sourceId);
+        if (!retained.some(event => event.id === suggestion.id) && !currentSuggestions.has(suggestion.id)) {
+          currentSuggestions.set(suggestion.id, structuredClone(suggestion));
+        }
+      }
+      const suggestions = [...currentSuggestions.values()].sort((a, b) => a.year - b.year || a.id.localeCompare(b.id));
+      const remainingEventIds = batch.eventIds.filter(id => !removedIds.has(id));
+      const remainingSnapshots = batch.sourceSuggestions.filter(item => !restoredSourceIds.has(item.id));
+      const remainingWindows = new Map();
+      for (const item of remainingSnapshots) {
+        const window = item.window;
+        if (window && Number.isSafeInteger(window.fromYear) && Number.isSafeInteger(window.toYear)) {
+          remainingWindows.set(`${window.fromYear}:${window.toYear}`, { fromYear: window.fromYear, toYear: window.toYear });
+        }
+      }
+      const updatedBatch = { ...batch, status: remainingEventIds.length ? 'pending' : 'removed', eventIds: remainingEventIds,
+        eventSources: (batch.eventSources ?? []).filter(item => !removedIds.has(item.eventId)),
+        sourceSuggestions: remainingSnapshots,
+        windows: [...remainingWindows.values()].sort((a, b) => a.fromYear - b.fromYear || a.toYear - b.toYear),
+        removedEventIds: [...new Set([...(batch.removedEventIds ?? []), ...removedIds])], updatedAt: new Date(now()).toISOString() };
+      const saved = saveHistory(store, question, { ...history, events: retained, suggestions,
+        weaveBatches: history.weaveBatches.map(item => item.id === pendingBatchId ? updatedBatch : item) });
+      const savedHistory = saved.histories.find(item => item.id === historyId);
+      return { ...resultFor(saved, savedHistory), pendingBatchId,
+        removedEventIds: [...removedIds], events: [] };
+    });
+  }
+
+  function preference(userId, sessionId) { return store.getPreference?.(userId, sessionId) ?? { autoSuggest: true, autoWeave: false }; }
+  function setPreference({ userId, sessionId, autoSuggest, autoWeave } = {}) {
+    if (!validId(userId) || !validId(sessionId) || (autoSuggest === undefined && autoWeave === undefined)
+        || (autoSuggest !== undefined && typeof autoSuggest !== 'boolean') || (autoWeave !== undefined && typeof autoWeave !== 'boolean')) {
+      throw new HistoryServiceError('invalid_preference', 'Valid user/session and autoSuggest or autoWeave settings are required');
+    }
+    if (!store.setPreference) throw new HistoryServiceError('preference_unavailable', 'Preference storage is unavailable', 501);
+    return store.setPreference({ userId, sessionId, autoSuggest, autoWeave });
+  }
+
+  return { suggest, weave, batchCheck, weaveBatch, finalizePendingWeave, removePendingWeave, fork, rippleCheck, rippleCheckBatch, regenerateEvent, keepEvent, preference, setPreference };
 }

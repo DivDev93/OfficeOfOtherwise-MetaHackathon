@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { historyPinColorRole, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../web/historyAtlas.js';
+import { historyPinColorRole, isPendingHistoryEvent, shouldLabelHistoryWorld, shouldShowPossibilityOutline } from '../web/historyAtlas.js';
 
 const scene = readFileSync(new URL('../web/atlas/scene.js', import.meta.url), 'utf8');
 
@@ -20,6 +20,28 @@ test('history marker colors keep event and suggestion roles stable through hover
   assert.equal(historyPinColorRole({ historySpineRole:'sibling' }, { hovered:true }), 'spine-sibling-hover');
   assert.match(scene, /historyPinColorRole\(world, \{ hovered: entry\.id === focusedId \}\)/,
     'renderer passes scene-local hover identity into the executable role helper');
+});
+
+test('pending canonical events keep gold semantics and add a display-only dashed outline', () => {
+  assert.equal(isPendingHistoryEvent({ visualKind:'history-event', pending:true }), true);
+  assert.equal(isPendingHistoryEvent({ visualKind:'history-event', pending:false }), false);
+  assert.equal(isPendingHistoryEvent({ visualKind:'history-suggestion', pending:true }), false,
+    'held suggestions are not canonical pending events');
+  assert.equal(historyPinColorRole({ visualKind:'history-event', pending:true }), 'gold');
+  assert.equal(historyPinColorRole({ visualKind:'history-event', pending:true, highlighted:true }), 'gold-latest');
+  assert.match(scene, /Pending canonical history event dashed outline/);
+  assert.match(scene, /worldRecord\.label\.dataset\.historyPending = String\(isPendingHistoryEvent\(entry\.world\)\)/);
+  assert.match(scene, /const diameter = \(entry\.world\.selected \? 22 : 18\) - 4 \* state\.atlas/,
+    'the amber status ring is separate from the canonical pin');
+  assert.match(scene, /pendingOutline\.position\.copy\(flatSurfacePinMode\s*\?\s*surfacePinAnchorPosition\(entry, state, timestamp\)\s*:\s*worldPosition\(entry, state, timestamp, markerRadius\)\)/,
+    'the dashed outline follows the exact flat or lifted pin anchor');
+  assert.match(scene, /const depth = -pendingOutline\.position\.clone\(\)\.applyMatrix4\(atlasGroup\.matrixWorld\)\.applyMatrix4\(camera\.matrixWorldInverse\)\.z/);
+  assert.match(scene, /worldRadiusForScreenPixels\(Math\.max\(0\.01, depth\), camera\.fov, Math\.max\(1, renderer\.domElement\.clientHeight\), diameter\)/,
+    'outline dimensions remain a CSS-pixel diameter as camera depth changes');
+  assert.match(scene, /const renderedRadius = flatMarker \? worldRadiusForScreenPixels\(viewDepth, camera\.fov, Math\.max\(1, bounds\.height\), entry\.world\.selected \? 18 : 14\)/,
+    'pending status does not resize the small 14/18px Surface pin');
+  assert.match(scene, /atlasMarkerHitRadius\(renderedRadius \+ padding, activationRadius, activation\)/,
+    'pending status does not enlarge pointer hit geometry');
 });
 
 test('history surface drops legacy cyan possibility halos and hides its synthetic current-world label', () => {

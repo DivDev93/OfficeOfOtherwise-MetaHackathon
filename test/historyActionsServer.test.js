@@ -12,9 +12,9 @@ const access = { 'x-demo-access-code': 'history-actions-code' };
 const event = (id, year, title, extras = {}) => ({ id, year, title, summary: `${title} shapes the landscape.`,
   place: { name: 'Sahara', lat: 20, lon: 10 }, causeEventId: 'q', era: 'Green Sahara', geography: { version: 1, changes: [] }, ...extras });
 
-async function start(t, { liveRunsDir, service, env = { DEMO_ACCESS_CODE: 'history-actions-code' } }) {
+async function start(t, { liveRunsDir, service, env = { DEMO_ACCESS_CODE: 'history-actions-code' }, maxConcurrentJobs }) {
   const server = createDemoServer({ runsDir: join(liveRunsDir, 'runs'), liveRunsDir, packagedReplayRoot: null,
-    webDir: resolve('web'), env, historyService: service });
+    webDir: resolve('web'), env, historyService: service, maxConcurrentJobs });
   await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
   t.after(async () => {
     if (!server.listening) return;
@@ -26,6 +26,12 @@ async function start(t, { liveRunsDir, service, env = { DEMO_ACCESS_CODE: 'histo
   assert.ok(cookie, 'server issues the durable browser session cookie');
   const headers = { ...access, cookie, 'content-type': 'application/json' };
   return { url, headers, server };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(yes => { resolve = yes; });
+  return { promise, resolve };
 }
 
 function seed(liveRunsDir) {
@@ -142,7 +148,103 @@ test('batch weave route uses existing history authorization and returns one atom
   assert.equal(combinedCalls, 1);
 });
 
-test('history preferences default on, persist by browser session, and legacy history response stays unchanged', async t => {
+test('pending weave routes persist pending events and finalize or remove under existing authorization', async t => {
+  const liveRunsDir = await mkdtemp(join(tmpdir(), 'office-history-pending-route-'));
+  t.after(() => rm(liveRunsDir, { recursive: true, force: true }));
+  const { store } = seed(liveRunsDir);
+  const question = store.get('question-one');
+  question.histories[0].suggestions = ['pending-route-a', 'pending-route-b'].map((id, index) => ({
+    id, year: -3500 + index * 100, place: { name: 'Sahara', lat: 20, lon: 10 }, title: `Canal ${id}`,
+    summary: 'Communities share seasonal channels.', causeEventId: 'root-event', era: 'Green Sahara',
+    geography: { version: 1, changes: [] }, verdict: 'fits', conflictsWith: null, reason: '',
+    window: { fromYear: -4000, toYear: -3000 }, sceneRef: { status: 'complete', path: `scenes/${id}.png` },
+  }));
+  store.save(question);
+  let modelCalls = 0;
+  const service = createHistoryService({ store, agent: { async suggest() { throw new Error('not used'); },
+    async planBatchWeave({ suggestions }) { modelCalls++; return { chain: suggestions.map(item => ({ suggestionId: item.id, causeEventId: 'root-event' })), merges: [], conflicts: [] }; },
+    async checkRippleBatch({ events }) { modelCalls++; return events.map(item => ({ eventId: item.id, inconsistent: false, reason: '' })); },
+  } });
+  const { url, headers } = await start(t, { liveRunsDir, service });
+  const input = { questionId: 'question-one', historyId: 'history-one', suggestionIds: ['pending-route-a', 'pending-route-b'] };
+  const checkedResponse = await fetch(`${url}/api/history/batch-check`, { method: 'POST', headers, body: JSON.stringify(input) });
+  assert.equal(checkedResponse.status, 200);
+  const { plan } = await checkedResponse.json();
+  const batchResponse = await fetch(`${url}/api/history/weave-batch`, { method: 'POST', headers,
+    body: JSON.stringify({ questionId: input.questionId, historyId: input.historyId, planId: plan.id,
+      acceptedMergeIds: [], excludedSuggestionIds: [], pending: true }) });
+  assert.equal(batchResponse.status, 200);
+  const pending = await batchResponse.json();
+  assert.ok(pending.pendingBatchId);
+  assert.ok(pending.events.every(item => item.pending === true && item.pendingBatchId === pending.pendingBatchId));
+  assert.ok(pending.events.every(item => item.pendingWindows[0].fromYear === -4000));
+  const persisted = createHistoryStore(liveRunsDir).get('question-one').histories.find(item => item.id === 'history-one');
+  assert.equal(persisted.weaveBatches.find(item => item.id === pending.pendingBatchId).sourceSuggestions.length, 2);
+  assert.ok(persisted.weaveBatches[0].sourceSuggestions.every(item => item.sceneRef?.path));
+  const callsAfterCommit = modelCalls;
+  const denied = await fetch(`${url}/api/history/pending-weave/remove`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ questionId: input.questionId, historyId: input.historyId, pendingBatchId: pending.pendingBatchId }) });
+  assert.equal(denied.status, 403);
+  const removeOne = await fetch(`${url}/api/history/pending-weave/remove`, { method: 'POST', headers,
+    body: JSON.stringify({ questionId: input.questionId, historyId: input.historyId, pendingBatchId: pending.pendingBatchId, eventId: 'pending-route-a' }) });
+  assert.equal(removeOne.status, 200);
+  const removed = await removeOne.json();
+  assert.deepEqual(removed.removedEventIds, ['pending-route-a']);
+  assert.deepEqual(removed.history.events.filter(item => item.pending).map(item => item.id), ['pending-route-b']);
+  assert.equal(removed.history.suggestions.some(item => item.id === 'pending-route-a'), true);
+  const finalize = await fetch(`${url}/api/history/pending-weave/finalize`, { method: 'POST', headers,
+    body: JSON.stringify({ questionId: input.questionId, historyId: input.historyId, pendingBatchId: pending.pendingBatchId }) });
+  assert.equal(finalize.status, 200);
+  const finalized = await finalize.json();
+  assert.deepEqual(finalized.events.map(item => item.id), ['pending-route-b']);
+  assert.ok(finalized.events.every(item => item.pending !== true));
+  assert.equal(modelCalls, callsAfterCommit, 'finalize and remove do not call a model');
+  const removeFinalized = await fetch(`${url}/api/history/pending-weave/remove`, { method: 'POST', headers,
+    body: JSON.stringify({ questionId: input.questionId, historyId: input.historyId, pendingBatchId: pending.pendingBatchId }) });
+  assert.equal(removeFinalized.status, 409);
+  assert.equal((await removeFinalized.json()).code, 'pending_batch_finalized');
+  assert.equal(modelCalls, callsAfterCommit);
+});
+
+test('pending persistence actions proceed while a generation job holds the only shared job slot', async t => {
+  const liveRunsDir = await mkdtemp(join(tmpdir(), 'office-history-pending-busy-'));
+  t.after(() => rm(liveRunsDir, { recursive: true, force: true }));
+  const { store } = seed(liveRunsDir);
+  const source = { id: 'busy-source', year: -3200, place: { name: 'Sahara', lat: 20, lon: 10 },
+    title: 'Saved source suggestion', summary: 'Communities preserve a seasonal practice.', causeEventId: 'root-event',
+    verdict: 'fits', window: { fromYear: -4000, toYear: -3000 }, sceneRef: { status: 'complete', path: 'scenes/busy-source.png' } };
+  const pendingBatchId = 'pending-batch:busy-fixture';
+  const question = store.get('question-one');
+  question.histories[0].events.push(event('busy-pending-event', -3200, 'Provisional seasonal practice', {
+    causeEventId: 'root-event', pending: true, pendingBatchId, pendingWindows: [{ fromYear: -4000, toYear: -3000 }],
+  }));
+  question.histories[0].weaveBatches = [{ id: pendingBatchId, status: 'pending', eventIds: ['busy-pending-event'],
+    sourceSuggestions: [source], eventSources: [{ eventId: 'busy-pending-event', sourceSuggestionIds: [source.id] }],
+    removedEventIds: [], windows: [{ fromYear: -4000, toYear: -3000 }] }];
+  store.save(question);
+  const generationEntered = deferred(), finishGeneration = deferred();
+  let suggestionCalls = 0;
+  const service = createHistoryService({ store, agent: { async suggest() {
+    suggestionCalls++;
+    generationEntered.resolve();
+    return finishGeneration.promise;
+  } } });
+  const { url, headers } = await start(t, { liveRunsDir, service, maxConcurrentJobs: 1 });
+  const generation = fetch(`${url}/api/history/suggest`, { method: 'POST', headers,
+    body: JSON.stringify({ questionId: 'question-one', historyId: 'history-one', window: { fromYear: -4000, toYear: -3000 }, more: true }) });
+  await generationEntered.promise;
+  const remove = await fetch(`${url}/api/history/pending-weave/remove`, { method: 'POST', headers,
+    body: JSON.stringify({ questionId: 'question-one', historyId: 'history-one', pendingBatchId, eventId: 'busy-pending-event' }) });
+  assert.equal(remove.status, 200, 'model-free pending cleanup does not wait for the shared generation slot');
+  const removed = await remove.json();
+  assert.deepEqual(removed.removedEventIds, ['busy-pending-event']);
+  assert.equal(removed.history.suggestions.some(item => item.id === source.id), true);
+  assert.equal(suggestionCalls, 1);
+  finishGeneration.resolve([]);
+  assert.equal((await generation).status, 200);
+});
+
+test('history preferences default auto-suggest on and auto-weave off, persist per browser session, and legacy response stays unchanged', async t => {
   const liveRunsDir = await mkdtemp(join(tmpdir(), 'office-history-pref-'));
   t.after(() => rm(liveRunsDir, { recursive: true, force: true }));
   const { store } = seed(liveRunsDir);
@@ -160,9 +262,11 @@ test('history preferences default on, persist by browser session, and legacy his
   const before = await fetch(`${url}/api/history/preferences`, { headers: access });
   assert.equal(before.status, 403, 'preferences require a valid browser session');
   const preference = await fetch(`${url}/api/history/preferences`, { headers });
-  assert.deepEqual(await preference.json(), { autoSuggest: true });
+  assert.deepEqual(await preference.json(), { autoSuggest: true, autoWeave: false });
   const changed = await fetch(`${url}/api/history/preferences`, { method: 'PUT', headers, body: JSON.stringify({ autoSuggest: false }) });
-  assert.deepEqual(await changed.json(), { autoSuggest: false });
+  assert.deepEqual(await changed.json(), { autoSuggest: false, autoWeave: false });
+  const autoWeave = await fetch(`${url}/api/history/preferences`, { method: 'PUT', headers, body: JSON.stringify({ autoWeave: true }) });
+  assert.deepEqual(await autoWeave.json(), { autoSuggest: false, autoWeave: true }, 'partial updates preserve the other saved preference');
   const legacy = await fetch(`${url}/api/history`, { headers });
   assert.equal(legacy.status, 200);
   assert.deepEqual(Object.keys(await legacy.json()), ['runs']);

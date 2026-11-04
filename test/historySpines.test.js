@@ -112,6 +112,8 @@ test('other-question chip geometry clamps past and future divergence ticks witho
 
 test('scene records stay independent and preserve event media while separating active pins and sibling Earths', () => {
   const source = question();
+  source.histories[1].events[1] = { ...source.histories[1].events[1], pending:true, pendingBatchId:'batch-arabia',
+    pendingWindows:[{ fromYear:-3000, toYear:-2001 }], sceneRef:{ path:'scenes/provisional.png', status:'complete' } };
   const atlas = projectHistoryAtlas(source, { historyId:'h-fork', asOfYear:-2500,
     window:{ fromYear:-3000, toYear:-2001 }, suggestions:source.histories[1].suggestions });
   atlas.selectedEventId = 'alt-1'; atlas.selectedEventHistoryId = 'h-fork';
@@ -130,6 +132,11 @@ test('scene records stay independent and preserve event media while separating a
     'materialized shared event retains active-history identity');
   assert.equal(records.eventWorlds.find(item => item.id === 'alt-1').selected, true,
     'selected event identity survives projection into the Atlas spine');
+  const provisional = records.eventWorlds.find(item => item.id === 'alt-1');
+  assert.equal(provisional.pending, true);
+  assert.equal(provisional.pendingBatchId, 'batch-arabia');
+  assert.deepEqual(provisional.pendingWindows, [{ fromYear:-3000, toYear:-2001 }]);
+  assert.deepEqual(provisional.sceneRef, { path:'scenes/provisional.png', status:'complete' });
   assert.equal(records.eventWorlds.find(item => item.id === 'main-future').selectable, true,
     'sibling spine events remain explicitly selectable with their owner history');
   assert.equal(records.eventWorlds.find(item => item.id === 'main-future').historyId, 'h-main');

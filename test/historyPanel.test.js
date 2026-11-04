@@ -31,6 +31,14 @@ test('history session is wired to selected-event changes and rendered in the tim
   assert.doesNotMatch(preview, /historySession\.(?:suggest|more|setContext)/, 'hover previews never schedule suggestion generation');
 });
 
+test('automatic history scene preparation waits for auto-weave and covers pending active-window events', () => {
+  const candidates = app.slice(app.indexOf('function historySceneCandidates'),app.indexOf('function scheduleHistorySceneOverlayPoll'));
+  assert.match(candidates,/event\.pending !== true/);
+  assert.match(candidates,/event\.pendingWindows[\s\S]*activeWindow\.fromYear[\s\S]*activeWindow\.toYear/);
+  assert.match(app,/function scheduleAutomaticHistoryScenePreparation\(state = historySession\.getState\(\)\) \{[\s\S]*?state\.autoWeaveRunning/,
+    'scene preparation is deferred while an auto-weave batch is unresolved');
+});
+
 test('history panel uses text nodes for model content and wires weave, fork, Keep and regeneration actions', async () => {
   const root = new Element('main', document), calls = [];
   let listener;

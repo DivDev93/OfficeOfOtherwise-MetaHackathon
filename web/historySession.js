@@ -10,11 +10,13 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
   onChange = () => {}, debounceMs = 800 } = {}) {
   let context = null, timer = null, generation = 0, preferenceRequest = 0;
   let batchCheckOwner = 0;
+  let autoWeaveTask = null;
+  const pendingFinalizeFlights = new Set();
   const batchPlanCache = new Map();
   const batchPlanFlights = new Map();
   const batchCheckUncertainCache = new Map();
   const listeners = new Set();
-  const state = { autoSuggest: true, questionId: '', historyId: '', selectedEventId: '', date: null, window: null, question: null, questions: [], histories: [],
+  const state = { autoSuggest: true, autoWeave: false, autoWeaveRunning: false, questionId: '', historyId: '', selectedEventId: '', date: null, window: null, question: null, questions: [], histories: [],
     suggestions: [], status: '', paused: false, loading: false, busyIds: new Set(), history: null, windowCached: false, windowStatus: '', batchCheckUncertain:null };
   const emit = () => { const snapshot = { ...state, suggestions: [...state.suggestions], busyIds: new Set(state.busyIds) }; onChange(snapshot); for (const listener of listeners) listener(snapshot); };
   const isCurrent = (token, identity) => token === generation && context?.questionId === identity.questionId
@@ -71,7 +73,9 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
       if (!response.ok) return;
       const value = await response.json();
       if (request !== preferenceRequest || typeof value.autoSuggest !== 'boolean') return;
-      state.autoSuggest = value.autoSuggest; emit();
+      state.autoSuggest = value.autoSuggest;
+      state.autoWeave = value.autoWeave === true;
+      emit();
       if (context && !context.readOnly && state.autoSuggest && !state.suggestions.length) scheduleSuggest();
     } catch { /* Preference loading must not block cached history. */ }
   }
@@ -85,6 +89,21 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     } catch { state.status = 'Could not save the auto-suggest setting.'; }
     emit();
     if (value && context && !context.readOnly && !state.suggestions.length) scheduleSuggest();
+  }
+  async function persistAutoWeave(value) {
+    if (typeof value !== 'boolean') return false;
+    const previous = state.autoWeave;
+    state.autoWeave = value; emit();
+    try {
+      const response = await fetchImpl('/api/history/preferences', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ autoWeave: value }) });
+      if (!response.ok) { state.autoWeave = previous; state.status = 'Could not save the auto-weave setting.'; emit(); return false; }
+      const saved = await response.json().catch(() => ({}));
+      if (typeof saved.autoWeave === 'boolean') state.autoWeave = saved.autoWeave;
+      if (typeof saved.autoSuggest === 'boolean') state.autoSuggest = saved.autoSuggest;
+      emit(); return true;
+    } catch {
+      state.autoWeave = previous; state.status = 'Could not save the auto-weave setting.'; emit(); return false;
+    }
   }
   async function loadHistory(identity, token) {
     state.loading = true; state.status = 'Loading saved suggestions…'; emit();
@@ -114,8 +133,9 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     timer = setTimer(() => { timer = null; requestSuggestions(false); }, debounceMs);
   }
   async function requestSuggestions(more) {
-    if (!context || state.loading || state.busyIds.size || (!more && state.suggestions.length)) return;
+    if (!context || state.loading || state.busyIds.size || state.autoWeaveRunning || (!more && state.suggestions.length)) return;
     const identity = { ...context }, token = generation;
+    let autoWeaveIds = [];
     state.loading = true; state.status = more ? `Finding more events around ${identity.date}…` : `Finding events around ${identity.date}…`; emit();
     try {
       const response = await fetchImpl('/api/history/suggest', { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -140,10 +160,38 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
       if (Array.isArray(data.suggestions) && data.suggestions.length) state.suggestions = [...new Map([...state.suggestions, ...data.suggestions].map(item => [item.id, item])).values()];
       state.windowCached = true; state.windowStatus = 'ready';
       state.status = state.suggestions.length ? '' : 'No suggestions found for this date window.';
+      if (state.autoWeave && data.generated === true && data.cached !== true && Array.isArray(data.generatedSuggestionIds)) {
+        const freshIds = new Set(data.generatedSuggestionIds.map(String));
+        autoWeaveIds = state.suggestions.filter(item => freshIds.has(String(item.id)) && item.verdict === 'fits').map(item => String(item.id));
+        state.autoWeaveRunning = autoWeaveIds.length > 0;
+      }
     } catch (error) { if (isCurrent(token, identity)) state.status = error.message || 'Could not suggest events.'; }
     finally { if (isCurrent(token, identity)) { state.loading = false; emit(); } }
+    if (autoWeaveIds.length) {
+      const task = runAutoWeave(autoWeaveIds, identity, token);
+      autoWeaveTask = task;
+      try { await task; } finally { if (autoWeaveTask === task) autoWeaveTask = null; }
+    }
   }
-  async function mutate(path, payload, busyId) {
+  async function runAutoWeave(suggestionIds, identity, token) {
+    try {
+      if (!isCurrent(token, identity) || !state.autoWeave) return;
+      const plan = await checkWeaveBatch(suggestionIds, { automatic: true });
+      if (!plan || !isCurrent(token, identity) || !state.autoWeave) return;
+      if (Array.isArray(plan.conflicts) && plan.conflicts.length) {
+        state.status = 'Auto-weave paused because the checked batch needs conflict review.'; return;
+      }
+      const result = await commitWeaveBatch({ suggestionIds, planId: plan.id, acceptedMergeIds: [],
+        excludedSuggestionIds: [], pending: true, automatic: true, returnStaleData: true });
+      if (result?.pendingBatchId && !isCurrent(token, identity)) {
+        const batch = result.history?.weaveBatches?.find(item => item.id === result.pendingBatchId);
+        await finalizePendingForIdentity(identity, result.pendingBatchId, batch);
+      }
+    } finally {
+      if (isCurrent(token, identity)) { state.autoWeaveRunning = false; emit(); }
+    }
+  }
+  async function mutate(path, payload, busyId, { returnStaleData = false } = {}) {
     if (!context || state.busyIds.has(busyId)) return null;
     const identity = { ...context, window: { ...state.window }, windowCached: state.windowCached }, token = generation;
     state.busyIds.add(busyId); state.status = 'Saving history…'; emit();
@@ -152,7 +200,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
         questionId: identity.questionId, historyId: identity.historyId, ...payload,
       }) });
       const data = await response.json().catch(() => ({}));
-      if (!isCurrent(token, identity)) return null;
+      if (!isCurrent(token, identity)) return returnStaleData ? data : null;
       if (!response.ok) {
         if (data.code === 'suggestion_became_conflict' && data.suggestion) {
           const refreshed = { ...data.suggestion, window:data.suggestion.window || identity.window };
@@ -201,8 +249,9 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     } catch (error) { if (isCurrent(token, identity)) state.status = error.message || 'Could not update history.'; return null; }
     finally { if (token === generation && context?.questionId === identity.questionId) { state.busyIds.delete(busyId); emit(); } }
   }
-  async function checkWeaveBatch(suggestionIds = [], { retryOf = '' } = {}) {
+  async function checkWeaveBatch(suggestionIds = [], { retryOf = '', automatic = false } = {}) {
     if (!context || !Array.isArray(suggestionIds) || !suggestionIds.length) return null;
+    if (state.autoWeaveRunning && !automatic) return null;
     const ids = [...new Set(suggestionIds.map(String))];
     if (!ids.length || ids.length > 32) return null;
     const identity = { ...context, window:{ ...state.window } }, token = generation;
@@ -248,13 +297,83 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
       if (owner === batchCheckOwner) { state.busyIds.delete('batch-check'); if (isCurrent(token, identity)) emit(); }
     }
   }
-  function commitWeaveBatch({ suggestionIds = [], planId, acceptedMergeIds = [], excludedSuggestionIds = [] } = {}) {
+  function commitWeaveBatch({ suggestionIds = [], planId, acceptedMergeIds = [], excludedSuggestionIds = [], pending = false,
+    automatic = false, returnStaleData = false } = {}) {
+    if (state.autoWeaveRunning && !automatic) return Promise.resolve(null);
     const key = context && JSON.stringify([context.questionId, context.historyId, [...new Set(suggestionIds.map(String))].sort()]);
-    const result = mutate('/api/history/weave-batch', { planId, acceptedMergeIds, excludedSuggestionIds }, 'weave-batch');
+    const result = mutate('/api/history/weave-batch', { planId, acceptedMergeIds, excludedSuggestionIds, ...(pending ? { pending: true } : {}) },
+      'weave-batch', { returnStaleData });
     return Promise.resolve(result).then(data => {
       if (data && key) batchPlanCache.delete(key);
       return data;
     });
+  }
+  function reconcileFinalizedBatch(identity, pendingBatchId, batch, responseHistory) {
+    const finalizedBatch = batch || responseHistory?.weaveBatches?.find(item => item.id === pendingBatchId);
+    const reconcileHistory = cached => {
+      if (!cached || String(cached.id) !== String(identity.historyId)) return cached;
+      const finalizedEvents = new Set((responseHistory?.events || [])
+        .filter(event => event?.pendingBatchId !== pendingBatchId && event?.pending !== true)
+        .map(event => String(event.id)));
+      for (const id of finalizedBatch?.eventIds || []) finalizedEvents.add(String(id));
+      const events = (cached.events || []).map(event => {
+        if (!finalizedEvents.has(String(event.id)) || (event.pendingBatchId && event.pendingBatchId !== pendingBatchId)) return event;
+        const next = { ...event };
+        delete next.pending;
+        delete next.pendingBatchId;
+        delete next.pendingWindows;
+        return next;
+      });
+      const weaveBatches = (cached.weaveBatches || []).map(item => item.id === pendingBatchId
+        ? { ...item, status: 'kept', ...(responseHistory?.weaveBatches?.find(saved => saved.id === pendingBatchId)?.updatedAt
+          ? { updatedAt: responseHistory.weaveBatches.find(saved => saved.id === pendingBatchId).updatedAt } : {}) }
+        : item);
+      return { ...cached, events, weaveBatches };
+    };
+    const reconcileQuestion = question => {
+      if (!question || String(question.id) !== String(identity.questionId)) return question;
+      return { ...question, histories: (question.histories || []).map(reconcileHistory) };
+    };
+    state.questions = state.questions.map(reconcileQuestion);
+    state.question = reconcileQuestion(state.question);
+    if (state.questionId === identity.questionId) state.histories = state.histories.map(reconcileHistory);
+    if (state.questionId === identity.questionId && state.historyId === identity.historyId) {
+      state.history = reconcileHistory(state.history);
+      state.histories = state.histories.map(item => item.id === state.historyId ? state.history : item);
+      if (state.question) {
+        state.question = { ...state.question, histories: state.histories };
+        state.questions = state.questions.map(item => item.id === state.questionId ? state.question : item);
+      }
+    }
+  }
+  async function finalizePendingForIdentity(identity, pendingBatchId, batch = null) {
+    try {
+      const response = await fetchImpl('/api/history/pending-weave/finalize', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ questionId: identity.questionId, historyId: identity.historyId, pendingBatchId }) });
+      if (!response.ok) return false;
+      const data = await response.json().catch(() => ({}));
+      const responseHistory = data.history || data.question?.histories?.find(item => String(item.id) === String(identity.historyId));
+      reconcileFinalizedBatch(identity, pendingBatchId, batch, responseHistory);
+      if (state.questionId === identity.questionId && state.historyId === identity.historyId) emit();
+      return true;
+    } catch { return false; }
+  }
+  function finalizePendingBeforeNavigation(oldContext = context, history = state.history) {
+    if (!oldContext || !history?.weaveBatches) return;
+    for (const batch of history.weaveBatches.filter(item => item.status === 'pending' && item.id)) {
+      const key = JSON.stringify([oldContext.questionId, oldContext.historyId, batch.id]);
+      if (pendingFinalizeFlights.has(key)) continue;
+      const task = finalizePendingForIdentity(oldContext, batch.id, batch).finally(() => pendingFinalizeFlights.delete(key));
+      pendingFinalizeFlights.add(key);
+    }
+  }
+  function finalizePendingBatch(pendingBatchId) {
+    if (!pendingBatchId) return Promise.resolve(null);
+    return mutate('/api/history/pending-weave/finalize', { pendingBatchId }, `pending-finalize:${pendingBatchId}`);
+  }
+  function removePendingEvent(pendingBatchId, eventId) {
+    if (!pendingBatchId || !eventId) return Promise.resolve(null);
+    return mutate('/api/history/pending-weave/remove', { pendingBatchId, eventId }, `pending-remove:${pendingBatchId}:${eventId}`);
   }
   function setContext({ questionId, historyId = '', eventId = '', date, readOnly = false } = {}) {
     if (!questionId || !Number.isSafeInteger(date) || date === 0) { clear(); return; }
@@ -268,6 +387,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
       if (changed) { emit(); if (!readOnly && state.autoSuggest && !state.windowCached && !state.suggestions.length) scheduleSuggest(); }
       return;
     }
+    if (context && (!sameHistory || !sameWindow)) finalizePendingBeforeNavigation(context, state.history);
     generation++;
     if (timer !== null) { clearTimer(timer); timer = null; }
     const savedQuestion = state.questions.find(item => item.id === questionId) || (state.questionId === questionId ? state.question : null);
@@ -277,7 +397,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     if (cachedHistory && !next.historyId) next.historyId = cachedHistory.id;
     context = next; state.questionId = questionId; state.historyId = next.historyId; state.selectedEventId = eventId; state.date = date; state.window = next.window;
     state.question = savedQuestion; state.histories = savedHistories;
-    state.loading = false; state.busyIds.clear(); state.paused = false; state.history = cachedHistory || null;
+    state.loading = false; state.busyIds.clear(); state.paused = false; state.autoWeaveRunning = false; state.history = cachedHistory || null;
     state.suggestions = [];
     state.windowCached = false; state.windowStatus = '';
     if (state.history) updateWindowSuggestions();
@@ -369,6 +489,7 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     if (!entry) return false;
     if (state.window?.fromYear === fromYear && state.window?.toYear === toYear) return false;
     if (state.busyIds.size) return false;
+    finalizePendingBeforeNavigation(context, state.history);
     let date = Math.trunc((fromYear + toYear) / 2);
     if (date === 0) date = fromYear === 0 ? toYear : fromYear;
     if (date < fromYear || date > toYear) date = fromYear;
@@ -390,16 +511,18 @@ export function createHistorySession({ fetchImpl = defaultFetch, setTimer = setT
     setContext({ questionId: state.questionId, historyId: state.historyId, eventId: state.selectedEventId, date });
   }
   function clear() {
+    finalizePendingBeforeNavigation(context, state.history);
     generation++; if (timer !== null) clearTimer(timer); timer = null; context = null;
     batchCheckOwner++; batchPlanCache.clear(); batchPlanFlights.clear(); batchCheckUncertainCache.clear(); state.batchCheckUncertain = null;
     state.questionId = ''; state.historyId = ''; state.selectedEventId = ''; state.date = null; state.window = null; state.suggestions = [];
-    state.status = ''; state.loading = false; state.paused = false; state.busyIds.clear(); state.history = null; state.question = null; state.histories = []; state.questions = []; state.windowCached = false; state.windowStatus = ''; emit();
+    state.status = ''; state.loading = false; state.paused = false; state.autoWeaveRunning = false; state.busyIds.clear(); state.history = null; state.question = null; state.histories = []; state.questions = []; state.windowCached = false; state.windowStatus = ''; emit();
   }
   function hover() { /* Preview is deliberately inert: never generate from hover. */ }
   readPreferences();
   return { getState: () => ({ ...state, suggestions: [...state.suggestions], busyIds: new Set(state.busyIds) }),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-     setContext, selectHistory, selectQuestion, openQuestion, setQuestions, updateMediaReference, selectEvent, selectSuggestion, selectRecord, selectSuggestionWindow, setDate, clear, hover, setAutoSuggest: persistPreference,
+     setContext, selectHistory, selectQuestion, openQuestion, setQuestions, updateMediaReference, selectEvent, selectSuggestion, selectRecord, selectSuggestionWindow, setDate, clear, hover,
+    setAutoSuggest: persistPreference, setAutoWeave: persistAutoWeave, finalizePendingBatch, removePendingEvent,
     suggest: () => requestSuggestions(false), more: () => requestSuggestions(true),
     weave: suggestionId => mutate('/api/history/weave', { suggestionId }, `suggestion:${suggestionId}`),
     checkWeaveBatch, commitWeaveBatch,
